@@ -1,0 +1,1988 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
+<meta name="apple-mobile-web-app-capable" content="yes"/>
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate"/>
+<meta http-equiv="Pragma" content="no-cache"/>
+<meta http-equiv="Expires" content="0"/>
+<title>Cosmic Radiation · Flight / Radiación Cósmica · Vuelo</title>
+<style>
+* { box-sizing:border-box; margin:0; padding:0; }
+body { background:#080f18; font-family:-apple-system,'Inter','Helvetica Neue',sans-serif; }
+input[type=range] { -webkit-appearance:none; appearance:none; width:100%; height:4px;
+  border-radius:2px; background:rgba(255,255,255,0.12); outline:none; }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance:none; width:18px; height:18px;
+  border-radius:50%; cursor:pointer; border:2px solid #fff; }
+::-webkit-scrollbar { width:4px; height:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:rgba(255,255,255,0.15); border-radius:2px; }
+table { border-collapse:collapse; width:100%; }
+.ap-input { width:100%; background:rgba(255,255,255,0.07); border:1.5px solid rgba(255,255,255,0.15);
+  border-radius:8px; color:#e0eef5; padding:8px 10px; font-size:14px; font-weight:700;
+  outline:none; text-transform:uppercase; letter-spacing:1px; font-family:inherit; }
+.ap-input::placeholder { text-transform:none; letter-spacing:0; font-weight:400; color:#3a5a70; font-size:12px; }
+.ap-input.valid  { border-color:#3b9ede; background:rgba(59,158,222,0.08); }
+.ap-input.error  { border-color:#e05050; background:rgba(224,80,80,0.08); }
+.ap-input:focus  { border-color:#5aaeee; }
+.dropdown { position:absolute; top:100%; left:0; right:0; z-index:100; margin-top:3px;
+  background:#0d1e30; border:1px solid rgba(255,255,255,0.15); border-radius:9px;
+  overflow:hidden; box-shadow:0 8px 32px rgba(0,0,0,0.5); }
+.dropdown-item { padding:9px 12px; cursor:pointer; display:flex; align-items:center; gap:8px;
+  border-bottom:1px solid rgba(255,255,255,0.05); transition:background 0.12s; }
+.dropdown-item:last-child { border-bottom:none; }
+.dropdown-item:hover, .dropdown-item.focused { background:rgba(59,158,222,0.15); }
+.di-code { font-size:13px; font-weight:700; color:#3b9ede; min-width:38px; letter-spacing:0.5px; }
+.di-name { font-size:11px; color:#a0c0d0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.di-icao { font-size:10px; color:#4a7a90; margin-left:auto; white-space:nowrap; padding-left:6px; }
+
+/* Responsive grid helpers */
+.grid-2col { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+.grid-3col { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+.flight-row-grid { display:grid; grid-template-columns:1fr 18px 1fr auto 32px; gap:6px; align-items:start; margin-bottom:6px; }
+.ring-row { display:flex; gap:16px; align-items:center; }
+
+/* Desktop enhancements */
+@media (min-width:600px) {
+  .app-inner { padding:20px 24px 0; }
+  .modal-sheet { border-radius:16px !important; max-height:80vh; margin:auto; }
+  .modal-wrap { align-items:center !important; padding:20px; }
+}
+
+/* Small phone adjustments */
+@media (max-width:380px) {
+  .grid-2col { grid-template-columns:1fr; }
+  .grid-3col { grid-template-columns:1fr 1fr; }
+  .flight-row-grid { grid-template-columns:1fr 14px 1fr auto 28px; gap:4px; }
+  .di-icao { display:none; }
+  .ring-row { flex-direction:column; align-items:flex-start; gap:10px; }
+}
+</style>
+</head>
+<body>
+<div id="root"></div>
+<script src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script type="text/babel">
+const { useState, useCallback, useRef, useEffect } = React;
+
+const APP_VERSION = "1.1";
+
+// ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
+// OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
+// K=USA, SK=Colombia, SP=Peru, SB=Brazil, SA=Argentina, SC=Chile,
+// OM=UAE, OT=Qatar, WS=Singapore, RJ=Japan, VH=HK, ...
+const AIRPORTS = {
+  // ── España (domésticos Iberia) ──
+  BCN:{name:"Barcelona El Prat",     icao:"LEBL",lat:41.30,lon:2.08},
+  MAD:{name:"Madrid Barajas",        icao:"LEMD",lat:40.47,lon:-3.56},
+  PMI:{name:"Palma de Mallorca",     icao:"LEPA",lat:39.55,lon:2.73},
+  AGP:{name:"Málaga Costa del Sol",  icao:"LEMG",lat:36.67,lon:-4.49},
+  ALC:{name:"Alicante-Elche",        icao:"LEAL",lat:38.28,lon:-0.56},
+  VLC:{name:"Valencia",              icao:"LEVC",lat:39.49,lon:-0.48},
+  SVQ:{name:"Sevilla",               icao:"LEZL",lat:37.42,lon:-5.89},
+  BIO:{name:"Bilbao",                icao:"LEBB",lat:43.30,lon:-2.91},
+  IBZ:{name:"Ibiza",                 icao:"LEIB",lat:38.87,lon:1.37},
+  MAH:{name:"Menorca Mahón",         icao:"LEMH",lat:39.86,lon:4.22},
+  TFS:{name:"Tenerife Sur",          icao:"GCTS",lat:28.04,lon:-16.57},
+  TFN:{name:"Tenerife Norte",        icao:"GCXO",lat:28.48,lon:-16.34},
+  LPA:{name:"Gran Canaria",          icao:"GCLP",lat:27.93,lon:-15.39},
+  FUE:{name:"Fuerteventura",         icao:"GCFV",lat:28.45,lon:-13.86},
+  ACE:{name:"Lanzarote",             icao:"GCRR",lat:28.95,lon:-13.61},
+  SPC:{name:"La Palma",              icao:"GCLA",lat:28.63,lon:-17.76},
+  VGO:{name:"Vigo",                  icao:"LEVX",lat:42.23,lon:-8.63},
+  SCQ:{name:"Santiago de Compostela",icao:"LEST",lat:42.90,lon:-8.42},
+  LCG:{name:"A Coruña",              icao:"LECO",lat:43.30,lon:-8.38},
+  OVD:{name:"Asturias",              icao:"LEAS",lat:43.56,lon:-6.03},
+  SDR:{name:"Santander",             icao:"LEXJ",lat:43.43,lon:-3.82},
+  EAS:{name:"San Sebastián",         icao:"LESO",lat:43.36,lon:-1.79},
+  XRY:{name:"Jerez de la Frontera",  icao:"LEJR",lat:36.74,lon:-6.06},
+  GRX:{name:"Granada",               icao:"LEGR",lat:37.19,lon:-3.78},
+  MLN:{name:"Melilla",               icao:"GEML",lat:35.28,lon:-2.96},
+  // ── Europa ──
+  LHR:{name:"Londres Heathrow",      icao:"EGLL",lat:51.48,lon:-0.46},
+  LGW:{name:"Londres Gatwick",       icao:"EGKK",lat:51.15,lon:-0.18},
+  CDG:{name:"París CDG",             icao:"LFPG",lat:49.01,lon:2.55},
+  ORY:{name:"París Orly",            icao:"LFPO",lat:48.72,lon:2.36},
+  MRS:{name:"Marsella",              icao:"LFML",lat:43.44,lon:5.22},
+  AMS:{name:"Ámsterdam Schiphol",    icao:"EHAM",lat:52.31,lon:4.76},
+  FRA:{name:"Frankfurt",             icao:"EDDF",lat:50.03,lon:8.57},
+  MUC:{name:"Múnich",                icao:"EDDM",lat:48.35,lon:11.79},
+  DUS:{name:"Düsseldorf",            icao:"EDDL",lat:51.29,lon:6.77},
+  HAM:{name:"Hamburgo",              icao:"EDDH",lat:53.63,lon:9.99},
+  ZRH:{name:"Zúrich",                icao:"LSZH",lat:47.46,lon:8.55},
+  GVA:{name:"Ginebra",               icao:"LSGG",lat:46.24,lon:6.11},
+  VIE:{name:"Viena",                 icao:"LOWW",lat:48.11,lon:16.57},
+  INN:{name:"Innsbruck",             icao:"LOWI",lat:47.26,lon:11.34},
+  FCO:{name:"Roma Fiumicino",        icao:"LIRF",lat:41.80,lon:12.25},
+  MXP:{name:"Milán Malpensa",        icao:"LIMC",lat:45.63,lon:8.73},
+  LIN:{name:"Milán Linate",          icao:"LIML",lat:45.45,lon:9.28},
+  VCE:{name:"Venecia",               icao:"LIPZ",lat:45.50,lon:12.35},
+  FLR:{name:"Florencia",             icao:"LIRQ",lat:43.81,lon:11.20},
+  BLQ:{name:"Bolonia",               icao:"LIPE",lat:44.54,lon:11.29},
+  NAP:{name:"Nápoles",               icao:"LIRN",lat:40.88,lon:14.29},
+  TRN:{name:"Turín",                 icao:"LIMF",lat:45.20,lon:7.65},
+  CTA:{name:"Catania",               icao:"LICC",lat:37.47,lon:15.07},
+  PMO:{name:"Palermo",               icao:"LICJ",lat:38.18,lon:13.09},
+  OLB:{name:"Olbia (Cerdeña)",       icao:"LIEO",lat:40.90,lon:9.52},
+  CAG:{name:"Cagliari",              icao:"LIEE",lat:39.25,lon:9.06},
+  IST:{name:"Estambul",              icao:"LTFM",lat:41.27,lon:28.75},
+  ATH:{name:"Atenas",                icao:"LGAV",lat:37.94,lon:23.95},
+  JMK:{name:"Mikonos",               icao:"LGMK",lat:37.43,lon:25.35},
+  JTR:{name:"Santorini",             icao:"LGSR",lat:36.40,lon:25.48},
+  CFU:{name:"Corfú",                 icao:"LGKR",lat:39.60,lon:19.91},
+  DBV:{name:"Dubrovnik",             icao:"LDDU",lat:42.56,lon:18.27},
+  SPU:{name:"Split",                 icao:"LDSP",lat:43.54,lon:16.30},
+  ZAG:{name:"Zagreb",                icao:"LDZA",lat:45.74,lon:16.07},
+  LIS:{name:"Lisboa",                icao:"LPPT",lat:38.78,lon:-9.13},
+  OPO:{name:"Oporto",                icao:"LPPR",lat:41.24,lon:-8.68},
+  FNC:{name:"Funchal (Madeira)",     icao:"LPMA",lat:32.70,lon:-16.78},
+  PDL:{name:"Ponta Delgada (Azores)",icao:"LPPD",lat:37.74,lon:-25.70},
+  CPH:{name:"Copenhague",            icao:"EKCH",lat:55.62,lon:12.66},
+  ARN:{name:"Estocolmo Arlanda",     icao:"ESSA",lat:59.65,lon:17.93},
+  OSL:{name:"Oslo Gardermoen",       icao:"ENGM",lat:60.20,lon:11.08},
+  BGO:{name:"Bergen",                icao:"ENBR",lat:60.29,lon:5.22},
+  TOS:{name:"Tromsø",                icao:"ENTC",lat:69.68,lon:18.92},
+  HEL:{name:"Helsinki",              icao:"EFHK",lat:60.32,lon:24.97},
+  DUB:{name:"Dublín",                icao:"EIDW",lat:53.43,lon:-6.27},
+  BRU:{name:"Bruselas",              icao:"EBBR",lat:50.90,lon:4.48},
+  WAW:{name:"Varsovia Chopin",       icao:"EPWA",lat:52.17,lon:20.97},
+  PRG:{name:"Praga",                 icao:"LKPR",lat:50.10,lon:14.26},
+  BUD:{name:"Budapest",              icao:"LHBP",lat:47.44,lon:19.26},
+  BUH:{name:"Bucarest Henri Coandă", icao:"LROP",lat:44.57,lon:26.10},
+  LJU:{name:"Liubliana",             icao:"LJLJ",lat:46.22,lon:14.46},
+  TIA:{name:"Tirana",                icao:"LATI",lat:41.41,lon:19.72},
+  // ── USA East Coast ──
+  JFK:{name:"Nueva York JFK",        icao:"KJFK",lat:40.64,lon:-73.78},
+  EWR:{name:"Newark",                icao:"KEWR",lat:40.69,lon:-74.17},
+  LGA:{name:"Nueva York LaGuardia",  icao:"KLGA",lat:40.78,lon:-73.87},
+  BOS:{name:"Boston Logan",          icao:"KBOS",lat:42.36,lon:-71.01},
+  MIA:{name:"Miami",                 icao:"KMIA",lat:25.80,lon:-80.29},
+  FLL:{name:"Fort Lauderdale",       icao:"KFLL",lat:26.07,lon:-80.15},
+  MCO:{name:"Orlando",               icao:"KMCO",lat:28.43,lon:-81.31},
+  ATL:{name:"Atlanta Hartsfield",    icao:"KATL",lat:33.64,lon:-84.43},
+  IAD:{name:"Washington Dulles",     icao:"KIAD",lat:38.95,lon:-77.46},
+  DCA:{name:"Washington Reagan",     icao:"KDCA",lat:38.85,lon:-77.04},
+  PHL:{name:"Filadelfia",            icao:"KPHL",lat:39.87,lon:-75.24},
+  CLT:{name:"Charlotte",             icao:"KCLT",lat:35.21,lon:-80.94},
+  // ── USA Interior/West ──
+  ORD:{name:"Chicago O'Hare",        icao:"KORD",lat:41.98,lon:-87.91},
+  MDW:{name:"Chicago Midway",        icao:"KMDW",lat:41.79,lon:-87.75},
+  DFW:{name:"Dallas Fort Worth",     icao:"KDFW",lat:32.90,lon:-97.04},
+  DEN:{name:"Denver",                icao:"KDEN",lat:39.86,lon:-104.67},
+  PHX:{name:"Phoenix",               icao:"KPHX",lat:33.44,lon:-112.01},
+  LAX:{name:"Los Ángeles",           icao:"KLAX",lat:33.94,lon:-118.41},
+  SFO:{name:"San Francisco",         icao:"KSFO",lat:37.62,lon:-122.38},
+  SJC:{name:"San José",              icao:"KSJC",lat:37.36,lon:-121.93},
+  SEA:{name:"Seattle Tacoma",        icao:"KSEA",lat:47.45,lon:-122.31},
+  LAS:{name:"Las Vegas",             icao:"KLAS",lat:36.08,lon:-115.15},
+  // ── Caribe / América Central ──
+  CUN:{name:"Cancún",                icao:"MMUN",lat:21.04,lon:-86.87},
+  PUJ:{name:"Punta Cana",            icao:"MDPC",lat:18.57,lon:-68.36},
+  HAV:{name:"La Habana",             icao:"MUHA",lat:22.99,lon:-82.41},
+  SDQ:{name:"Santo Domingo",         icao:"MDSD",lat:18.43,lon:-69.67},
+  SJU:{name:"San Juan (Puerto Rico)",icao:"TJSJU",lat:18.44,lon:-66.00},
+  SAL:{name:"San Salvador",          icao:"MSLP",lat:13.44,lon:-89.06},
+  SAP:{name:"San Pedro Sula",        icao:"MHLM",lat:15.45,lon:-87.92},
+  GUA:{name:"Ciudad de Guatemala",   icao:"MGGT",lat:14.58,lon:-90.53},
+  MGA:{name:"Managua",               icao:"MNMG",lat:12.14,lon:-86.17},
+  PTY:{name:"Ciudad de Panamá",      icao:"MPTO",lat:9.07,lon:-79.38},
+  // ── México ──
+  MEX:{name:"Ciudad de México",      icao:"MMMX",lat:19.44,lon:-99.07},
+  // ── Sudamérica ──
+  BOG:{name:"Bogotá El Dorado",      icao:"SKBO",lat:4.70,lon:-74.15},
+  MDE:{name:"Medellín Rionegro",     icao:"SKRG",lat:6.16,lon:-75.43},
+  LIM:{name:"Lima Jorge Chávez",     icao:"SPJC",lat:-12.02,lon:-77.11},
+  GRU:{name:"São Paulo Guarulhos",   icao:"SBGR",lat:-23.43,lon:-46.47},
+  GIG:{name:"Río de Janeiro Galeão", icao:"SBGL",lat:-22.81,lon:-43.25},
+  REC:{name:"Recife Guararapes",     icao:"SBRF",lat:-8.13,lon:-34.92},
+  FOR:{name:"Fortaleza Pinto Martins",icao:"SBFZ",lat:-3.78,lon:-38.53},
+  EZE:{name:"Buenos Aires Ezeiza",   icao:"SAEZ",lat:-34.82,lon:-58.54},
+  COR:{name:"Córdoba (Argentina)",   icao:"SACO",lat:-31.32,lon:-64.21},
+  SCL:{name:"Santiago de Chile",     icao:"SCEL",lat:-33.39,lon:-70.79},
+  GYE:{name:"Guayaquil",             icao:"SEGU",lat:-2.16,lon:-79.88},
+  UIO:{name:"Quito Mariscal Sucre",  icao:"SEQM",lat:-0.13,lon:-78.36},
+  MVD:{name:"Montevideo Carrasco",   icao:"SUMU",lat:-34.84,lon:-56.03},
+  ASU:{name:"Asunción Silvio Pettirossi",icao:"SGAS",lat:-25.24,lon:-57.52},
+  CCS:{name:"Caracas Simón Bolívar", icao:"SVMI",lat:10.60,lon:-66.99},
+  // ── Oriente Medio ──
+  DXB:{name:"Dubái",                 icao:"OMDB",lat:25.25,lon:55.36},
+  AUH:{name:"Abu Dhabi",             icao:"OMAA",lat:24.43,lon:54.65},
+  DOH:{name:"Doha Hamad",            icao:"OTHH",lat:25.27,lon:51.61},
+  RUH:{name:"Riad",                  icao:"OERK",lat:24.96,lon:46.70},
+  TLV:{name:"Tel Aviv Ben Gurion",   icao:"LLBG",lat:32.01,lon:34.89},
+  // ── África ──
+  CMN:{name:"Casablanca Mohammed V", icao:"GMMN",lat:33.37,lon:-7.59},
+  RAK:{name:"Marrakech Menara",      icao:"GMMX",lat:31.61,lon:-8.04},
+  FEZ:{name:"Fez Saïs",             icao:"GMFF",lat:33.93,lon:-4.98},
+  TNG:{name:"Tánger Ibn Battouta",   icao:"GMTT",lat:35.73,lon:-5.92},
+  ALG:{name:"Argel Houari Boumediene",icao:"DAAG",lat:36.69,lon:3.22},
+  CAI:{name:"El Cairo",              icao:"HECA",lat:30.12,lon:31.41},
+  DKR:{name:"Dakar Blaise Diagne",   icao:"GOBD",lat:14.67,lon:-17.07},
+  JNB:{name:"Johannesburgo O.R.Tambo",icao:"FAOR",lat:-26.13,lon:28.24},
+  CPT:{name:"Ciudad del Cabo",       icao:"FACT",lat:-33.96,lon:18.60},
+  // ── Asia ──
+  SIN:{name:"Singapur Changi",       icao:"WSSS",lat:1.36,lon:103.99},
+  BKK:{name:"Bangkok Suvarnabhumi",  icao:"VTBS",lat:13.69,lon:100.75},
+  KUL:{name:"Kuala Lumpur",          icao:"WMKK",lat:2.74,lon:101.71},
+  NRT:{name:"Tokio Narita",          icao:"RJAA",lat:35.77,lon:140.39},
+  HND:{name:"Tokio Haneda",          icao:"RJTT",lat:35.55,lon:139.78},
+  ICN:{name:"Seúl Incheon",          icao:"RKSI",lat:37.46,lon:126.44},
+  PEK:{name:"Pekín Capital",         icao:"ZBAA",lat:40.08,lon:116.60},
+  PVG:{name:"Shanghái Pudong",       icao:"ZSPD",lat:31.14,lon:121.80},
+  HKG:{name:"Hong Kong",             icao:"VHHH",lat:22.31,lon:113.92},
+  DEL:{name:"Delhi Indira Gandhi",   icao:"VIDP",lat:28.56,lon:77.10},
+  BOM:{name:"Bombay",                icao:"VABB",lat:19.09,lon:72.87},
+  // ── Africa ──
+  CAI:{name:"El Cairo",              icao:"HECA",lat:30.12,lon:31.41},
+  CMN:{name:"Casablanca Mohammed V", icao:"GMMN",lat:33.37,lon:-7.59},
+  JNB:{name:"Johannesburgo",         icao:"FAOR",lat:-26.13,lon:28.24},
+  CPT:{name:"Ciudad del Cabo",       icao:"FACT",lat:-33.96,lon:18.60},
+  // ── Oceanía ──
+  SYD:{name:"Sídney Kingsford",      icao:"YSSY",lat:-33.95,lon:151.18},
+  MEL:{name:"Melbourne Tullamarine", icao:"YMML",lat:-37.67,lon:144.84},
+  AKL:{name:"Auckland",              icao:"NZAA",lat:-37.01,lon:174.79},
+  // ── Canadá ──
+  YYZ:{name:"Toronto Pearson",       icao:"CYYZ",lat:43.68,lon:-79.63},
+  YUL:{name:"Montreal Trudeau",      icao:"CYUL",lat:45.47,lon:-73.74},
+  YVR:{name:"Vancouver",             icao:"CYVR",lat:49.19,lon:-123.18},
+};
+
+// ── Dynamic airport registry ──────────────────────────────────────────────────
+// Starts with LOCAL_AIRPORTS (fallback), then merges OpenFlights data if online.
+// activeDB and icaoMap are module-level refs updated after fetch.
+let activeDB = { ...AIRPORTS };
+let icaoMap = {};
+Object.entries(activeDB).forEach(([iata,d]) => { if(d.icao) icaoMap[d.icao] = iata; });
+
+// Called once on app mount — tries to fetch OpenFlights (~7600 airports)
+// OpenFlights CSV columns: id,name,city,country,iata,icao,lat,lon,alt,tz,...
+async function loadOpenFlights(onDone) {
+  try {
+    const url = `https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat?v=${APP_VERSION}`;
+    const res = await fetch(url, { cache: "force-cache" });
+    if (!res.ok) throw new Error("fetch failed");
+    const text = await res.text();
+    const lines = text.split("\n");
+    const extended = { ...AIRPORTS }; // keep local overrides
+    const newIcao = { ...icaoMap };
+    let added = 0;
+    for (const line of lines) {
+      // Parse CSV respecting quoted fields
+      const cols = [];
+      let cur = "", inQ = false;
+      for (let i = 0; i < line.length; i++) {
+        const c = line[i];
+        if (c === '"') { inQ = !inQ; }
+        else if (c === ',' && !inQ) { cols.push(cur); cur = ""; }
+        else cur += c;
+      }
+      cols.push(cur);
+      if (cols.length < 8) continue;
+      const iata = cols[4].replace(/"/g,"").trim().toUpperCase();
+      const icao = cols[5].replace(/"/g,"").trim().toUpperCase();
+      const name = cols[1].replace(/"/g,"").trim();
+      const lat  = parseFloat(cols[6]);
+      const lon  = parseFloat(cols[7]);
+      // Skip entries without valid IATA or coordinates
+      if (!iata || iata === "\\N" || iata.length !== 3) continue;
+      if (isNaN(lat) || isNaN(lon)) continue;
+      // Don't overwrite our curated local entries
+      if (!extended[iata]) {
+        extended[iata] = { name, icao: icao !== "\\N" ? icao : "", lat, lon };
+        added++;
+      }
+      if (icao && icao !== "\\N" && !newIcao[icao]) newIcao[icao] = iata;
+    }
+    activeDB = extended;
+    icaoMap  = newIcao;
+    onDone(added);
+  } catch(e) {
+    // Silent fallback — local DB stays active
+    onDone(0);
+  }
+}
+
+function resolveCode(raw) {
+  const s = raw.trim().toUpperCase();
+  if (activeDB[s]) return s;
+  if (icaoMap[s]) return icaoMap[s];
+  return null;
+}
+
+function searchAirports(query) {
+  if (!query || query.length < 1) return [];
+  const q = query.toUpperCase().trim();
+  const results = [];
+  for (const [iata, d] of Object.entries(activeDB)) {
+    const matchCode = iata.startsWith(q) || (d.icao && d.icao.startsWith(q));
+    const matchName = d.name.toUpperCase().includes(q);
+    if (matchCode || matchName) results.push({ iata, ...d });
+  }
+  results.sort((a, b) => {
+    const aExact = a.iata === q || a.icao === q ? 0 : 1;
+    const bExact = b.iata === q || b.icao === q ? 0 : 1;
+    if (aExact !== bExact) return aExact - bExact;
+    const aCode = a.iata.startsWith(q) || (a.icao && a.icao.startsWith(q)) ? 0 : 1;
+    const bCode = b.iata.startsWith(q) || (b.icao && b.icao.startsWith(q)) ? 0 : 1;
+    return aCode - bCode;
+  });
+  return results.slice(0, 8);
+}
+
+// ── Physics ───────────────────────────────────────────────────────────────────
+function getDoseRate(lat) {
+  const a = Math.abs(lat);
+  if (a < 15) return 1.5;
+  if (a < 30) return 2.2;
+  if (a < 45) return 3.5;
+  if (a < 60) return 4.8;
+  return 6.0;
+}
+function gcDistance(lat1,lon1,lat2,lon2) {
+  const R=6371, r=d=>d*Math.PI/180;
+  const a=Math.sin(r(lat2-lat1)/2)**2+Math.cos(r(lat1))*Math.cos(r(lat2))*Math.sin(r(lon2-lon1)/2)**2;
+  return R*2*Math.atan2(Math.sqrt(a),Math.sqrt(1-a));
+}
+function effectiveLatitude(lat1,lon1,lat2,lon2) {
+  const r=d=>d*Math.PI/180, deg=x=>x*180/Math.PI;
+  const cosMax=Math.cos(r(lat1))*Math.cos(r(lat2))*Math.abs(Math.sin(r(lon2-lon1)));
+  const peak=deg(Math.asin(Math.min(1,Math.sqrt(1-cosMax*cosMax))));
+  return (Math.abs(lat1)+peak+Math.abs(lat2))/3;
+}
+function calcFlight(orig,dest,flFactor,solarFactor) {
+  const A=activeDB[orig], B=activeDB[dest];
+  if(!A||!B) return null;
+  const distKm=gcDistance(A.lat,A.lon,B.lat,B.lon);
+  const timeH=distKm/830;
+  const effLat=effectiveLatitude(A.lat,A.lon,B.lat,B.lon);
+  const doseUsv=getDoseRate(effLat)*flFactor*solarFactor*timeH;
+  return {distKm:Math.round(distKm),timeH,doseUsv,effLat};
+}
+
+// ── Formatters ────────────────────────────────────────────────────────────────
+function fmtDose(usv) {
+  if (usv>=1000) return `${(usv/1000).toFixed(2)} mSv`;
+  return `${usv.toFixed(1)} µSv`;
+}
+function fmtTime(h) { return `${Math.floor(h)}h ${Math.round((h%1)*60)}m`; }
+let _id=1; const mkId=()=>_id++;
+
+// ── Translations ──────────────────────────────────────────────────────────────
+const LANG = {
+  es: {
+    appTitle: "Radiación Cósmica en Vuelo",
+    appSubtitle: "EURADOS / ICRP 103 · Estimación orientativa, no dosimetría certificada",
+    dbLoading: "⏳ Cargando base de datos de aeropuertos…",
+    dbFull: "✓ +7.600 aeropuertos cargados",
+    dbLocal: "📡 Sin conexión · base local activa",
+    flightLevel: "Nivel de vuelo",
+    solarCycle: "Ciclo solar",
+    solarMin: "Mínimo ☁️", solarMinSub: "+18% GCR",
+    solarMid: "Medio", solarMidSub: "promedio",
+    solarMax: "Máximo ☀️", solarMaxSub: "ahora ~2025",
+    careerToggle: "Mostrar dosis de tu vida aeronáutica",
+    careerYears: "Años de carrera",
+    tabPlanner: "📋 Planificador mensual",
+    tabSingle: "✈️ Vuelo único",
+    infoBtn: "Info",
+    monthCurrent: "mes actual",
+    monthPast: "mes pasado",
+    monthFuture: "mes futuro",
+    monthsSaved: "meses guardados",
+    flightsLabel: "Vuelos",
+    savedBadge: "✓ guardado",
+    clearBtn: "🗑 Limpiar",
+    addFlightBtn: "+ Añadir vuelo",
+    addReturnBtn: "↩ Añadir vuelta",
+    sameAirportWarn: "⚠️ Origen y destino iguales",
+    codeNotFound: "Código no encontrado",
+    originLabel: "Origen",
+    destLabel: "Destino",
+    originPlaceholder: "IATA o OACI…",
+    destPlaceholder: "IATA o OACI…",
+    monthlyDoseLabel: "Dosis total",
+    annualProjection: "Proyección anual (×12):",
+    chestXrayEquiv: "Rx tórax",
+    dentalXrayEquiv: "Rx dentales",
+    icrcLimitTitle: "Límite ICRP tripulación — 20 mSv/año",
+    annualEstimated: "año estimado",
+    aboveNonFlyer: "sobre fondo no volador",
+    thisMonth: "este mes",
+    exceedsPregnant: "⚠️ sup. límite emb.",
+    halfPregnant: "~50% límite emb.",
+    belowPregnant: "✓ bajo límite emb.",
+    farBelowLimit: "🟢 Muy por debajo del límite",
+    moderateRange: "🟡 Rango moderado",
+    nearLimit: "🔴 Cerca del límite",
+    pregnantToggle: "Datos para tripulante embarazada",
+    pregnantIcrcLimit: "Límite ICRP embarazo",
+    pregnantTotalLimit: "todo el embarazo",
+    pregnantMonthlyDose: "Tu dosis este mes",
+    pregnantBudgetLabel: "Presupuesto mensual restante (1 mSv total)",
+    pregnantExceeds: "⚠️ Supera el límite mensual recomendado. Se recomienda consultar al Servicio de Medicina del Trabajo y valorar reasignación de sector.",
+    pregnantNear: "🟡 Cerca del 50% del límite mensual. Monitorizar el resto del embarazo.",
+    pregnantOk: "🟢 Por debajo del límite mensual. Ritmo de vuelo compatible con el embarazo este mes.",
+    pregnantSource: "Fuente: ICRP Pub. 103 · RD 783/2001 · AESA. Consulta siempre al servicio médico de tu compañía.",
+    breakdownTitle: "Desglose por sector",
+    colSector: "Sector", colKm: "km", colTime: "Tiempo",
+    colDosePerLeg: "µSv/leg", colLegs: "Legs", colTotal: "Total",
+    totalMonth: "TOTAL MES",
+    comparisonTitle: "Comparativa de dosis",
+    barThisMonth: "Tú — este mes",
+    barAnnualFlight: "Tú — proyección anual (vuelo)",
+    barAnnualTotal: "Tú — total anual (vuelo + fondo natural)",
+    barNonFlyer: "No volador — fondo natural/año",
+    barMammo: "Mamografía",
+    barCT: "TAC tórax",
+    barPET: "PET-TAC",
+    barCrewLimit: "Límite tripulación/año (ICRP)",
+    flVisualTitle: "Tasa de dosis por nivel de vuelo",
+    flVisualRef: "Referencia a latitud media (45°) · selecciona el FL en cada vuelo individualmente",
+    flMoreThan: "% más que",
+    careerTitle: "Dosis acumulada",
+    careerYearsLabel: "años de vida aeronáutica",
+    careerMethodNote: "Basado en la proyección anual de este mes (×12 meses ×",
+    careerMethodNote2: "años). Solo incluye la dosis por vuelo, no el fondo natural terrestre.",
+    careerFlightDose: "Dosis de vuelo acumulada",
+    careerCTEquiv: "Equiv. TAC tórax",
+    careerNaturalBg: "Fondo natural mismo período",
+    careerSummary1: "En",
+    careerSummary2: "años acumulas",
+    careerSummary3: "solo por vuelo, más los",
+    careerSummary4: "de fondo natural que acumula cualquier persona. Total estimado:",
+    exportBtn: "📄 Exportar informe PDF",
+    singleDoseLabel: "Dosis por vuelo",
+    singleEffRate: "Tasa efectiva",
+    singleDistance: "Distancia",
+    singleDuration: "Duración",
+    careerSinglePer: "Por vuelo:",
+    careerSingle1mo: "vuelo/mes ×",
+    careerSingle4mo: "vuelos/mes ×",
+    careerSingleYears: "años =",
+    careerSingleNote: "Solo dosis por vuelo · usa el planificador mensual para mayor precisión.",
+    disclaimer: "⚠️ Fuentes: EURADOS Report 2004-1, ICRP 103, UNSCEAR 2008. Ciclo solar: Mewaldt 2010 (estimado). Para dosimetría oficial: CARI-7 (FAA) o SIEVERT (EURADOS).",
+    emptyFlights: "Pulsa \"+ Añadir vuelo\" para empezar.",
+    // Onboarding
+    onboardTitle: "Instala la app",
+    onboardSubtitle: "Añádela a tu pantalla de inicio para usarla sin navegador, incluso sin conexión",
+    onboardNever: "Entendido · no volver a mostrar",
+    onboardLater: "Recordármelo luego",
+    onboardIosWarn: "Si no ves el botón de compartir, asegúrate de abrir esta página en Safari (no en Chrome ni Firefox para iOS)",
+    onboardPlatformIos: "iPhone / iPad",
+    onboardPlatformAndroid: "Android",
+    onboardPlatformDesktop: "Escritorio",
+    onboardStepsIos: [
+      {icon:"⬆️", text:"Pulsa el botón de compartir en Safari (el cuadrado con la flecha)"},
+      {icon:"📲", text:'Desplázate y pulsa "Añadir a pantalla de inicio"'},
+      {icon:"✅", text:'Pulsa "Añadir" — la app aparecerá en tu pantalla como una app nativa'},
+    ],
+    onboardStepsAndroid: [
+      {icon:"⋮",  text:"Pulsa el menú de Chrome (los tres puntos arriba a la derecha)"},
+      {icon:"📲", text:'Pulsa "Añadir a pantalla de inicio" o "Instalar aplicación"'},
+      {icon:"✅", text:"Confirma — la app se instala y funciona sin navegador"},
+    ],
+    onboardStepsDesktop: [
+      {icon:"🖥️", text:"En Chrome o Edge verás un icono de instalación (⊕) en la barra de direcciones"},
+      {icon:"📲", text:"Pulsa el icono e instala la app — se abrirá como ventana independiente"},
+      {icon:"✅", text:"También puedes guardar la página como favorito para acceso rápido"},
+    ],
+    // Info modal
+    infoModalTitle: "Guía de Radiación Cósmica",
+    infoModalSubtitle: "Pulsa cada sección para expandirla",
+    infoModalFooter: "Contenido basado en ICRP 103, EURADOS, UNSCEAR 2008 y literatura epidemiológica revisada por pares. No constituye asesoramiento médico.",
+    infoSections: [
+      {icon:"🌌", title:"¿Qué es la radiación cósmica?", body:`El universo está permanentemente bombardeado por rayos cósmicos: partículas subatómicas de alta energía (protones, núcleos de helio, electrones) que viajan a velocidades cercanas a la de la luz. Tienen origen tanto en el Sol como en fuentes extragalácticas —supernovas, púlsares, núcleos activos de galaxias— y alcanzan la Tierra constantemente.\n\nA nivel del suelo, la atmósfera nos protege absorbiendo la mayor parte. Pero a 35.000 pies (FL350), solo queda una fracción de esa protección: la dosis por radiación cósmica es entre 100 y 300 veces mayor que en tierra.`},
+      {icon:"⚡", title:"Radiación ionizante: ¿qué significa?", body:`Se llama ionizante a la radiación con suficiente energía para arrancar electrones de los átomos, creando iones. Esto puede dañar el ADN celular directamente o generando radicales libres.\n\nExisten varios tipos: rayos gamma y X (electromagnética), partículas alfa (núcleos de helio), beta (electrones), y neutrones. A bordo de un avión se combinan principalmente fotones de alta energía y muones —partículas secundarias generadas cuando los rayos cósmicos chocan con la atmósfera superior.`},
+      {icon:"📏", title:"Unidades: Sievert y la escala completa", body:`El Sievert (Sv) mide la dosis absorbida ponderada por el daño biológico que causa cada tipo de radiación en el tejido humano. Es la unidad oficial de protección radiológica (ICRP).\n\nLa escala completa, de menor a mayor:\n\n• 1 µSv (microsievert) = 0,000001 Sv\n  — Una Rx dental ≈ 5 µSv\n  — Un vuelo transatlántico ≈ 30–80 µSv\n\n• 1 mSv (millisievert) = 0,001 Sv\n  — Fondo natural anual en España ≈ 2,4 mSv\n  — Límite recomendado tripulación aérea: 20 mSv/año\n\n• 1 Sv = dosis aguda que empieza a causar síntomas (náuseas)\n• 4–5 Sv = dosis letal al 50% sin tratamiento (LD50)\n• >10 Sv = dosis letal con casi total seguridad\n\nPara contexto: toda la carrera de un piloto de largo radio raramente supera los 200–400 mSv acumulados, lejos del rango donde se observan efectos deterministas.\n\nTrabajadores de centrales nucleares:\n\nEl límite regulatorio para trabajadores de instalaciones nucleares es el mismo que para tripulación aérea: 20 mSv/año promediado en 5 años, con un máximo de 50 mSv en un solo año (ICRP 103, Directiva Euratom 2013/59).\n\nSin embargo, la exposición real media es muy inferior al límite. Según datos del OIEA y UNSCEAR, la dosis efectiva media anual de un trabajador de central nuclear en países con buenas prácticas radiológicas se sitúa entre 1 y 3 mSv/año — comparable o incluso inferior a la de un piloto de largo radio.\n\nEn perspectiva: un piloto de largo radio con programación intensa (80–100 sectores/año) puede acumular más dosis anual que el trabajador medio de una central nuclear.`},
+      {icon:"☀️", title:"Máximo solar → menos radiación cósmica", body:`Esto parece contraintuitivo pero tiene una explicación física precisa.\n\nLos rayos cósmicos de mayor energía vienen del espacio interestelar (Rayos Cósmicos Galácticos, GCR). Para llegar a la Tierra tienen que atravesar el campo magnético solar —la heliosfera.\n\nDurante el máximo solar, el Sol emite más viento solar: un flujo de partículas y campo magnético que infla y refuerza la heliosfera. Ese escudo magnético más potente deflecta más GCR antes de que entren al sistema solar interior.\n\nResultado: en máximo solar (como ahora, ciclo 25 ~2024–2026) la dosis a bordo es un 10–20% menor que en mínimo solar, especialmente en rutas polares y de alta latitud.\n\nAtención: las erupciones solares (SPE, Solar Particle Events) son la excepción —pueden disparar la dosis puntualmente, aunque son raras y breves.`},
+      {icon:"🤰", title:"Tripulantes embarazadas: límites y recomendaciones", body:`La ICRP (Publicación 103) establece un límite específico para trabajadoras embarazadas expuestas a radiación ionizante: no superar 1 mSv durante todo el embarazo, contado desde la declaración del mismo.\n\nEste límite es mucho más restrictivo que el general de 20 mSv/año para tripulación, y está justificado: el embrión y el feto son especialmente sensibles a la radiación ionizante durante las primeras semanas de desarrollo, cuando se están formando los órganos principales (organogénesis, semanas 2–8).\n\n¿Qué implica en la práctica?\n\nCon una exposición típica en rutas transatlánticas de 30–60 µSv por vuelo, un embarazo de 9 meses tiene un presupuesto de radiación de 1.000 µSv (1 mSv). Eso equivale a unos 15–30 vuelos de largo radio durante todo el embarazo, dependiendo de la ruta.\n\nNormativa en España:\n\nEl Real Decreto 783/2001 y las directrices de la AESA obligan a las aerolíneas a informar a las tripulantes embarazadas de su exposición estimada y a reasignarlas a rutas de menor dosis o a tareas en tierra si es necesario para cumplir el límite.\n\nRecomendación práctica:\n\nDesde la confirmación del embarazo, lleva un registro mensual de sectores volados y su dosis estimada —exactamente lo que permite hacer esta aplicación— para comunicarlo al servicio de medicina del trabajo de la compañía.`},
+      {icon:"🚿", title:"Mito: ducharse tras volar elimina la radiación", body:`Mito muy extendido, sin ninguna base científica.\n\nLa radiación cósmica que recibes a bordo es ionizante penetrante —fotones gamma, muones, neutrones de alta energía. Cuando impacta en tus células, el daño (si ocurre) ya está hecho en el momento de la exposición. No deja residuos radiactivos en tu piel, no contamina tu ropa y no se puede "lavar".\n\nDucharse elimina contaminación radiactiva superficial —polvo con partículas radiactivas— algo relevante en accidentes nucleares o zonas contaminadas, pero completamente irrelevante tras un vuelo comercial.`},
+    ],
+    // PDF
+    pdfTitle: "☢ Informe de Radiación Cósmica",
+    pdfSubtitle: "Exposición estimada en vuelo",
+    pdfGenerated: "Generado:",
+    pdfFlightLevel: "Nivel de vuelo: por sector",
+    pdfSolarCycle: "Ciclo solar:",
+    pdfMonthlySummary: "Resumen del mes",
+    pdfIcrcUsage: "Uso límite ICRP tripulación",
+    pdfOf: "de 20 mSv/año",
+    pdfSectors: "sectores",
+    pdfKmTotal: "mil km totales",
+    pdfBreakdown: "Desglose por sector",
+    pdfCode: "Código", pdfRoute: "Ruta", pdfFL: "FL",
+    pdfDist: "Distancia", pdfTime: "Tiempo",
+    pdfDosePerLeg: "Dosis/leg", pdfLegs: "Legs", pdfTotal: "Total",
+    pdfTotalMonth: "TOTAL MES",
+    pdfEquivalences: "Equivalencias de dosis",
+    pdfCareerTitle: "Dosis acumulada de vida aeronáutica",
+    pdfCareerNote: "Solo dosis por vuelo (proyección anual ×",
+    pdfCareerNote2: "años). No incluye fondo natural terrestre.",
+    pdfCareerFlight: "Dosis de vuelo acumulada",
+    pdfCareerCT: "Equiv. TAC tórax",
+    pdfCareerNatural: "Fondo natural mismo período",
+    pdfCareerTotal: "Total estimado (vuelo + fondo natural):",
+    pdfFooter: "⚠ Estimación orientativa basada en EURADOS Report 2004-1, ICRP Publicación 103, UNSCEAR 2008. No sustituye a dosimetría oficial certificada (CARI-7/FAA o SIEVERT/EURADOS). Para vigilancia radiológica oficial, consulte al Servicio de Medicina del Trabajo de su compañía.",
+  },
+  en: {
+    appTitle: "Cosmic Radiation Flight Calculator",
+    appSubtitle: "EURADOS / ICRP 103 · Orientation estimate, not certified dosimetry",
+    dbLoading: "⏳ Loading airport database…",
+    dbFull: "✓ 7,600+ airports loaded",
+    dbLocal: "📡 Offline · local database active",
+    flightLevel: "Flight level",
+    solarCycle: "Solar cycle",
+    solarMin: "Minimum ☁️", solarMinSub: "+18% GCR",
+    solarMid: "Average", solarMidSub: "mean",
+    solarMax: "Maximum ☀️", solarMaxSub: "now ~2025",
+    careerToggle: "Show aeronautical career dose",
+    careerYears: "Career years",
+    tabPlanner: "📋 Monthly planner",
+    tabSingle: "✈️ Single flight",
+    infoBtn: "Info",
+    monthCurrent: "current month",
+    monthPast: "past month",
+    monthFuture: "future month",
+    monthsSaved: "months saved",
+    flightsLabel: "Flights",
+    savedBadge: "✓ saved",
+    clearBtn: "🗑 Clear",
+    addFlightBtn: "+ Add flight",
+    addReturnBtn: "↩ Add return",
+    sameAirportWarn: "⚠️ Origin and destination are the same",
+    codeNotFound: "Code not found",
+    originLabel: "Origin",
+    destLabel: "Destination",
+    originPlaceholder: "IATA or ICAO…",
+    destPlaceholder: "IATA or ICAO…",
+    monthlyDoseLabel: "Total dose",
+    annualProjection: "Annual projection (×12):",
+    chestXrayEquiv: "chest X-rays",
+    dentalXrayEquiv: "dental X-rays",
+    icrcLimitTitle: "ICRP crew limit — 20 mSv/year",
+    annualEstimated: "estimated/year",
+    aboveNonFlyer: "above non-flyer background",
+    thisMonth: "this month",
+    exceedsPregnant: "⚠️ exceeds preg. limit",
+    halfPregnant: "~50% preg. limit",
+    belowPregnant: "✓ below preg. limit",
+    farBelowLimit: "🟢 Well below the limit",
+    moderateRange: "🟡 Moderate range",
+    nearLimit: "🔴 Near regulatory limit",
+    pregnantToggle: "Pregnant crew data",
+    pregnantIcrcLimit: "ICRP pregnancy limit",
+    pregnantTotalLimit: "entire pregnancy",
+    pregnantMonthlyDose: "Your dose this month",
+    pregnantBudgetLabel: "Monthly budget remaining (1 mSv total)",
+    pregnantExceeds: "⚠️ Exceeds the recommended monthly limit. Consult Occupational Health and consider sector reassignment.",
+    pregnantNear: "🟡 Near 50% of monthly limit. Monitor throughout the pregnancy.",
+    pregnantOk: "🟢 Below monthly limit. Current flight schedule compatible with pregnancy this month.",
+    pregnantSource: "Source: ICRP Pub. 103 · Euratom 2013/59. Always consult your company's medical service.",
+    breakdownTitle: "Sector breakdown",
+    colSector: "Sector", colKm: "km", colTime: "Time",
+    colDosePerLeg: "µSv/leg", colLegs: "Legs", colTotal: "Total",
+    totalMonth: "MONTHLY TOTAL",
+    comparisonTitle: "Dose comparison",
+    barThisMonth: "You — this month",
+    barAnnualFlight: "You — annual projection (flight)",
+    barAnnualTotal: "You — annual total (flight + background)",
+    barNonFlyer: "Non-flyer — natural background/year",
+    barMammo: "Mammography",
+    barCT: "Chest CT",
+    barPET: "PET-CT",
+    barCrewLimit: "Crew limit/year (ICRP)",
+    flVisualTitle: "Dose rate by flight level",
+    flVisualRef: "Reference at mid-latitude (45°) · set FL per individual flight",
+    flMoreThan: "% more than",
+    careerTitle: "Accumulated dose",
+    careerYearsLabel: "years of aeronautical career",
+    careerMethodNote: "Based on this month's annual projection (×12 months ×",
+    careerMethodNote2: "years). Flight dose only, excludes natural background.",
+    careerFlightDose: "Accumulated flight dose",
+    careerCTEquiv: "CT scan equiv.",
+    careerNaturalBg: "Natural background same period",
+    careerSummary1: "Over",
+    careerSummary2: "years you accumulate",
+    careerSummary3: "from flying alone, plus",
+    careerSummary4: "natural background for anyone. Total estimate:",
+    exportBtn: "📄 Export PDF report",
+    singleDoseLabel: "Dose per flight",
+    singleEffRate: "Effective rate",
+    singleDistance: "Distance",
+    singleDuration: "Duration",
+    careerSinglePer: "Per flight:",
+    careerSingle1mo: "flight/month ×",
+    careerSingle4mo: "flights/month ×",
+    careerSingleYears: "years =",
+    careerSingleNote: "Flight dose only · use the monthly planner for greater accuracy.",
+    disclaimer: "⚠️ Sources: EURADOS Report 2004-1, ICRP 103, UNSCEAR 2008. Solar cycle: Mewaldt 2010 (estimated). For official dosimetry: CARI-7 (FAA) or SIEVERT (EURADOS).",
+    emptyFlights: "Press \"+ Add flight\" to get started.",
+    // Onboarding
+    onboardTitle: "Install the app",
+    onboardSubtitle: "Add it to your home screen to use it without a browser, even offline",
+    onboardNever: "Got it · don't show again",
+    onboardLater: "Remind me later",
+    onboardIosWarn: "If you don't see the share button, make sure you open this page in Safari (not Chrome or Firefox for iOS)",
+    onboardPlatformIos: "iPhone / iPad",
+    onboardPlatformAndroid: "Android",
+    onboardPlatformDesktop: "Desktop",
+    onboardStepsIos: [
+      {icon:"⬆️", text:"Tap the share button in Safari (the square with an arrow)"},
+      {icon:"📲", text:'Scroll down and tap "Add to Home Screen"'},
+      {icon:"✅", text:'Tap "Add" — the app will appear on your screen like a native app'},
+    ],
+    onboardStepsAndroid: [
+      {icon:"⋮",  text:"Tap the Chrome menu (three dots, top right)"},
+      {icon:"📲", text:'Tap "Add to Home Screen" or "Install app"'},
+      {icon:"✅", text:"Confirm — the app installs and works without a browser"},
+    ],
+    onboardStepsDesktop: [
+      {icon:"🖥️", text:"In Chrome or Edge you'll see an install icon (⊕) in the address bar"},
+      {icon:"📲", text:"Click the icon and install — it opens as a standalone window"},
+      {icon:"✅", text:"You can also bookmark the page for quick access"},
+    ],
+    // Info modal
+    infoModalTitle: "Cosmic Radiation Guide",
+    infoModalSubtitle: "Tap each section to expand",
+    infoModalFooter: "Content based on ICRP 103, EURADOS, UNSCEAR 2008 and peer-reviewed epidemiological literature. Does not constitute medical advice.",
+    infoSections: [
+      {icon:"🌌", title:"What is cosmic radiation?", body:`The universe is constantly bombarded by cosmic rays: high-energy subatomic particles (protons, helium nuclei, electrons) travelling at speeds close to the speed of light. They originate both from the Sun and from extragalactic sources — supernovae, pulsars, active galactic nuclei — and reach Earth continuously.\n\nAt ground level, the atmosphere absorbs most of this radiation. But at 35,000 feet (FL350), only a fraction of that protection remains: the cosmic radiation dose is 100 to 300 times higher than at sea level.`},
+      {icon:"⚡", title:"Ionising radiation: what does it mean?", body:`Ionising radiation is radiation with enough energy to knock electrons off atoms, creating ions. This can directly damage cellular DNA or generate free radicals.\n\nSeveral types exist: gamma and X-rays (electromagnetic), alpha particles (helium nuclei), beta particles (electrons), and neutrons. On board an aircraft, the main components are high-energy photons and muons — secondary particles generated when cosmic rays collide with the upper atmosphere.`},
+      {icon:"📏", title:"Units: Sievert and the full scale", body:`The Sievert (Sv) measures the absorbed dose weighted by the biological damage caused by each type of radiation in human tissue. It is the official unit of radiological protection (ICRP).\n\nThe full scale, from lowest to highest:\n\n• 1 µSv (microsievert) = 0.000001 Sv\n  — Dental X-ray ≈ 5 µSv\n  — Transatlantic flight ≈ 30–80 µSv\n\n• 1 mSv (millisievert) = 0.001 Sv\n  — Annual natural background (Spain) ≈ 2.4 mSv\n  — Recommended crew limit: 20 mSv/year\n\n• 1 Sv = acute dose that begins to cause symptoms (nausea)\n• 4–5 Sv = lethal dose for 50% without treatment (LD50)\n• >10 Sv = almost certainly lethal\n\nFor context: an entire long-haul pilot career rarely exceeds 200–400 mSv accumulated — far below the threshold where deterministic effects are observed.\n\nNuclear power plant workers:\n\nThe regulatory limit for nuclear facility workers is the same as for aircrew: 20 mSv/year averaged over 5 years, with a maximum of 50 mSv in any single year (ICRP 103, Euratom Directive 2013/59).\n\nHowever, real average exposure is well below the limit. According to IAEA and UNSCEAR data, the mean annual effective dose for a nuclear plant worker in countries with good radiological practices is between 1 and 3 mSv/year — comparable to or even lower than a long-haul pilot.\n\nIn perspective: a long-haul pilot with a heavy schedule (80–100 sectors/year) may accumulate more annual dose than the average nuclear plant worker.`},
+      {icon:"☀️", title:"Solar maximum → less cosmic radiation", body:`This seems counterintuitive but has a precise physical explanation.\n\nThe highest-energy cosmic rays come from interstellar space (Galactic Cosmic Rays, GCR). To reach Earth they must cross the solar magnetic field — the heliosphere.\n\nDuring solar maximum, the Sun emits more solar wind: a flux of particles and magnetic field that inflates and strengthens the heliosphere. This more powerful magnetic shield deflects more GCR before they enter the inner solar system.\n\nResult: at solar maximum (as now, Cycle 25 ~2024–2026) the on-board dose is 10–20% lower than at solar minimum, especially on polar and high-latitude routes.\n\nNote: solar particle events (SPEs / solar flares) are the exception — they can temporarily spike the dose, though they are rare and brief.`},
+      {icon:"🤰", title:"Pregnant crew: limits and recommendations", body:`ICRP Publication 103 sets a specific limit for pregnant workers exposed to ionising radiation: no more than 1 mSv during the entire pregnancy, from the date of declaration.\n\nThis limit is far more restrictive than the general 20 mSv/year for crew, for good reason: the embryo and foetus are especially sensitive to ionising radiation during the first weeks of development, when the main organs are forming (organogenesis, weeks 2–8).\n\nWhat does it mean in practice?\n\nWith typical transatlantic route exposure of 30–60 µSv per flight, a 9-month pregnancy has a radiation budget of 1,000 µSv (1 mSv). That is equivalent to roughly 15–30 long-haul flights during the entire pregnancy, depending on the route.\n\nRegulation:\n\nEuratom Directive 2013/59 obliges airlines to inform pregnant crew of their estimated exposure and to reassign them to lower-dose routes or ground duties if necessary to meet the limit. Declaring the pregnancy to the operator triggers these obligations.\n\nPractical recommendation:\n\nFrom the moment of confirmed pregnancy, keep a monthly log of sectors flown and their estimated dose — exactly what this app is designed for — to report to your company's occupational health service.`},
+      {icon:"🚿", title:"Myth: showering after a flight removes radiation", body:`A widespread myth with no scientific basis.\n\nThe cosmic radiation you receive on board is penetrating ionising radiation — gamma photons, muons, high-energy neutrons. When it hits your cells, any damage is done at the moment of exposure. It leaves no radioactive residue on your skin, does not contaminate your clothes, and cannot be "washed off".\n\nShowering removes surface radioactive contamination — dust containing radioactive particles — which is relevant after nuclear accidents or in contaminated areas, but completely irrelevant after a commercial flight.`},
+    ],
+    // PDF
+    pdfTitle: "☢ Cosmic Radiation Report",
+    pdfSubtitle: "Estimated in-flight exposure",
+    pdfGenerated: "Generated:",
+    pdfFlightLevel: "Flight level: per sector",
+    pdfSolarCycle: "Solar cycle:",
+    pdfMonthlySummary: "Monthly summary",
+    pdfIcrcUsage: "ICRP crew limit usage",
+    pdfOf: "of 20 mSv/year",
+    pdfSectors: "sectors",
+    pdfKmTotal: "k km total",
+    pdfBreakdown: "Sector breakdown",
+    pdfCode: "Code", pdfRoute: "Route", pdfFL: "FL",
+    pdfDist: "Distance", pdfTime: "Time",
+    pdfDosePerLeg: "Dose/leg", pdfLegs: "Legs", pdfTotal: "Total",
+    pdfTotalMonth: "TOTAL MES",
+    pdfEquivalences: "Dose equivalences",
+    pdfCareerTitle: "Aeronautical career accumulated dose",
+    pdfCareerNote: "Flight dose only (annual projection ×",
+    pdfCareerNote2: "years). Excludes natural background.",
+    pdfCareerFlight: "Accumulated flight dose",
+    pdfCareerCT: "CT scan equiv.",
+    pdfCareerNatural: "Natural background same period",
+    pdfCareerTotal: "Total estimate (flight + background):",
+    pdfFooter: "⚠ Orientation estimate based on EURADOS Report 2004-1, ICRP Publication 103, UNSCEAR 2008. Does not replace certified official dosimetry (CARI-7/FAA or SIEVERT/EURADOS). For official occupational radiation surveillance, consult your company's Occupational Health Service.",
+  }
+};
+
+// ── Language hook ─────────────────────────────────────────────────────────────
+function useLang() {
+  const [lang, setLang] = useState(()=>{
+    try { return localStorage.getItem("cr_lang")||"es"; } catch(e){ return "es"; }
+  });
+  const toggleLang = ()=>{
+    const next = lang==="es"?"en":"es";
+    try { localStorage.setItem("cr_lang", next); } catch(e){}
+    setLang(next);
+  };
+  const t = LANG[lang];
+  return { lang, toggleLang, t };
+}
+
+const FL_OPTIONS = [
+  {label:"FL310",sublabel:"-18%",factor:0.82},
+  {label:"FL350",sublabel:"base",factor:1.00},
+  {label:"FL390",sublabel:"+18%",factor:1.18},
+  {label:"FL410",sublabel:"+30%",factor:1.30},
+];
+const SOLAR_OPTIONS = [
+  {label:"Mínimo ☁️",sublabel:"+18% GCR",factor:1.18},
+  {label:"Medio",sublabel:"promedio",factor:1.00},
+  {label:"Máximo ☀️",sublabel:"ahora ~2025",factor:0.87},
+];
+
+const CARD = {background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",borderRadius:14,padding:16,marginBottom:12};
+const LABEL = {fontSize:10,color:"#6a8fa8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.8,marginBottom:5,display:"block"};
+const btnSmall = {background:"rgba(255,255,255,0.08)",border:"1px solid rgba(255,255,255,0.12)",
+  borderRadius:5,color:"#a0c0d0",cursor:"pointer",fontSize:14,padding:"2px 9px",fontWeight:700,lineHeight:1};
+
+// ── AirportInput: text field with autocomplete ────────────────────────────────
+function AirportInput({ value, onChange, placeholder }) {
+  // resolvedKey = the confirmed IATA key (separate from display text)
+  const [text, setText] = useState(value && activeDB[value] ? `${value} · ${activeDB[value].icao}` : "");
+  const [resolvedKey, setResolvedKey] = useState(value && activeDB[value] ? value : "");
+  const [focused, setFocused] = useState(false);
+  const [focusIdx, setFocusIdx] = useState(0);
+  const [suggestions, setSuggestions] = useState([]);
+  const inputRef = useRef(null);
+
+  function confirmItem(iata) {
+    const ap = activeDB[iata];
+    setText(`${iata} · ${ap.icao}`);
+    setResolvedKey(iata);
+    setSuggestions([]);
+    setFocused(false);
+    onChange(iata);
+  }
+
+  function handleChange(e) {
+    const raw = e.target.value;
+    setText(raw);
+    setResolvedKey(""); // clear resolved while typing
+    setSuggestions(searchAirports(raw));
+    setFocusIdx(0);
+    // Try direct resolve (user typed exact IATA or ICAO)
+    const key = resolveCode(raw);
+    if (key) {
+      setResolvedKey(key);
+      onChange(key);
+    } else {
+      onChange("");
+    }
+  }
+
+  function handleKeyDown(e) {
+    if (!suggestions.length) return;
+    if (e.key === "ArrowDown") { e.preventDefault(); setFocusIdx(i=>Math.min(i+1,suggestions.length-1)); }
+    if (e.key === "ArrowUp")   { e.preventDefault(); setFocusIdx(i=>Math.max(i-1,0)); }
+    if (e.key === "Enter" || e.key === "Tab") {
+      if (suggestions[focusIdx]) { e.preventDefault(); confirmItem(suggestions[focusIdx].iata); }
+    }
+    if (e.key === "Escape") { setSuggestions([]); }
+  }
+
+  function handleBlur() {
+    setTimeout(() => {
+      setFocused(false);
+      setSuggestions([]);
+      // If nothing resolved, restore last good value or clear
+      if (!resolvedKey) {
+        const fallback = value && activeDB[value] ? value : "";
+        if (fallback) { setText(`${fallback} · ${activeDB[fallback].icao}`); setResolvedKey(fallback); }
+        else { setText(""); onChange(""); }
+      }
+    }, 160);
+  }
+
+  const showDrop = focused && suggestions.length > 0;
+  // Only show error if user typed something, dropdown is closed, and nothing is resolved
+  const showError = text.length >= 2 && !resolvedKey && !showDrop;
+
+  return (
+    <div style={{position:"relative"}}>
+      <input
+        ref={inputRef}
+        className={`ap-input ${resolvedKey ? "valid" : showError ? "error" : ""}`}
+        value={text}
+        onChange={handleChange}
+        onFocus={()=>{ setFocused(true); if(text && !resolvedKey) setSuggestions(searchAirports(text)); }}
+        onBlur={handleBlur}
+        onKeyDown={handleKeyDown}
+        placeholder={placeholder||"IATA o OACI…"}
+        autoCorrect="off" autoCapitalize="characters" spellCheck="false"
+      />
+      {resolvedKey && (
+        <div style={{fontSize:10,color:"#3b9ede",marginTop:3,lineHeight:1.4}}>
+          ✓ {activeDB[resolvedKey].name}
+        </div>
+      )}
+      {showError && (
+        <div style={{fontSize:10,color:"#e06060",marginTop:3}}>Código no encontrado</div>
+      )}
+      {showDrop && (
+        <div className="dropdown">
+          {suggestions.map((item,i)=>(
+            <div key={item.iata} className={`dropdown-item${i===focusIdx?" focused":""}`}
+              onMouseDown={()=>confirmItem(item.iata)}>
+              <span className="di-code">{item.iata}</span>
+              <span className="di-name">{item.name}</span>
+              <span className="di-icao">{item.icao}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Other components ──────────────────────────────────────────────────────────
+function SegCtrl({options,value,onChange,accent="#3b9ede"}) {
+  return (
+    <div style={{display:"flex",background:"rgba(255,255,255,0.05)",borderRadius:8,padding:3,gap:2}}>
+      {options.map((o,i)=>{
+        const on=value===i;
+        return (
+          <button key={i} onClick={()=>onChange(i)} style={{
+            flex:1,padding:"5px 2px",border:"none",borderRadius:6,cursor:"pointer",
+            fontSize:10.5,fontWeight:600,lineHeight:1.3,
+            background:on?accent:"transparent",color:on?"#fff":"#6a8fa8",transition:"all 0.18s"
+          }}>
+            {o.label}
+            {o.sublabel&&<div style={{fontSize:8.5,fontWeight:400,opacity:0.8,marginTop:1}}>{o.sublabel}</div>}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function Toggle({value,onChange,label}) {
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}} onClick={()=>onChange(!value)}>
+      <div style={{width:40,height:22,borderRadius:11,position:"relative",
+        background:value?"#a060d0":"rgba(255,255,255,0.1)",transition:"background 0.2s",flexShrink:0}}>
+        <div style={{position:"absolute",top:3,left:value?21:3,width:16,height:16,
+          borderRadius:"50%",background:"#fff",transition:"left 0.2s"}}/>
+      </div>
+      <span style={{fontSize:12,color:value?"#c090e8":"#6a8fa8",fontWeight:600}}>{label}</span>
+    </div>
+  );
+}
+
+function ProgressRing({pct,size=90,stroke=8,color}) {
+  const r=(size-stroke)/2, circ=2*Math.PI*r;
+  const dash=Math.min(pct/100,1)*circ;
+  const col=pct>80?"#e05030":pct>50?"#e09020":color;
+  return (
+    <div style={{position:"relative",width:size,height:size,flexShrink:0}}>
+      <svg width={size} height={size} style={{transform:"rotate(-90deg)"}}>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke="rgba(255,255,255,0.07)" strokeWidth={stroke}/>
+        <circle cx={size/2} cy={size/2} r={r} fill="none" stroke={col} strokeWidth={stroke}
+          strokeDasharray={`${dash} ${circ}`} strokeLinecap="round"
+          style={{transition:"stroke-dasharray 0.7s ease"}}/>
+      </svg>
+      <div style={{position:"absolute",inset:0,display:"flex",flexDirection:"column",
+        alignItems:"center",justifyContent:"center",lineHeight:1.2}}>
+        <div style={{fontSize:16,fontWeight:800,color:col}}>{Math.round(pct)}%</div>
+        <div style={{fontSize:8,color:"#6a8fa8",textTransform:"uppercase",letterSpacing:0.5}}>ICRP</div>
+      </div>
+    </div>
+  );
+}
+
+function CompareBar({label,icon,value,max,color,highlight}) {
+  const pct=Math.min(100,(value/max)*100);
+  return (
+    <div style={{marginBottom:8,background:highlight?"rgba(255,160,0,0.07)":"transparent",
+      borderRadius:8,padding:"5px 8px",border:highlight?"1px solid rgba(255,160,0,0.25)":"1px solid transparent"}}>
+      <div style={{display:"flex",justifyContent:"space-between",fontSize:11.5,marginBottom:3,color:"#c8d8e0"}}>
+        <span>{icon} {label}</span>
+        <span style={{fontVariantNumeric:"tabular-nums",color:highlight?"#ffa000":"#e0eef5",fontWeight:highlight?700:400}}>
+          {fmtDose(value)}
+        </span>
+      </div>
+      <div style={{height:5,background:"rgba(255,255,255,0.07)",borderRadius:4,overflow:"hidden"}}>
+        <div style={{width:`${pct}%`,height:"100%",background:color,borderRadius:4,transition:"width 0.6s ease"}}/>
+      </div>
+    </div>
+  );
+}
+
+function Chip({label,icon,accent}) {
+  return (
+    <span style={{
+      background:accent?"rgba(59,158,222,0.12)":"rgba(255,255,255,0.05)",
+      border:`1px solid ${accent?"rgba(59,158,222,0.25)":"rgba(255,255,255,0.08)"}`,
+      borderRadius:6,padding:"2px 8px",fontSize:10.5,fontWeight:600,
+      color:accent?"#3b9ede":"#8aacbc",whiteSpace:"nowrap"
+    }}>{icon} {label}</span>
+  );
+}
+
+// ── FlightRow ─────────────────────────────────────────────────────────────────
+function FlightRow({flight,solarFactor,onChange,onRemove,onAddReturn,t}) {
+  const {id,orig,dest,legs,flIdx=1}=flight;
+  const valid=orig&&dest&&orig!==dest&&activeDB[orig]&&activeDB[dest];
+  const flFactor=FL_OPTIONS[flIdx].factor;
+  const calc=valid?calcFlight(orig,dest,flFactor,solarFactor):null;
+  const totalUsv=calc?calc.doseUsv*legs:0;
+  return (
+    <div style={{background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",
+      borderRadius:12,padding:"12px 12px 10px",marginBottom:8}}>
+      <div className="flight-row-grid">
+        <AirportInput value={orig} onChange={v=>onChange(id,"orig",v)} placeholder={t.originPlaceholder}/>
+        <div style={{textAlign:"center",color:"#4a6a80",fontSize:13,paddingTop:10}}>→</div>
+        <AirportInput value={dest} onChange={v=>onChange(id,"dest",v)} placeholder={t.destPlaceholder}/>
+        <div style={{display:"flex",alignItems:"center",gap:4,paddingTop:8}}>
+          <button onClick={()=>onChange(id,"legs",Math.max(1,legs-1))} style={btnSmall}>−</button>
+          <span style={{fontSize:13,fontWeight:700,color:"#3b9ede",minWidth:16,textAlign:"center"}}>{legs}</span>
+          <button onClick={()=>onChange(id,"legs",legs+1)} style={btnSmall}>+</button>
+        </div>
+        <button onClick={()=>onRemove(id)} style={{
+          background:"rgba(200,60,60,0.15)",border:"1px solid rgba(200,60,60,0.25)",
+          borderRadius:6,color:"#e06060",cursor:"pointer",fontSize:14,padding:"4px 7px",fontWeight:700,marginTop:8
+        }}>×</button>
+      </div>
+
+      {/* FL selector per flight */}
+      <div style={{display:"flex",gap:4,marginTop:8,marginBottom:4}}>
+        {FL_OPTIONS.map((fl,i)=>{
+          const on=flIdx===i;
+          return (
+            <button key={i} onClick={()=>onChange(id,"flIdx",i)} style={{
+              flex:1,padding:"4px 2px",border:"none",borderRadius:5,cursor:"pointer",
+              fontSize:10,fontWeight:700,
+              background:on?"rgba(59,158,222,0.2)":"rgba(255,255,255,0.05)",
+              color:on?"#3b9ede":"#4a6a80",
+              borderBottom:on?"2px solid #3b9ede":"2px solid transparent",
+              transition:"all 0.15s"
+            }}>{fl.label}</button>
+          );
+        })}
+      </div>
+
+      {valid&&calc?(
+        <div style={{display:"flex",gap:5,flexWrap:"wrap",marginTop:4,alignItems:"center"}}>
+          <Chip icon="📏" label={`${(calc.distKm/1000).toFixed(1)} mil km`}/>
+          <Chip icon="⏱" label={fmtTime(calc.timeH)}/>
+          <Chip icon="☢️" label={`${fmtDose(calc.doseUsv)}/leg`} accent/>
+          {legs>1&&<Chip icon="✖️" label={`${fmtDose(totalUsv)} (×${legs})`} accent/>}
+          <button onClick={()=>onAddReturn(dest,orig,flIdx)} style={{
+            marginLeft:"auto",
+            background:"rgba(40,160,100,0.12)",border:"1px solid rgba(40,160,100,0.3)",
+            borderRadius:6,color:"#40c080",cursor:"pointer",
+            fontSize:10.5,fontWeight:700,padding:"3px 10px",whiteSpace:"nowrap",
+            display:"flex",alignItems:"center",gap:4
+          }}>
+            {t.addReturnBtn}
+          </button>
+        </div>
+      ):orig&&dest&&orig===dest?(
+        <div style={{fontSize:11,color:"#e09020"}}>{t.sameAirportWarn}</div>
+      ):null}
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
+function App() {
+  const { lang, toggleLang, t } = useLang();
+
+  const SOLAR_OPTIONS_T = [
+    { label:t.solarMin, sublabel:t.solarMinSub, factor:1.18 },
+    { label:t.solarMid, sublabel:t.solarMidSub, factor:1.00 },
+    { label:t.solarMax, sublabel:t.solarMaxSub, factor:0.87 },
+  ];
+  const [tab,setTab]=useState("planner");
+  const [showInfo,setShowInfo]=useState(false);
+  const [showPregnant,setShowPregnant]=useState(false);
+  const [showOnboarding,setShowOnboarding]=useState(()=>{
+    try { return !localStorage.getItem("cr_onboarded"); }
+    catch(e) { return true; }
+  });
+  const [dbStatus,setDbStatus]=useState("loading");
+  const [solarIdx,setSolarIdx]=useState(2);
+  const [showCareer,setShowCareer]=useState(false);
+  const [careerYears,setCareerYears]=useState(15);
+  const [savedAt,setSavedAt]=useState(null);
+
+  // ── Month navigation ──────────────────────────────────────────────────────
+  const todayKey = ()=>{
+    const n=new Date(); return `${n.getFullYear()}-${String(n.getMonth()+1).padStart(2,"0")}`;
+  };
+  const [currentMonth,setCurrentMonth]=useState(()=>{
+    try { return localStorage.getItem("cr_current_month")||todayKey(); }
+    catch(e){ return todayKey(); }
+  });
+
+  function monthLabel(key) {
+    const [y,m]=key.split("-");
+    const locale = lang==="en" ? "en-GB" : "es-ES";
+    return new Date(Number(y),Number(m)-1,1)
+      .toLocaleDateString(locale,{month:"long",year:"numeric"});
+  }
+  function shiftMonth(key,delta) {
+    const [y,m]=key.split("-").map(Number);
+    const d=new Date(y,m-1+delta,1);
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+  }
+  function canGoForward(key) {
+    const limit=shiftMonth(todayKey(),12);
+    return key < limit;
+  }
+
+  // ── All months storage ────────────────────────────────────────────────────
+  function loadAllMonths() {
+    try { return JSON.parse(localStorage.getItem("cr_months")||"{}"); }
+    catch(e){ return {}; }
+  }
+  function saveAllMonths(all) {
+    try { localStorage.setItem("cr_months",JSON.stringify(all)); } catch(e){}
+  }
+  function loadMonthFlights(key) {
+    const all=loadAllMonths();
+    const saved=all[key];
+    if(saved&&Array.isArray(saved)&&saved.length>0)
+      return saved.map(f=>({...f,id:mkId()}));
+    return [];
+  }
+
+  const [flights,setFlights]=useState(()=>{
+    // Try new per-month storage first, fall back to legacy cr_flights
+    const monthFlights=loadMonthFlights(
+      (() => { try{return localStorage.getItem("cr_current_month")||todayKey();}catch(e){return todayKey();} })()
+    );
+    if(monthFlights.length>0) return monthFlights;
+    // Migrate legacy data
+    try {
+      const legacy=localStorage.getItem("cr_flights");
+      if(legacy){
+        const parsed=JSON.parse(legacy);
+        if(Array.isArray(parsed)&&parsed.length>0)
+          return parsed.map(f=>({...f,id:mkId()}));
+      }
+    } catch(e){}
+    return [];
+  });
+
+  // Autosave whenever flights change
+  useEffect(()=>{
+    const all=loadAllMonths();
+    all[currentMonth]=flights.map(({orig,dest,legs})=>({orig,dest,legs}));
+    saveAllMonths(all);
+    try{ localStorage.setItem("cr_current_month",currentMonth); }catch(e){}
+    setSavedAt(Date.now());
+  },[flights,currentMonth]);
+
+  // Load flights when month changes
+  function goToMonth(key) {
+    // Save current first (autosave handles it via useEffect, but do it synchronously too)
+    const all=loadAllMonths();
+    all[currentMonth]=flights.map(({orig,dest,legs})=>({orig,dest,legs}));
+    saveAllMonths(all);
+    setCurrentMonth(key);
+    setFlights(loadMonthFlights(key));
+  }
+
+  // Count months that have saved flights
+  function savedMonthsCount() {
+    const all=loadAllMonths();
+    return Object.values(all).filter(v=>Array.isArray(v)&&v.length>0).length;
+  }
+
+  const [sOrig,setSOrig]=useState("MAD");
+  const [sDest,setSDest]=useState("LAX");
+  const [singleFlIdx,setSingleFlIdx]=useState(1);
+
+  const solarFactor=SOLAR_OPTIONS[solarIdx].factor;
+
+  const addFlight=()=>setFlights(f=>[...f,{id:mkId(),orig:"",dest:"",legs:1,flIdx:1}]);
+  const removeFlight=id=>setFlights(f=>f.filter(x=>x.id!==id));
+  const addReturnFlight=useCallback((orig,dest,flIdx)=>{
+    setFlights(f=>[...f,{id:mkId(),orig,dest,legs:1,flIdx:flIdx??1}]);
+  },[]);
+  const updateFlight=useCallback((id,field,val)=>{
+    setFlights(f=>f.map(x=>x.id===id?{...x,[field]:val}:x));
+  },[]);
+
+  // Load full airport DB on mount
+  useEffect(()=>{
+    loadOpenFlights(added=>{
+      setDbStatus(added > 0 ? "full" : "local");
+    });
+  },[]);
+
+  const validFlights=flights.filter(f=>f.orig&&f.dest&&f.orig!==f.dest&&activeDB[f.orig]&&activeDB[f.dest]);
+  const monthlyUsv=validFlights.reduce((s,f)=>{
+    const ff=FL_OPTIONS[f.flIdx??1].factor;
+    return s+calcFlight(f.orig,f.dest,ff,solarFactor).doseUsv*f.legs;
+  },0);
+  const annualUsv=monthlyUsv*12;
+  const pctIcrp=(annualUsv/20000)*100;
+  const nonFlyer=2400;
+  const barMax=Math.max(annualUsv+nonFlyer,annualUsv,nonFlyer,20000,14000)*1.08;
+
+  const singleCalc=sOrig&&sDest&&sOrig!==sDest&&activeDB[sOrig]&&activeDB[sDest]
+    ?calcFlight(sOrig,sDest,FL_OPTIONS[singleFlIdx].factor,solarFactor):null;
+
+  return (
+    <div style={{minHeight:"100vh",background:"linear-gradient(160deg,#080f18 0%,#0b1825 60%,#07121c 100%)",
+      color:"#e0eef5",paddingBottom:56}}>
+
+      {/* Header */}
+      <div style={{background:"rgba(255,255,255,0.025)",borderBottom:"1px solid rgba(255,255,255,0.07)",
+        padding:"20px 20px 14px",textAlign:"center"}}>
+        <div style={{fontSize:28,marginBottom:2}}>☢️</div>
+        <h1 style={{margin:0,fontSize:18,fontWeight:800,letterSpacing:-0.5,color:"#e8f4fc"}}>
+          {t.appTitle}
+        </h1>
+        <p style={{margin:"4px auto 0",fontSize:10,color:"#4a6a80",maxWidth:340,lineHeight:1.5}}>
+          {t.appSubtitle}
+        </p>
+        <div style={{marginTop:6,display:"flex",justifyContent:"center"}}>
+          {dbStatus==="loading"&&<span style={{fontSize:9.5,color:"#4a6a80",background:"rgba(255,255,255,0.05)",padding:"2px 10px",borderRadius:99}}>{t.dbLoading}</span>}
+          {dbStatus==="full"&&<span style={{fontSize:9.5,color:"#3a9a5a",background:"rgba(40,160,80,0.1)",border:"1px solid rgba(40,160,80,0.2)",padding:"2px 10px",borderRadius:99}}>{t.dbFull}</span>}
+          {dbStatus==="local"&&<span style={{fontSize:9.5,color:"#8a7040",background:"rgba(160,120,40,0.1)",border:"1px solid rgba(160,120,40,0.2)",padding:"2px 10px",borderRadius:99}}>{t.dbLocal}</span>}
+        </div>
+        {/* Language toggle — below db status */}
+        <div style={{marginTop:8,display:"flex",justifyContent:"center"}}>
+          <button onClick={toggleLang} style={{
+            background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.15)",
+            borderRadius:8,color:"#a0c0d0",cursor:"pointer",
+            fontSize:11,fontWeight:700,padding:"4px 14px",letterSpacing:0.5
+          }}>{lang==="es"?"🇬🇧 EN":"🇪🇸 ES"}</button>
+        </div>
+      </div>
+
+      <div className="app-inner" style={{maxWidth:500,margin:"0 auto",padding:"14px 14px 0"}}>
+
+        {/* Global params */}
+        <div style={{...CARD,padding:14}}>
+          <div style={{marginBottom:10}}>
+            <div style={LABEL}>{t.solarCycle}</div>
+            <SegCtrl options={SOLAR_OPTIONS_T} value={solarIdx} onChange={setSolarIdx} accent="#b86020"/>
+          </div>
+          <Toggle value={showCareer} onChange={setShowCareer} label={t.careerToggle}/>
+          {showCareer&&(
+            <div style={{marginTop:10}}>
+              <div style={{...LABEL,marginBottom:4}}>
+                {t.careerYears} · <span style={{color:"#a060d0"}}>{careerYears}</span>
+              </div>
+              <input type="range" min={1} max={45} value={careerYears}
+                onChange={e=>setCareerYears(Number(e.target.value))}
+                style={{accentColor:"#a060d0"}}/>
+            </div>
+          )}
+
+          {/* Career summary card — shown inline when toggle is on */}
+          {showCareer&&validFlights.length>0&&monthlyUsv>0&&(
+            <div style={{marginTop:12,background:"rgba(160,96,208,0.07)",border:"1px solid rgba(160,96,208,0.2)",borderRadius:12,padding:"12px 14px"}}>
+              <div style={{fontSize:10,color:"#a060d0",fontWeight:700,textTransform:"uppercase",letterSpacing:0.8,marginBottom:8}}>
+                {t.careerTitle} · {careerYears} {t.careerYearsLabel}
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:10}}>
+                {[
+                  {l:t.careerFlightDose,v:fmtDose(annualUsv*careerYears),c:"#a060d0"},
+                  {l:t.careerCTEquiv,v:`${(annualUsv*careerYears/7000).toFixed(1)}×`},
+                  {l:t.careerNaturalBg,v:fmtDose(nonFlyer*careerYears)},
+                ].map(s=>(
+                  <div key={s.l} style={{background:"rgba(255,255,255,0.04)",borderRadius:8,padding:"8px 6px",textAlign:"center"}}>
+                    <div style={{fontSize:9,color:"#6a8fa8",textTransform:"uppercase",letterSpacing:0.4,marginBottom:2}}>{s.l}</div>
+                    <div style={{fontSize:12,fontWeight:700,color:s.c||"#e0eef5"}}>{s.v}</div>
+                  </div>
+                ))}
+              </div>
+              <div style={{fontSize:10.5,color:"#7a50a0",lineHeight:1.6,padding:"6px 8px",background:"rgba(160,96,208,0.06)",borderRadius:7}}>
+                {t.careerMethodNote} {careerYears} {t.careerMethodNote2}
+                <br/>{t.careerSummary1} {careerYears} {t.careerSummary2} <strong style={{color:"#c090e8"}}>{fmtDose(annualUsv*careerYears)}</strong> {t.careerSummary3} <strong style={{color:"#c090e8"}}>{fmtDose(nonFlyer*careerYears)}</strong> {t.careerSummary4} <strong style={{color:"#e0b0ff"}}>{fmtDose((annualUsv+nonFlyer)*careerYears)}</strong>.
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Tabs + info button */}
+        <div style={{display:"flex",gap:4,marginBottom:12,alignItems:"stretch"}}>
+          <div style={{display:"flex",flex:1,background:"rgba(255,255,255,0.04)",borderRadius:10,padding:4,gap:4}}>
+            {[["planner",t.tabPlanner],["single",t.tabSingle]].map(([k,lbl])=>(
+              <button key={k} onClick={()=>setTab(k)} style={{
+                flex:1,padding:"9px 8px",border:"none",borderRadius:8,cursor:"pointer",
+                fontSize:12,fontWeight:700,
+                background:tab===k?"rgba(59,158,222,0.2)":"transparent",
+                color:tab===k?"#3b9ede":"#6a8fa8",
+                borderBottom:tab===k?"2px solid #3b9ede":"2px solid transparent",
+                transition:"all 0.18s"
+              }}>{lbl}</button>
+            ))}
+          </div>
+          <button onClick={()=>setShowInfo(true)} style={{
+            background:"rgba(255,255,255,0.06)",border:"1px solid rgba(255,255,255,0.12)",
+            borderRadius:10,color:"#6a8fa8",cursor:"pointer",fontSize:12,
+            padding:"0 13px",fontWeight:700,flexShrink:0,transition:"all 0.18s"
+          }} title="Información">{t.infoBtn}</button>
+        </div>
+
+        {/* ══ PLANNER ══ */}
+        {tab==="planner"&&(
+          <>
+            {/* Month navigator */}
+            <div style={{
+              display:"flex",alignItems:"center",justifyContent:"space-between",
+              background:"rgba(255,255,255,0.04)",border:"1px solid rgba(255,255,255,0.08)",
+              borderRadius:12,padding:"10px 14px",marginBottom:12
+            }}>
+              <button onClick={()=>goToMonth(shiftMonth(currentMonth,-1))} style={{
+                background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",
+                borderRadius:8,color:"#a0c0d0",cursor:"pointer",fontSize:16,
+                padding:"4px 12px",fontWeight:700,lineHeight:1
+              }}>‹</button>
+              <div style={{textAlign:"center"}}>
+                <div style={{fontSize:14,fontWeight:800,color:"#e0eef5",letterSpacing:-0.3,textTransform:"capitalize"}}>
+                  {monthLabel(currentMonth)}
+                </div>
+                <div style={{fontSize:9.5,color:"#4a6a80",marginTop:1}}>
+                  {currentMonth===todayKey()
+                    ? t.monthCurrent
+                    : currentMonth < todayKey() ? t.monthPast : t.monthFuture}
+                  {savedMonthsCount()>1&&<span style={{marginLeft:6,color:"#3a7a50"}}>· {savedMonthsCount()} {t.monthsSaved}</span>}
+                </div>
+              </div>
+              <button onClick={()=>canGoForward(currentMonth)&&goToMonth(shiftMonth(currentMonth,1))} style={{
+                background:canGoForward(currentMonth)?"rgba(255,255,255,0.07)":"rgba(255,255,255,0.02)",
+                border:"1px solid rgba(255,255,255,0.12)",
+                borderRadius:8,
+                color:canGoForward(currentMonth)?"#a0c0d0":"#2a3a45",
+                cursor:canGoForward(currentMonth)?"pointer":"default",
+                fontSize:16,padding:"4px 12px",fontWeight:700,lineHeight:1
+              }}>›</button>
+            </div>
+
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <div style={{fontSize:11,color:"#6a8fa8",fontWeight:700,textTransform:"uppercase",letterSpacing:0.8}}>
+                  {t.flightsLabel} · <span style={{color:"#e0eef5"}}>{flights.length}</span>
+                </div>
+                {savedAt&&(
+                  <span style={{fontSize:9.5,color:"#3a7a50",background:"rgba(40,140,80,0.1)",
+                    border:"1px solid rgba(40,140,80,0.2)",borderRadius:99,padding:"1px 7px"}}>
+                    {t.savedBadge}
+                  </span>
+                )}
+              </div>
+              <div style={{display:"flex",gap:6}}>
+                {flights.length>0&&(
+                  <button onClick={()=>setFlights([])} style={{
+                    background:"rgba(200,60,60,0.1)",border:"1px solid rgba(200,60,60,0.25)",
+                    borderRadius:8,color:"#e06060",cursor:"pointer",fontSize:12,fontWeight:700,padding:"6px 12px"
+                  }}>{t.clearBtn}</button>
+                )}
+                <button onClick={addFlight} style={{
+                  background:"rgba(59,158,222,0.15)",border:"1px solid rgba(59,158,222,0.3)",
+                  borderRadius:8,color:"#3b9ede",cursor:"pointer",fontSize:12,fontWeight:700,padding:"6px 14px"
+                }}>{t.addFlightBtn}</button>
+              </div>
+            </div>
+            {flights.map(f=>(
+              <FlightRow key={f.id} flight={f} solarFactor={solarFactor} t={t}
+                onChange={updateFlight} onRemove={removeFlight} onAddReturn={addReturnFlight}/>
+            ))}
+            {flights.length===0&&(
+              <div style={{textAlign:"center",padding:"28px 0",color:"#3a5a70",fontSize:12}}>
+                Pulsa "+ Añadir vuelo" para empezar.
+              </div>
+            )}
+
+            {validFlights.length>0&&(
+              <>
+                {/* Monthly total */}
+                <div style={{...CARD,textAlign:"center",background:"rgba(59,158,222,0.07)",border:"1px solid rgba(59,158,222,0.18)",marginTop:4}}>
+                  <div style={LABEL}>{t.monthlyDoseLabel} · <span style={{textTransform:"capitalize"}}>{monthLabel(currentMonth)}</span></div>
+                  <div style={{fontSize:46,fontWeight:800,letterSpacing:-1.5,color:"#3b9ede",margin:"5px 0 3px"}}>
+                    {fmtDose(monthlyUsv)}
+                  </div>
+                  <div style={{fontSize:11.5,color:"#6a8fa8"}}>
+                    ≈ {(monthlyUsv/20).toFixed(1)} {t.chestXrayEquiv} · {(monthlyUsv/5).toFixed(0)} {t.dentalXrayEquiv}
+                  </div>
+                  <div style={{marginTop:6,fontSize:11,color:"#5a8a9a"}}>
+                    {t.annualProjection} <strong style={{color:"#a0d0e8"}}>{fmtDose(annualUsv)}</strong>
+                  </div>
+                </div>
+
+                {/* Ring */}
+                <div style={CARD}>
+                  <div style={LABEL}>{t.icrcLimitTitle}</div>
+                  <div className="ring-row">
+                    <ProgressRing pct={pctIcrp} size={90} stroke={8} color="#3b9ede"/>
+                    <div style={{flex:1,fontSize:11.5,color:"#a0c0d0",lineHeight:1.9}}>
+                      <div>📅 {fmtDose(annualUsv)}/{t.annualEstimated}</div>
+                      <div>🌍 +{((annualUsv/nonFlyer)*100).toFixed(0)}% {t.aboveNonFlyer}</div>
+                      <div style={{marginTop:4,fontSize:10.5,padding:"4px 8px",
+                        background:"rgba(255,255,255,0.04)",borderRadius:6,color:"#6a8fa8"}}>
+                        {pctIcrp<25?t.farBelowLimit:pctIcrp<60?t.moderateRange:t.nearLimit}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Pregnant toggle */}
+                  <div style={{marginTop:12,borderTop:"1px solid rgba(255,255,255,0.07)",paddingTop:10}}>
+                    <div onClick={()=>setShowPregnant(p=>!p)} style={{
+                      display:"flex",justifyContent:"space-between",alignItems:"center",
+                      cursor:"pointer",padding:"4px 0"
+                    }}>
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{fontSize:15}}>🤰</span>
+                        <span style={{fontSize:12,fontWeight:700,color:showPregnant?"#e0c080":"#8a9ab0"}}>
+                          {t.pregnantToggle}
+                        </span>
+                      </div>
+                      <span style={{
+                        fontSize:11,color:showPregnant?"#e0c080":"#4a6a80",
+                        transform:showPregnant?"rotate(180deg)":"rotate(0deg)",
+                        transition:"transform 0.2s",display:"inline-block"
+                      }}>▾</span>
+                    </div>
+
+                    {showPregnant&&(
+                      <div style={{
+                        marginTop:10,padding:"12px 14px",
+                        background:"rgba(180,120,40,0.07)",
+                        border:"1px solid rgba(180,120,40,0.25)",
+                        borderRadius:10
+                      }}>
+                        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10,marginBottom:10}}>
+                          <div style={{background:"rgba(255,255,255,0.04)",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                            <div style={{fontSize:9,color:"#8a7040",textTransform:"uppercase",letterSpacing:0.6,marginBottom:3}}>{t.pregnantIcrcLimit}</div>
+                            <div style={{fontSize:16,fontWeight:800,color:"#e0c060"}}>1 mSv</div>
+                            <div style={{fontSize:9,color:"#7a6030",marginTop:1}}>{t.pregnantTotalLimit}</div>
+                          </div>
+                          <div style={{background:"rgba(255,255,255,0.04)",borderRadius:8,padding:"8px 10px",textAlign:"center"}}>
+                            <div style={{fontSize:9,color:"#8a7040",textTransform:"uppercase",letterSpacing:0.6,marginBottom:3}}>{t.pregnantMonthlyDose}</div>
+                            <div style={{fontSize:16,fontWeight:800,
+                              color:monthlyUsv>1000?"#e06060":monthlyUsv>500?"#e09020":"#60c070"}}>
+                              {fmtDose(monthlyUsv)}
+                            </div>
+                            <div style={{fontSize:9,color:"#7a6030",marginTop:1}}>
+                              {((monthlyUsv/1000)*100).toFixed(0)}% del límite
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Progress bar presupuesto embarazo */}
+                        <div style={{marginBottom:8}}>
+                          <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:"#a08040",marginBottom:4}}>
+                            <span>{t.pregnantBudgetLabel}</span>
+                            <span style={{fontWeight:700}}>{fmtDose(Math.max(0,1000-monthlyUsv))}</span>
+                          </div>
+                          <div style={{height:6,background:"rgba(255,255,255,0.08)",borderRadius:3,overflow:"hidden"}}>
+                            <div style={{
+                              width:`${Math.min(100,(monthlyUsv/1000)*100)}%`,
+                              height:"100%",borderRadius:3,
+                              background:monthlyUsv>1000
+                                ?"#e05030"
+                                :monthlyUsv>500
+                                  ?"linear-gradient(90deg,#b86020,#e09020)"
+                                  :"linear-gradient(90deg,#1a7040,#2aaa60)",
+                              transition:"width 0.5s ease"
+                            }}/>
+                          </div>
+                        </div>
+
+                        <div style={{fontSize:11,color:"#c8a060",lineHeight:1.7}}>
+                          {monthlyUsv>1000
+                            ? <span>{t.pregnantExceeds}</span>
+                            : monthlyUsv>500
+                              ? <span>{t.pregnantNear}</span>
+                              : <span>{t.pregnantOk}</span>
+                          }
+                        </div>
+                        <div style={{marginTop:8,fontSize:9.5,color:"#7a6030",lineHeight:1.5}}>
+                          {t.pregnantSource}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Table */}
+                <div style={CARD}>
+                  <div style={LABEL}>{t.breakdownTitle}</div>
+                  <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+                    <table>
+                      <thead>
+                        <tr style={{color:"#4a6a80"}}>
+                          {[t.colSector,t.colKm,t.colTime,t.colDosePerLeg,"×",t.colTotal].map(h=>(
+                            <th key={h} style={{textAlign:h===t.colSector?"left":"right",padding:"4px 6px",
+                              borderBottom:"1px solid rgba(255,255,255,0.07)",fontWeight:600,fontSize:10,whiteSpace:"nowrap"}}>{h}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {validFlights.map(f=>{
+                          const c=calcFlight(f.orig,f.dest,FL_OPTIONS[f.flIdx??1].factor,solarFactor);
+                          return (
+                            <tr key={f.id} style={{borderBottom:"1px solid rgba(255,255,255,0.04)"}}>
+                              <td style={{padding:"5px 6px",color:"#e0eef5",fontWeight:600,whiteSpace:"nowrap"}}>{f.orig}→{f.dest}</td>
+                              <td style={{padding:"5px 6px",textAlign:"right",color:"#8aacbc",whiteSpace:"nowrap"}}>{(c.distKm/1000).toFixed(1)}k</td>
+                              <td style={{padding:"5px 6px",textAlign:"right",color:"#8aacbc",whiteSpace:"nowrap"}}>{fmtTime(c.timeH)}</td>
+                              <td style={{padding:"5px 6px",textAlign:"right",color:"#3b9ede",whiteSpace:"nowrap"}}>{fmtDose(c.doseUsv)}</td>
+                              <td style={{padding:"5px 6px",textAlign:"right",color:"#8aacbc"}}>×{f.legs}</td>
+                              <td style={{padding:"5px 6px",textAlign:"right",color:"#ffa000",fontWeight:700,whiteSpace:"nowrap"}}>{fmtDose(c.doseUsv*f.legs)}</td>
+                            </tr>
+                          );
+                        })}
+                        <tr style={{background:"rgba(255,255,255,0.03)"}}>
+                          <td colSpan={5} style={{padding:"6px 6px",color:"#6a8fa8",fontSize:10,fontWeight:700,textTransform:"uppercase"}}>{t.totalMonth}</td>
+                          <td style={{padding:"6px 6px",textAlign:"right",color:"#3b9ede",fontWeight:800,fontSize:13,whiteSpace:"nowrap"}}>{fmtDose(monthlyUsv)}</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+
+                {/* Annual + monthly bars */}
+                <div style={CARD}>
+                  <div style={LABEL}>{t.comparisonTitle}</div>
+                  {[
+                    {label:`${t.barThisMonth}`,icon:"📅",value:monthlyUsv,color:"linear-gradient(90deg,#0e7a60,#1ab890)",highlight:true},
+                    {label:t.barAnnualFlight,icon:"✈️",value:annualUsv,color:"linear-gradient(90deg,#1a6fa8,#3b9ede)",highlight:true},
+                    {label:t.barAnnualTotal,icon:"🧍✈️",value:annualUsv+nonFlyer,color:"linear-gradient(90deg,#2a5aa8,#6a9ede)",highlight:true},
+                    {label:t.barNonFlyer,icon:"🧍",value:2400,color:"#4a7a4a"},
+                    {label:t.barMammo,icon:"🩻",value:400,color:"#5a6a8a"},
+                    {label:t.barCT,icon:"🏥",value:7000,color:"#7a5a8a"},
+                    {label:t.barPET,icon:"⚛️",value:14000,color:"#8a4a6a"},
+                    {label:t.barCrewLimit,icon:"⚠️",value:20000,color:"#8a3a2a"},
+                  ].map(b=><CompareBar key={b.label} {...b} max={barMax}/>)}
+                </div>
+
+                {/* FL comparison visual */}
+                <div style={CARD}>
+                  <div style={LABEL}>{t.flVisualTitle}</div>
+                  {FL_OPTIONS.map((fl,i)=>{
+                    const baseRef = 3.5;
+                    const fl390Factor = FL_OPTIONS[2].factor; // FL390 = reference
+                    const rate = (baseRef * fl.factor * SOLAR_OPTIONS[solarIdx].factor).toFixed(2);
+                    const maxRate = baseRef * FL_OPTIONS[FL_OPTIONS.length-1].factor * SOLAR_OPTIONS[solarIdx].factor;
+                    const pct = (rate / maxRate) * 100;
+                    const isRef = i === 2; // FL390 is reference
+                    const diffVsFL390 = ((fl.factor / fl390Factor - 1) * 100).toFixed(0);
+                    const diffSign = fl.factor > fl390Factor ? "+" : "";
+                    const colors = ["#2a6a9a","#3b9ede","#e09020","#7dd4ff"];
+                    return (
+                      <div key={fl.label} style={{
+                        marginBottom:6,borderRadius:8,padding:"6px 8px",
+                        background:isRef?"rgba(255,255,255,0.04)":"transparent",
+                        border:isRef?"1px solid rgba(255,255,255,0.08)":"1px solid transparent"
+                      }}>
+                        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                          <div style={{display:"flex",alignItems:"center",gap:6}}>
+                            <span style={{fontSize:11,fontWeight:700,color:isRef?"#e0c070":"#6a8fa8",minWidth:36}}>{fl.label}</span>
+                            {isRef&&<span style={{fontSize:9,color:"#e0c070",background:"rgba(224,192,112,0.15)",border:"1px solid rgba(224,192,112,0.3)",borderRadius:99,padding:"1px 6px"}}>REF</span>}
+                          </div>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            {!isRef&&<span style={{fontSize:9,color:fl.factor>fl390Factor?"#e06060":"#60c090"}}>
+                              {diffSign}{diffVsFL390}% vs FL390
+                            </span>}
+                            <span style={{fontSize:11,fontWeight:700,fontVariantNumeric:"tabular-nums",
+                              color:isRef?"#e0c070":"#5a7a8a"}}>{rate} µSv/h</span>
+                          </div>
+                        </div>
+                        <div style={{height:5,background:"rgba(255,255,255,0.07)",borderRadius:3,overflow:"hidden"}}>
+                          <div style={{width:`${pct}%`,height:"100%",borderRadius:3,
+                            background:isRef?"linear-gradient(90deg,#b08020,#e0c040)":colors[i],transition:"width 0.5s ease"}}/>
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div style={{fontSize:9.5,color:"#2a4a5a",marginTop:4,lineHeight:1.5}}>
+                    {t.flVisualRef}
+                  </div>
+                </div>
+
+                {/* Export PDF button */}
+                <button onClick={()=>exportPDF({
+                  validFlights, solarFactor, t,
+                  solarLabel:SOLAR_OPTIONS_T[solarIdx].label, monthlyUsv, annualUsv,
+                  nonFlyer, showCareer, careerYears,
+                  monthName: monthLabel(currentMonth)
+                })} style={{
+                  width:"100%", padding:"13px",
+                  background:"linear-gradient(135deg,#1a5a40,#1e7a55)",
+                  border:"1px solid rgba(30,180,100,0.3)",
+                  borderRadius:12, color:"#fff", fontWeight:700,
+                  fontSize:14, cursor:"pointer", letterSpacing:0.3,
+                  display:"flex", alignItems:"center", justifyContent:"center", gap:8,
+                  marginBottom:12
+                }}>
+                  {t.exportBtn}
+                </button>
+              </>
+            )}
+          </>
+        )}
+
+        {/* ══ SINGLE ══ */}
+        {tab==="single"&&(
+          <>
+            <div style={CARD}>
+              <div className="grid-2col" style={{alignItems:"start"}}>
+                <div>
+                  <div style={LABEL}>Origen</div>
+                  <AirportInput value={sOrig} onChange={setSOrig} placeholder={t.originPlaceholder}/>
+                </div>
+                <div>
+                  <div style={LABEL}>Destino</div>
+                  <AirportInput value={sDest} onChange={setSDest} placeholder={t.destPlaceholder}/>
+                </div>
+              </div>
+              <div style={{marginTop:10}}>
+                <div style={LABEL}>{t.flightLevel}</div>
+                <SegCtrl options={FL_OPTIONS} value={singleFlIdx} onChange={setSingleFlIdx} accent="#2a7ab8"/>
+              </div>
+            </div>
+            {singleCalc&&(
+              <>
+                <div style={{...CARD,textAlign:"center",background:"rgba(59,158,222,0.07)",border:"1px solid rgba(59,158,222,0.18)"}}>
+                  <div style={LABEL}>{t.singleDoseLabel}</div>
+                  <div style={{fontSize:46,fontWeight:800,letterSpacing:-1.5,color:"#3b9ede",margin:"5px 0 3px"}}>
+                    {fmtDose(singleCalc.doseUsv)}
+                  </div>
+                  <div style={{fontSize:11.5,color:"#6a8fa8"}}>
+                    ≈ {(singleCalc.doseUsv/20).toFixed(1)} {t.chestXrayEquiv} · {(singleCalc.doseUsv/5).toFixed(0)} {t.dentalXrayEquiv}
+                  </div>
+                </div>
+                <div className="grid-3col" style={{...CARD}}>
+                  {[
+                    {l:t.singleDistance,v:`${(singleCalc.distKm/1000).toFixed(1)} mil km`},
+                    {l:t.singleDuration,v:fmtTime(singleCalc.timeH)},
+                    {l:t.singleEffRate,v:`${(getDoseRate(singleCalc.effLat)*FL_OPTIONS[singleFlIdx].factor*solarFactor).toFixed(2)} µSv/h`,c:"#3b9ede"},
+                  ].map(s=>(
+                    <div key={s.l} style={{background:"rgba(255,255,255,0.04)",borderRadius:10,padding:"10px 8px",textAlign:"center"}}>
+                      <div style={{fontSize:9.5,color:"#6a8fa8",textTransform:"uppercase",letterSpacing:0.5,marginBottom:3}}>{s.l}</div>
+                      <div style={{fontSize:13,fontWeight:700,color:s.c||"#e0eef5"}}>{s.v}</div>
+                    </div>
+                  ))}
+                </div>
+                {showCareer&&(
+                  <div style={{...CARD,background:"rgba(160,96,208,0.07)",border:"1px solid rgba(160,96,208,0.2)"}}>
+                    <div style={LABEL}>Dosis acumulada · {careerYears} años</div>
+                    <div style={{fontSize:11,color:"#c090e8",lineHeight:1.9}}>
+                      <div>Por vuelo: <strong>{fmtDose(singleCalc.doseUsv)}</strong></div>
+                      <div>1 vuelo/mes × {careerYears} años = <strong>{fmtDose(singleCalc.doseUsv*12*careerYears)}</strong></div>
+                      <div>4 vuelos/mes × {careerYears} años = <strong>{fmtDose(singleCalc.doseUsv*48*careerYears)}</strong></div>
+                    </div>
+                    <div style={{fontSize:10,color:"#7a50a0",marginTop:6}}>
+                      {t.careerSingleNote}
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
+          </>
+        )}
+
+        <div style={{fontSize:9.5,color:"#2a4a60",lineHeight:1.6,textAlign:"center",padding:"10px 8px 0"}}>
+          {t.disclaimer}
+          <br/><span style={{color:"#1e3a50"}}>v{APP_VERSION}</span>
+        </div>
+      </div>
+
+      {showInfo&&<InfoModal t={t} onClose={()=>setShowInfo(false)}/>}
+      {showOnboarding&&<OnboardingModal t={t} onDismiss={()=>setShowOnboarding(false)} onNever={()=>{ localStorage.setItem("cr_onboarded","1"); setShowOnboarding(false); }}/>}
+    </div>
+  );
+}
+
+// ── Detect platform ───────────────────────────────────────────────────────────
+function detectPlatform() {
+  const ua = navigator.userAgent;
+  const isIOS = /iPhone|iPad|iPod/.test(ua);
+  const isAndroid = /Android/.test(ua);
+  const isStandalone = window.matchMedia("(display-mode: standalone)").matches
+    || window.navigator.standalone === true;
+  return { isIOS, isAndroid, isDesktop: !isIOS && !isAndroid, isStandalone };
+}
+
+// ── OnboardingModal ───────────────────────────────────────────────────────────
+function OnboardingModal({ onDismiss, onNever, t }) {
+  const { isIOS, isAndroid, isStandalone } = detectPlatform();
+  if (isStandalone) { onNever(); return null; }
+
+  const es = LANG.es;
+  const en = LANG.en;
+  const stepsES = isIOS ? es.onboardStepsIos : isAndroid ? es.onboardStepsAndroid : es.onboardStepsDesktop;
+  const stepsEN = isIOS ? en.onboardStepsIos : isAndroid ? en.onboardStepsAndroid : en.onboardStepsDesktop;
+  const platformES = isIOS ? es.onboardPlatformIos : isAndroid ? es.onboardPlatformAndroid : es.onboardPlatformDesktop;
+  const platformEN = isIOS ? en.onboardPlatformIos : isAndroid ? en.onboardPlatformAndroid : en.onboardPlatformDesktop;
+  const platformColor = isIOS ? "#3b9ede" : isAndroid ? "#5aaa5a" : "#a060d0";
+  const platformIcon = isIOS ? "🍎" : isAndroid ? "🤖" : "💻";
+
+  return (
+    <div style={{
+      position:"fixed",inset:0,zIndex:2000,
+      background:"rgba(0,0,0,0.75)",
+      display:"flex",alignItems:"center",justifyContent:"center",
+      backdropFilter:"blur(6px)",padding:"20px 16px",
+      overflowY:"auto"
+    }}>
+      <div style={{
+        width:"100%",maxWidth:420,
+        background:"linear-gradient(160deg,#0d1e2e,#091622)",
+        border:"1px solid rgba(255,255,255,0.12)",
+        borderRadius:20,padding:"24px 20px 20px",
+        boxShadow:"0 24px 64px rgba(0,0,0,0.6)"
+      }}>
+        {/* Icon + bilingual title */}
+        <div style={{textAlign:"center",marginBottom:18}}>
+          <div style={{fontSize:36,marginBottom:6}}>📲</div>
+          <div style={{fontSize:16,fontWeight:800,color:"#e8f4fc",marginBottom:2}}>
+            {es.onboardTitle} · {en.onboardTitle}
+          </div>
+          <div style={{fontSize:10,color:"#4a6a80",lineHeight:1.5}}>
+            {es.onboardSubtitle}
+          </div>
+          <div style={{fontSize:10,color:"#3a5a70",lineHeight:1.5,marginTop:2}}>
+            {en.onboardSubtitle}
+          </div>
+        </div>
+
+        {/* Platform badge */}
+        <div style={{
+          display:"flex",justifyContent:"center",marginBottom:14
+        }}>
+          <div style={{
+            display:"inline-flex",alignItems:"center",gap:6,
+            background:`rgba(${platformColor==="#3b9ede"?"59,158,222":platformColor==="#5aaa5a"?"90,170,90":"160,96,208"},0.12)`,
+            border:`1px solid ${platformColor}44`,
+            borderRadius:99,padding:"3px 14px",fontSize:10.5,
+            color:platformColor,fontWeight:600
+          }}>
+            {platformIcon} {platformES} · {platformEN}
+          </div>
+        </div>
+
+        {/* Steps — bilingual */}
+        <div style={{marginBottom:16}}>
+          {stepsES.map((s,i)=>(
+            <div key={i} style={{
+              display:"flex",gap:10,alignItems:"flex-start",
+              marginBottom: i < stepsES.length-1 ? 10 : 0
+            }}>
+              <div style={{
+                width:24,height:24,borderRadius:"50%",flexShrink:0,
+                background:"rgba(59,158,222,0.15)",border:"1px solid rgba(59,158,222,0.3)",
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:10,fontWeight:800,color:"#3b9ede",marginTop:2
+              }}>{i+1}</div>
+              <div style={{flex:1}}>
+                <div style={{fontSize:12,color:"#b0cfe0",lineHeight:1.5}}>
+                  <span style={{fontSize:14,marginRight:5}}>{s.icon}</span>
+                  {s.text}
+                </div>
+                <div style={{fontSize:11,color:"#4a6a80",lineHeight:1.5,marginTop:1}}>
+                  {stepsEN[i].text}
+                </div>
+              </div>
+            </div>
+          ))}
+        </div>
+
+        {/* iOS hint — bilingual */}
+        {isIOS && (
+          <div style={{
+            background:"rgba(59,158,222,0.07)",border:"1px solid rgba(59,158,222,0.2)",
+            borderRadius:10,padding:"8px 12px",marginBottom:14,
+            fontSize:10.5,color:"#6a9ab0",lineHeight:1.5
+          }}>
+            {es.onboardIosWarn}<br/>
+            <span style={{color:"#3a5a70"}}>{en.onboardIosWarn}</span>
+          </div>
+        )}
+
+        {/* Buttons — bilingual */}
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          <button onClick={onNever} style={{
+            width:"100%",padding:"12px",
+            background:"linear-gradient(135deg,#1a6fa8,#0e4f80)",
+            border:"none",borderRadius:11,color:"#fff",
+            fontWeight:700,fontSize:12,cursor:"pointer",lineHeight:1.4
+          }}>
+            {es.onboardNever}<br/>
+            <span style={{fontWeight:400,opacity:0.8,fontSize:11}}>{en.onboardNever}</span>
+          </button>
+          <button onClick={onDismiss} style={{
+            width:"100%",padding:"9px",
+            background:"transparent",
+            border:"1px solid rgba(255,255,255,0.1)",
+            borderRadius:11,color:"#6a8fa8",
+            fontWeight:600,fontSize:11,cursor:"pointer",lineHeight:1.4
+          }}>
+            {es.onboardLater} · {en.onboardLater}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── PDF Export ────────────────────────────────────────────────────────────────
+function exportPDF({ validFlights, solarFactor, solarLabel, t,
+  monthlyUsv, annualUsv, nonFlyer, showCareer, careerYears, monthName }) {
+
+  const isEn = t.pdfCode === "Code";
+  const now = new Date();
+  const dateStr = now.toLocaleDateString(isEn ? "en-GB" : "es-ES", { day:"2-digit", month:"2-digit", year:"numeric" });
+  const pdfMonthName = monthName || now.toLocaleDateString(isEn ? "en-GB" : "es-ES", { month:"long", year:"numeric" });
+
+  const rows = validFlights.map(f => {
+    const ff=FL_OPTIONS[f.flIdx??1].factor; const c = calcFlight(f.orig, f.dest, ff, solarFactor);
+    const total = c.doseUsv * f.legs;
+    return `
+      <tr>
+        <td>${f.orig} → ${f.dest}</td>
+        <td>${activeDB[f.orig]?.name||""} → ${activeDB[f.dest]?.name||""}</td>
+        <td class="num">${FL_OPTIONS[f.flIdx??1].label}</td>
+        <td class="num">${(c.distKm/1000).toFixed(1)} km</td>
+        <td class="num">${Math.floor(c.timeH)}h ${Math.round((c.timeH%1)*60)}m</td>
+        <td class="num">${fmtDose(c.doseUsv)}</td>
+        <td class="num">× ${f.legs}</td>
+        <td class="num bold">${fmtDose(total)}</td>
+      </tr>`;
+  }).join("");
+
+  const refs = [
+    [isEn?"Dental X-ray":"Rx dental",              "5 µSv",                      (monthlyUsv/5).toFixed(1)],
+    [isEn?"Chest X-ray":"Rx tórax",                "20 µSv",                     (monthlyUsv/20).toFixed(1)],
+    [isEn?"Mammography":"Mamografía",              "400 µSv",                    (monthlyUsv/400).toFixed(2)],
+    [isEn?"Chest CT":"TAC tórax",                  isEn?"7,000 µSv":"7.000 µSv", (monthlyUsv/7000).toFixed(3)],
+    [isEn?"Natural background/year":"Fondo natural/año", isEn?"2,400 µSv":"2.400 µSv", (annualUsv/2400).toFixed(2)],
+    [isEn?"Crew limit/year":"Límite tripul./año",  isEn?"20,000 µSv":"20.000 µSv",(annualUsv/20000*100).toFixed(1)+"%"],
+  ];
+
+  const html = `<!DOCTYPE html>
+<html lang="${isEn?"en":"es"}">
+<head>
+<meta charset="UTF-8"/>
+<title>${t.pdfTitle} · ${pdfMonthName}</title>
+<style>
+  @page { margin: 18mm 16mm; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;
+    font-size:11px; color:#1a2a35; background:#fff; }
+  .header { display:flex; justify-content:space-between; align-items:flex-start;
+    border-bottom:2.5px solid #1a6fa8; padding-bottom:10px; margin-bottom:18px; }
+  .title { font-size:20px; font-weight:800; color:#1a6fa8; letter-spacing:-0.5px; }
+  .subtitle { font-size:11px; color:#5a7a8a; margin-top:3px; }
+  .meta { text-align:right; font-size:10px; color:#6a8a9a; line-height:1.8; }
+  .section { margin-bottom:18px; }
+  .section-title { font-size:10px; font-weight:700; text-transform:uppercase;
+    letter-spacing:0.8px; color:#5a7a8a; margin-bottom:8px;
+    padding-bottom:4px; border-bottom:1px solid #e0eef5; }
+  .summary-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px; }
+  .stat-box { background:#f0f6fa; border:1px solid #d0e4f0; border-radius:8px;
+    padding:10px 12px; text-align:center; }
+  .stat-label { font-size:9px; color:#6a8a9a; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:4px; }
+  .stat-value { font-size:16px; font-weight:800; color:#1a6fa8; }
+  .stat-sub { font-size:9px; color:#8aacbc; margin-top:2px; }
+  table { width:100%; border-collapse:collapse; font-size:10px; }
+  th { background:#1a6fa8; color:#fff; padding:6px 8px; text-align:left;
+    font-weight:600; font-size:9.5px; letter-spacing:0.3px; }
+  th.num, td.num { text-align:right; }
+  td { padding:5px 8px; border-bottom:1px solid #edf3f7; color:#2a3a45; }
+  tr:last-child td { border-bottom:none; }
+  tr:nth-child(even) td { background:#f8fbfd; }
+  td.bold { font-weight:700; color:#1a6fa8; }
+  .total-row td { background:#e8f2fa !important; font-weight:700;
+    border-top:2px solid #1a6fa8; color:#1a2a35; }
+  .refs-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }
+  .ref-box { background:#f8fbfd; border:1px solid #e0eef5; border-radius:6px; padding:8px 10px; }
+  .ref-name { font-size:9px; color:#6a8a9a; margin-bottom:2px; }
+  .ref-dose { font-size:10px; color:#4a6a7a; margin-bottom:3px; }
+  .ref-eq { font-size:12px; font-weight:700; color:#1a6fa8; }
+  .params { display:flex; gap:16px; font-size:10px; color:#5a7a8a; }
+  .param { background:#f0f6fa; border-radius:5px; padding:4px 10px; }
+  .footer { margin-top:20px; padding-top:10px; border-top:1px solid #e0eef5;
+    font-size:9px; color:#9ab0bc; line-height:1.6; }
+  .highlight { background:#e8f4ff; border:1px solid #b0d4ee; border-radius:6px;
+    padding:10px 14px; display:flex; justify-content:space-between; align-items:center; }
+  .hl-label { font-size:10px; color:#3a6a8a; font-weight:600; }
+  .hl-value { font-size:22px; font-weight:800; color:#1a6fa8; }
+  .hl-sub { font-size:9px; color:#6a9ab0; margin-top:1px; }
+  ${showCareer ? `.career { background:#f5f0fc; border:1px solid #d0b8f0; border-radius:8px;
+    padding:12px 14px; margin-top:14px; }
+  .career-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:8px; }
+  .career-stat { text-align:center; }
+  .career-label { font-size:9px; color:#7a5aaa; text-transform:uppercase; letter-spacing:0.5px; }
+  .career-value { font-size:14px; font-weight:800; color:#6030a0; margin-top:2px; }` : ""}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <div class="title">${t.pdfTitle}</div>
+    <div class="subtitle">${t.pdfSubtitle} · ${pdfMonthName}</div>
+  </div>
+  <div class="meta">
+    ${t.pdfGenerated} ${dateStr}<br/>
+    ${t.pdfFlightLevel}<br/>
+    ${t.pdfSolarCycle} ${solarLabel}<br/>
+    v${APP_VERSION}
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">${t.pdfMonthlySummary}</div>
+  <div style="display:flex;gap:12px;align-items:stretch;margin-bottom:14px;">
+    <div class="highlight" style="flex:1;">
+      <div>
+        <div class="hl-label">${t.pdfMonthlySummary}</div>
+        <div class="hl-value">${fmtDose(monthlyUsv)}</div>
+        <div class="hl-sub">${isEn ? "Annual projection" : "Proyección anual"}: ${fmtDose(annualUsv)}</div>
+      </div>
+    </div>
+    <div class="highlight" style="flex:1;">
+      <div>
+        <div class="hl-label">${t.pdfIcrcUsage}</div>
+        <div class="hl-value" style="color:${annualUsv/20000>0.8?"#c03020":annualUsv/20000>0.5?"#b06010":"#1a6fa8"}">
+          ${(annualUsv/20000*100).toFixed(1)}%
+        </div>
+        <div class="hl-sub">${t.pdfOf}</div>
+      </div>
+    </div>
+  </div>
+  <div class="params">
+    <span class="param">✈ ${validFlights.reduce((s,f)=>s+f.legs,0)} ${t.pdfSectors}</span>
+    <span class="param">📏 ${(validFlights.reduce((s,f)=>{ const c=calcFlight(f.orig,f.dest,FL_OPTIONS[f.flIdx??1].factor,solarFactor); return s+c.distKm*f.legs; },0)/1000).toFixed(0)} ${t.pdfKmTotal}</span>
+    <span class="param">⏱ ${(()=>{ const h=validFlights.reduce((s,f)=>{ const c=calcFlight(f.orig,f.dest,FL_OPTIONS[f.flIdx??1].factor,solarFactor); return s+c.timeH*f.legs; },0); return `${Math.floor(h)}h ${Math.round((h%1)*60)}m`; })()}</span>
+  </div>
+</div>
+
+<div class="section">
+  <div class="section-title">${t.pdfBreakdown}</div>
+  <table>
+    <thead>
+      <tr>
+        <th>${t.pdfCode}</th><th>${t.pdfRoute}</th><th class="num">${t.pdfFL}</th><th class="num">${t.pdfDist}</th>
+        <th class="num">${t.pdfTime}</th><th class="num">${t.pdfDosePerLeg}</th>
+        <th class="num">${t.pdfLegs}</th><th class="num">${t.pdfTotal}</th>
+      </tr>
+    </thead>
+    <tbody>
+      ${rows}
+      <tr class="total-row">
+        <td colspan="7">${t.pdfTotalMonth}</td>
+        <td class="num">${fmtDose(monthlyUsv)}</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+
+<div class="section">
+  <div class="section-title">${t.pdfEquivalences}</div>
+  <div class="refs-grid">
+    ${refs.map(([name,dose,eq])=>`
+      <div class="ref-box">
+        <div class="ref-name">${name}</div>
+        <div class="ref-dose">${dose}</div>
+        <div class="ref-eq">× ${eq}</div>
+      </div>`).join("")}
+  </div>
+</div>
+
+${showCareer ? `
+<div class="career">
+  <div style="font-size:10px;font-weight:700;color:#6030a0;text-transform:uppercase;letter-spacing:0.8px;">
+    ${t.pdfCareerTitle} · ${careerYears}
+  </div>
+  <div style="font-size:9px;color:#9a70c0;margin:4px 0 8px;line-height:1.5;">
+    ${t.pdfCareerNote} ${careerYears} ${t.pdfCareerNote2}
+  </div>
+  <div class="career-grid">
+    <div class="career-stat">
+      <div class="career-label">${t.pdfCareerFlight}</div>
+      <div class="career-value">${fmtDose(annualUsv*careerYears)}</div>
+    </div>
+    <div class="career-stat">
+      <div class="career-label">${t.pdfCareerCT}</div>
+      <div class="career-value">${(annualUsv*careerYears/7000).toFixed(1)}×</div>
+    </div>
+    <div class="career-stat">
+      <div class="career-label">${t.pdfCareerNatural}</div>
+      <div class="career-value">${fmtDose(nonFlyer*careerYears)}</div>
+    </div>
+  </div>
+  <div style="margin-top:8px;font-size:9px;color:#7a50a0;line-height:1.6;padding:6px 8px;background:#ede8f8;border-radius:5px;">
+    ${t.pdfCareerTotal} <strong>${fmtDose((annualUsv+nonFlyer)*careerYears)}</strong>
+  </div>
+</div>` : ""}
+
+<div class="footer">
+  ${t.pdfFooter}
+</div>
+
+</body>
+</html>`;
+
+  const w = window.open("","_blank");
+  w.document.write(html);
+  w.document.close();
+  w.onload = () => { w.focus(); w.print(); };
+}
+
+// ── InfoModal ─────────────────────────────────────────────────────────────────
+// ── InfoModal ─────────────────────────────────────────────────────────────────
+function InfoModal({onClose, t}) {
+  const sections = t.infoSections;
+  const [open, setOpen] = useState(null);
+  return (
+    <div className="modal-wrap" style={{
+      position:"fixed",inset:0,zIndex:1000,
+      background:"rgba(0,0,0,0.7)",
+      display:"flex",alignItems:"flex-end",justifyContent:"center",
+      backdropFilter:"blur(4px)",padding:0
+    }} onClick={e=>{ if(e.target===e.currentTarget) onClose(); }}>
+      <div className="modal-sheet" style={{
+        width:"100%",maxWidth:500,
+        background:"linear-gradient(180deg,#0d1e2e,#091622)",
+        border:"1px solid rgba(255,255,255,0.1)",
+        borderRadius:"18px 18px 0 0",
+        maxHeight:"88vh",overflowY:"auto",
+        WebkitOverflowScrolling:"touch",
+        padding:"0 0 32px"
+      }}>
+        <div style={{display:"flex",justifyContent:"center",padding:"12px 0 4px"}}>
+          <div style={{width:36,height:4,borderRadius:2,background:"rgba(255,255,255,0.2)"}}/>
+        </div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",padding:"8px 18px 14px"}}>
+          <div>
+            <div style={{fontSize:16,fontWeight:800,color:"#e8f4fc"}}>{t.infoModalTitle}</div>
+            <div style={{fontSize:10,color:"#4a6a80",marginTop:2}}>{t.infoModalSubtitle}</div>
+          </div>
+          <button onClick={onClose} style={{
+            background:"rgba(255,255,255,0.07)",border:"1px solid rgba(255,255,255,0.12)",
+            borderRadius:8,color:"#6a8fa8",cursor:"pointer",fontSize:16,padding:"4px 10px",fontWeight:700
+          }}>&#x2715;</button>
+        </div>
+        <div style={{padding:"0 14px"}}>
+          {sections.map((s,i)=>(
+            <div key={i} style={{
+              marginBottom:8,
+              background:"rgba(255,255,255,0.04)",
+              border:"1px solid rgba(255,255,255,0.08)",
+              borderRadius:12,overflow:"hidden"
+            }}>
+              <div onClick={()=>setOpen(open===i?null:i)} style={{
+                display:"flex",alignItems:"center",gap:10,
+                padding:"13px 14px",cursor:"pointer",
+                background:open===i?"rgba(59,158,222,0.08)":"transparent"
+              }}>
+                <span style={{fontSize:18,flexShrink:0}}>{s.icon}</span>
+                <span style={{fontSize:13,fontWeight:700,color:"#d0e8f4",flex:1,lineHeight:1.3}}>{s.title}</span>
+                <span style={{color:"#4a6a80",fontSize:14,transition:"transform 0.2s",
+                  transform:open===i?"rotate(180deg)":"rotate(0deg)"}}>&#x25be;</span>
+              </div>
+              {open===i&&(
+                <div style={{padding:"0 14px 14px"}}>
+                  {s.body.split("\n\n").map((para,j)=>(
+                    <p key={j} style={{
+                      fontSize:12.5,color:"#90b8cc",lineHeight:1.75,
+                      margin:j===0?"4px 0 10px":"0 0 10px"
+                    }}>{para}</p>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+        <div style={{fontSize:9.5,color:"#2a4050",textAlign:"center",padding:"12px 16px 0",lineHeight:1.6}}>
+          {t.infoModalFooter}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App/>);
+</script>
+</body>
+</html>
