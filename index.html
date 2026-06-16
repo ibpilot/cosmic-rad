@@ -395,7 +395,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.3";
+var APP_VERSION = "1.4";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2759,11 +2759,13 @@ function App() {
     all[currentMonth] = flights.map(function (_ref0) {
       var orig = _ref0.orig,
         dest = _ref0.dest,
-        legs = _ref0.legs;
+        legs = _ref0.legs,
+        flIdx = _ref0.flIdx;
       return {
         orig: orig,
         dest: dest,
-        legs: legs
+        legs: legs,
+        flIdx: flIdx !== undefined ? flIdx : 1
       };
     });
     saveAllMonths(all);
@@ -2780,11 +2782,13 @@ function App() {
     all[currentMonth] = flights.map(function (_ref1) {
       var orig = _ref1.orig,
         dest = _ref1.dest,
-        legs = _ref1.legs;
+        legs = _ref1.legs,
+        flIdx = _ref1.flIdx;
       return {
         orig: orig,
         dest: dest,
-        legs: legs
+        legs: legs,
+        flIdx: flIdx !== undefined ? flIdx : 1
       };
     });
     saveAllMonths(all);
