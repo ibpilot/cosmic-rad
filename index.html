@@ -2902,7 +2902,34 @@ function App() {
     var ff = FL_OPTIONS[(_f$flIdx = f.flIdx) !== null && _f$flIdx !== void 0 ? _f$flIdx : 1].factor;
     return s + calcFlight(f.orig, f.dest, ff, solarFactor).doseUsv * f.legs;
   }, 0);
-  var annualUsv = monthlyUsv * 12;
+  // Dynamic annual estimate: average dose across all recorded months of current year × 12
+  var currentYear = currentMonth.split("-")[0];
+  var pastMonthsTotal = 0, pastMonthsCount = 0;
+  Object.entries(loadAllMonths()).forEach(function(e) {
+    var key = e[0], mf = e[1];
+    if (!key.startsWith(currentYear) || key === currentMonth) return;
+    if (!Array.isArray(mf) || mf.length === 0) return;
+    var dose = mf.reduce(function(s, f) {
+      var ff = FL_OPTIONS[f.flIdx != null ? f.flIdx : 1].factor;
+      if (!activeDB[f.orig] || !activeDB[f.dest] || f.orig === f.dest) return s;
+      return s + calcFlight(f.orig, f.dest, ff, solarFactor).doseUsv * (f.legs || 1);
+    }, 0);
+    if (dose > 0) { pastMonthsTotal += dose; pastMonthsCount++; }
+  });
+  var annualMonthsCount = pastMonthsCount + (monthlyUsv > 0 ? 1 : 0);
+  var annualUsv = annualMonthsCount > 0
+    ? ((pastMonthsTotal + monthlyUsv) / annualMonthsCount) * 12
+    : 0;
+  var annualLabel = annualMonthsCount > 1
+    ? (lang === "es"
+      ? "Estimación anual (" + annualMonthsCount + " meses):"
+      : "Annual estimate (" + annualMonthsCount + " months):")
+    : t.annualProjection;
+  var barAnnualLabel = annualMonthsCount > 1
+    ? (lang === "es"
+      ? "Tú — estimación anual (" + annualMonthsCount + " meses)"
+      : "You — annual estimate (" + annualMonthsCount + " months)")
+    : t.barAnnualFlight;
   var pctIcrp = annualUsv / 20000 * 100;
   var nonFlyer = 2400;
   var barMax = Math.max(annualUsv + nonFlyer, annualUsv, nonFlyer, 20000, 14000) * 1.08;
@@ -3355,7 +3382,7 @@ function App() {
       fontSize: 11,
       color: "#5a8a9a"
     }
-  }, t.annualProjection, " ", /*#__PURE__*/React.createElement("strong", {
+  }, annualLabel, " ", /*#__PURE__*/React.createElement("strong", {
     style: {
       color: "#a0d0e8"
     }
@@ -3651,7 +3678,7 @@ function App() {
     color: "linear-gradient(90deg,#0e7a60,#1ab890)",
     highlight: true
   }, {
-    label: t.barAnnualFlight,
+    label: barAnnualLabel,
     icon: "✈️",
     value: annualUsv,
     color: "linear-gradient(90deg,#1a6fa8,#3b9ede)",
