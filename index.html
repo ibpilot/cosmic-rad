@@ -1654,6 +1654,7 @@ var LANG = {
     totalMonth: "TOTAL MES",
     comparisonTitle: "Comparativa de dosis",
     barThisMonth: "Tú — este mes",
+    barThisMonthProj: "Tú — este mes ×12 (proyección simple)",
     barAnnualFlight: "Tú — proyección anual (vuelo)",
     barAnnualTotal: "Tú — total anual (vuelo + fondo natural)",
     barNonFlyer: "No volador — fondo natural/año",
@@ -1857,6 +1858,7 @@ var LANG = {
     totalMonth: "MONTHLY TOTAL",
     comparisonTitle: "Dose comparison",
     barThisMonth: "You — this month",
+    barThisMonthProj: "You — this month ×12 (simple projection)",
     barAnnualFlight: "You — annual projection (flight)",
     barAnnualTotal: "You — annual total (flight + background)",
     barNonFlyer: "Non-flyer — natural background/year",
@@ -2905,7 +2907,8 @@ function App() {
   // Dynamic annual estimate: average dose across all recorded months of current year × 12
   var currentYear = currentMonth.split("-")[0];
   var pastMonthsTotal = 0, pastMonthsCount = 0;
-  Object.entries(loadAllMonths()).forEach(function(e) {
+  var computedMonthKeys = [];
+  Object.entries(loadAllMonths()).sort(function(a, b) { return a[0] < b[0] ? -1 : 1; }).forEach(function(e) {
     var key = e[0], mf = e[1];
     if (!key.startsWith(currentYear) || key === currentMonth) return;
     if (!Array.isArray(mf) || mf.length === 0) return;
@@ -2914,8 +2917,9 @@ function App() {
       if (!activeDB[f.orig] || !activeDB[f.dest] || f.orig === f.dest) return s;
       return s + calcFlight(f.orig, f.dest, ff, solarFactor).doseUsv * (f.legs || 1);
     }, 0);
-    if (dose > 0) { pastMonthsTotal += dose; pastMonthsCount++; }
+    if (dose > 0) { pastMonthsTotal += dose; pastMonthsCount++; computedMonthKeys.push(key); }
   });
+  if (monthlyUsv > 0) computedMonthKeys.push(currentMonth);
   var annualMonthsCount = pastMonthsCount + (monthlyUsv > 0 ? 1 : 0);
   var annualUsv = annualMonthsCount > 0
     ? ((pastMonthsTotal + monthlyUsv) / annualMonthsCount) * 12
@@ -3671,13 +3675,46 @@ function App() {
     style: CARD
   }, /*#__PURE__*/React.createElement("div", {
     style: LABEL
-  }, t.comparisonTitle), [{
+  }, t.comparisonTitle),
+  annualMonthsCount > 1 && /*#__PURE__*/React.createElement("div", {
+    style: {marginBottom: 10, padding: "7px 10px", background: "rgba(59,158,222,0.06)", borderRadius: 8, border: "1px solid rgba(59,158,222,0.15)"}
+  },
+    /*#__PURE__*/React.createElement("div", {style: {fontSize: 10, color: "#4a7a90", marginBottom: 5, letterSpacing: 0.3}},
+      lang === "es" ? "Estimación anual calculada con:" : "Annual estimate based on:"
+    ),
+    /*#__PURE__*/React.createElement("div", {style: {display: "flex", flexWrap: "wrap", gap: 4}},
+      computedMonthKeys.map(function(key) {
+        var isCurrent = key === currentMonth;
+        var parts = key.split("-");
+        var abbr = new Date(Number(parts[0]), Number(parts[1]) - 1, 1)
+          .toLocaleDateString(lang === "en" ? "en-GB" : "es-ES", {month: "short"});
+        var label = isCurrent ? abbr + " (" + (lang === "es" ? "actual" : "current") + ")" : abbr;
+        return /*#__PURE__*/React.createElement("span", {
+          key: key,
+          style: {
+            background: isCurrent ? "rgba(59,158,222,0.18)" : "rgba(255,255,255,0.07)",
+            border: "1px solid " + (isCurrent ? "rgba(59,158,222,0.5)" : "rgba(255,255,255,0.12)"),
+            borderRadius: 5, padding: "2px 8px", fontSize: 10.5,
+            fontWeight: isCurrent ? 700 : 500,
+            color: isCurrent ? "#3b9ede" : "#7a9aaa"
+          }
+        }, label);
+      })
+    )
+  ),
+  [{
     label: "".concat(t.barThisMonth),
     icon: "📅",
     value: monthlyUsv,
     color: "linear-gradient(90deg,#0e7a60,#1ab890)",
     highlight: true
-  }, {
+  }, annualMonthsCount > 1 ? {
+    label: t.barThisMonthProj,
+    icon: "📈",
+    value: monthlyUsv * 12,
+    color: "linear-gradient(90deg,#0e5a40,#0a7050)",
+    highlight: false
+  } : null, {
     label: barAnnualLabel,
     icon: "✈️",
     value: annualUsv,
@@ -3714,7 +3751,7 @@ function App() {
     icon: "⚠️",
     value: 20000,
     color: "#8a3a2a"
-  }].map(function (b) {
+  }].filter(Boolean).map(function (b) {
     return /*#__PURE__*/React.createElement(CompareBar, _objectSpread(_objectSpread({
       key: b.label
     }, b), {}, {
