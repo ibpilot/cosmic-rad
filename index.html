@@ -1676,6 +1676,10 @@ var LANG = {
     careerSummary3: "solo por vuelo, más los",
     careerSummary4: "de fondo natural que acumula cualquier persona. Total estimado:",
     exportBtn: "📄 Exportar informe PDF",
+    backupBtn: "💾 Descargar copia de seguridad",
+    restoreBtn: "📂 Restaurar copia de seguridad",
+    restoreOk: "Copia restaurada correctamente",
+    restoreErr: "Error al leer el archivo",
     singleDoseLabel: "Dosis por vuelo",
     singleEffRate: "Tasa efectiva",
     singleDistance: "Distancia",
@@ -1875,6 +1879,10 @@ var LANG = {
     careerSummary3: "from flying alone, plus",
     careerSummary4: "natural background for anyone. Total estimate:",
     exportBtn: "📄 Export PDF report",
+    backupBtn: "💾 Download backup",
+    restoreBtn: "📂 Restore backup",
+    restoreOk: "Backup restored successfully",
+    restoreErr: "Error reading file",
     singleDoseLabel: "Dose per flight",
     singleEffRate: "Effective rate",
     singleDistance: "Distance",
@@ -2714,6 +2722,33 @@ function App() {
     try {
       localStorage.setItem("cr_months", JSON.stringify(all));
     } catch (e) {}
+  }
+  function downloadBackup() {
+    var all = loadAllMonths();
+    var blob = new Blob([JSON.stringify({version: 1, months: all}, null, 2)], {type: "application/json"});
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement("a");
+    var today = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = "cosmic-rad-backup-" + today + ".json";
+    a.click();
+    URL.revokeObjectURL(url);
+  }
+  function restoreBackup(file, onDone) {
+    var reader = new FileReader();
+    reader.onload = function(e) {
+      try {
+        var parsed = JSON.parse(e.target.result);
+        var months = parsed.version === 1 ? parsed.months : parsed;
+        if (typeof months !== "object" || months === null) throw new Error("invalid");
+        saveAllMonths(months);
+        setFlights(loadMonthFlights(currentMonth) || []);
+        onDone(true);
+      } catch (_) {
+        onDone(false);
+      }
+    };
+    reader.readAsText(file);
   }
   function loadMonthFlights(key) {
     var all = loadAllMonths();
@@ -3783,7 +3818,33 @@ function App() {
       gap: 8,
       marginBottom: 12
     }
-  }, t.exportBtn))), tab === "single" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+  }, t.exportBtn), /*#__PURE__*/React.createElement("div", {style:{display:"flex",gap:8,marginBottom:12}},
+    /*#__PURE__*/React.createElement("button", {
+      onClick: downloadBackup,
+      style: {
+        flex:1, padding:"10px", background:"rgba(59,130,246,0.12)",
+        border:"1px solid rgba(59,130,246,0.3)", borderRadius:10,
+        color:"#60a5fa", fontWeight:700, fontSize:12, cursor:"pointer"
+      }
+    }, t.backupBtn),
+    /*#__PURE__*/React.createElement("button", {
+      onClick: function() {
+        var inp = document.createElement("input");
+        inp.type = "file"; inp.accept = ".json,application/json";
+        inp.onchange = function(ev) {
+          var f = ev.target.files[0];
+          if (!f) return;
+          restoreBackup(f, function(ok) { alert(ok ? t.restoreOk : t.restoreErr); });
+        };
+        inp.click();
+      },
+      style: {
+        flex:1, padding:"10px", background:"rgba(168,85,247,0.12)",
+        border:"1px solid rgba(168,85,247,0.3)", borderRadius:10,
+        color:"#c084fc", fontWeight:700, fontSize:12, cursor:"pointer"
+      }
+    }, t.restoreBtn)
+  ))), tab === "single" && /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
     style: CARD
   }, /*#__PURE__*/React.createElement("div", {
     className: "grid-2col",
