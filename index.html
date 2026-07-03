@@ -396,7 +396,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.5";
+var APP_VERSION = "1.6";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -1624,6 +1624,8 @@ var LANG = {
     destPlaceholder: "IATA o OACI…",
     monthlyDoseLabel: "Dosis total",
     annualProjection: "Proyección anual (×12):",
+    monthlyHoursLabel: "Horas de vuelo:",
+    flightsWord: "vuelos",
     chestXrayEquiv: "Rx tórax",
     dentalXrayEquiv: "Rx dentales",
     icrcLimitTitle: "Límite ICRP tripulación — 20 mSv/año",
@@ -1828,6 +1830,8 @@ var LANG = {
     destPlaceholder: "IATA or ICAO…",
     monthlyDoseLabel: "Total dose",
     annualProjection: "Annual projection (×12):",
+    monthlyHoursLabel: "Flight hours:",
+    flightsWord: "flights",
     chestXrayEquiv: "chest X-rays",
     dentalXrayEquiv: "dental X-rays",
     icrcLimitTitle: "ICRP crew limit — 20 mSv/year",
@@ -2626,6 +2630,14 @@ function FlightPair(_ref10) {
     _useStateP2 = _slicedToArray(_useStateP, 2),
     collapsed = _useStateP2[0],
     setCollapsed = _useStateP2[1];
+  useEffect(function () {
+    var id = setTimeout(function () {
+      setCollapsed(true);
+    }, 10000);
+    return function () {
+      clearTimeout(id);
+    };
+  }, []);
 
   function pc(fl) {
     var fi = fl.flIdx == null ? 1 : fl.flIdx;
@@ -3046,6 +3058,11 @@ function App() {
     var _f$flIdx;
     var ff = FL_OPTIONS[(_f$flIdx = f.flIdx) !== null && _f$flIdx !== void 0 ? _f$flIdx : 1].factor;
     return s + calcFlight(f.orig, f.dest, ff, solarFactor).doseUsv * f.legs;
+  }, 0);
+  var monthlyHours = validFlights.reduce(function (s, f) {
+    var _f$flIdx2;
+    var ff = FL_OPTIONS[(_f$flIdx2 = f.flIdx) !== null && _f$flIdx2 !== void 0 ? _f$flIdx2 : 1].factor;
+    return s + calcFlight(f.orig, f.dest, ff, solarFactor).timeH * f.legs;
   }, 0);
   // Dynamic annual estimate: average dose across all recorded months of current year × 12
   var currentYear = currentMonth.split("-")[0];
@@ -3585,7 +3602,17 @@ function App() {
     style: {
       color: "#a0d0e8"
     }
-  }, fmtDose(annualUsv)))), /*#__PURE__*/React.createElement("div", {
+  }, fmtDose(annualUsv))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 4,
+      fontSize: 11,
+      color: "#5a8a9a"
+    }
+  }, "✈ ", t.monthlyHoursLabel, " ", /*#__PURE__*/React.createElement("strong", {
+    style: {
+      color: "#a0d0e8"
+    }
+  }, fmtTime(monthlyHours)), " \xB7 ", validFlights.length, " ", t.flightsWord)), /*#__PURE__*/React.createElement("div", {
     style: CARD
   }, /*#__PURE__*/React.createElement("div", {
     style: LABEL
