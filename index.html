@@ -396,7 +396,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.6";
+var APP_VERSION = "1.7";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2625,12 +2625,14 @@ function FlightPair(_ref10) {
     onChange = _ref10.onChange,
     onRemove = _ref10.onRemove,
     onAddReturn = _ref10.onAddReturn,
+    isNew = _ref10.isNew,
     t = _ref10.t;
-  var _useStateP = useState(false),
+  var _useStateP = useState(!isNew),
     _useStateP2 = _slicedToArray(_useStateP, 2),
     collapsed = _useStateP2[0],
     setCollapsed = _useStateP2[1];
   useEffect(function () {
+    if (!isNew) return;
     var id = setTimeout(function () {
       setCollapsed(true);
     }, 10000);
@@ -2792,6 +2794,10 @@ function App() {
     _useState16 = _slicedToArray(_useState15, 2),
     showPregnant = _useState16[0],
     setShowPregnant = _useState16[1];
+  var _useStatePdf = useState(null),
+    _useStatePdf2 = _slicedToArray(_useStatePdf, 2),
+    pdfReportHtml = _useStatePdf2[0],
+    setPdfReportHtml = _useStatePdf2[1];
   var _useState17 = useState(function () {
       try {
         return !localStorage.getItem("cr_onboarded");
@@ -2947,12 +2953,14 @@ function App() {
       var orig = _ref0.orig,
         dest = _ref0.dest,
         legs = _ref0.legs,
-        flIdx = _ref0.flIdx;
+        flIdx = _ref0.flIdx,
+        pairId = _ref0.pairId;
       return {
         orig: orig,
         dest: dest,
         legs: legs,
-        flIdx: flIdx !== undefined ? flIdx : 1
+        flIdx: flIdx !== undefined ? flIdx : 1,
+        pairId: pairId
       };
     });
     saveAllMonths(all);
@@ -3003,6 +3011,7 @@ function App() {
     singleFlIdx = _useState38[0],
     setSingleFlIdx = _useState38[1];
   var solarFactor = SOLAR_OPTIONS[solarIdx].factor;
+  var newPairIdsRef = useRef(new Set());
   var addFlight = function addFlight() {
     return setFlights(function (f) {
       return [].concat(_toConsumableArray(f), [{
@@ -3024,6 +3033,7 @@ function App() {
   var addReturnFlight = useCallback(function (orig, dest, flIdx, srcId) {
     setFlights(function (f) {
       var pid = mkId();
+      newPairIdsRef.current.add(pid);
       var withPair = f.map(function (x) {
         return x.id === srcId ? Object.assign({}, x, { pairId: pid }) : x;
       });
@@ -3542,7 +3552,8 @@ function App() {
             t: t,
             onChange: updateFlight,
             onRemove: removeFlight,
-            onAddReturn: addReturnFlight
+            onAddReturn: addReturnFlight,
+            isNew: newPairIdsRef.current.has(f.pairId)
           }));
           return;
         }
@@ -4074,7 +4085,7 @@ function App() {
     }
   }, t.flVisualRef)), /*#__PURE__*/React.createElement("button", {
     onClick: function onClick() {
-      return exportPDF({
+      return setPdfReportHtml(buildPdfHtml({
         validFlights: validFlights,
         solarFactor: solarFactor,
         t: t,
@@ -4085,7 +4096,7 @@ function App() {
         showCareer: showCareer,
         careerYears: careerYears,
         monthName: monthLabel(currentMonth)
-      });
+      }));
     },
     style: {
       width: "100%",
@@ -4236,6 +4247,12 @@ function App() {
     onNever: function onNever() {
       localStorage.setItem("cr_onboarded", "1");
       setShowOnboarding(false);
+    }
+  }), pdfReportHtml && /*#__PURE__*/React.createElement(PdfPreviewOverlay, {
+    html: pdfReportHtml,
+    isEn: t.pdfCode === "Code",
+    onClose: function onClose() {
+      return setPdfReportHtml(null);
     }
   }));
 }
@@ -4458,7 +4475,7 @@ function OnboardingModal(_ref12) {
 }
 
 // ── PDF Export ────────────────────────────────────────────────────────────────
-function exportPDF(_ref13) {
+function buildPdfHtml(_ref13) {
   var validFlights = _ref13.validFlights,
     solarFactor = _ref13.solarFactor,
     solarLabel = _ref13.solarLabel,
@@ -4514,17 +4531,49 @@ function exportPDF(_ref13) {
       eq = _ref15[2];
     return "\n      <div class=\"ref-box\">\n        <div class=\"ref-name\">".concat(name, "</div>\n        <div class=\"ref-dose\">").concat(dose, "</div>\n        <div class=\"ref-eq\">\xD7 ").concat(eq, "</div>\n      </div>");
   }).join(""), "\n  </div>\n</div>\n\n").concat(showCareer ? "\n<div class=\"career\">\n  <div style=\"font-size:10px;font-weight:700;color:#6030a0;text-transform:uppercase;letter-spacing:0.8px;\">\n    ".concat(t.pdfCareerTitle, " \xB7 ").concat(careerYears, "\n  </div>\n  <div style=\"font-size:9px;color:#9a70c0;margin:4px 0 8px;line-height:1.5;\">\n    ").concat(t.pdfCareerNote, " ").concat(careerYears, " ").concat(t.pdfCareerNote2, "\n  </div>\n  <div class=\"career-grid\">\n    <div class=\"career-stat\">\n      <div class=\"career-label\">").concat(t.pdfCareerFlight, "</div>\n      <div class=\"career-value\">").concat(fmtDose(annualUsv * careerYears), "</div>\n    </div>\n    <div class=\"career-stat\">\n      <div class=\"career-label\">").concat(t.pdfCareerCT, "</div>\n      <div class=\"career-value\">").concat((annualUsv * careerYears / 7000).toFixed(1), "\xD7</div>\n    </div>\n    <div class=\"career-stat\">\n      <div class=\"career-label\">").concat(t.pdfCareerNatural, "</div>\n      <div class=\"career-value\">").concat(fmtDose(nonFlyer * careerYears), "</div>\n    </div>\n  </div>\n  <div style=\"margin-top:8px;font-size:9px;color:#7a50a0;line-height:1.6;padding:6px 8px;background:#ede8f8;border-radius:5px;\">\n    ").concat(t.pdfCareerTotal, " <strong>").concat(fmtDose((annualUsv + nonFlyer) * careerYears), "</strong>\n  </div>\n</div>") : "", "\n\n<div class=\"footer\">\n  ").concat(t.pdfFooter, "\n</div>\n\n</body>\n</html>");
-  var w = window.open("", "_blank");
-  if (!w) {
-    alert(isEn ? "Could not open the PDF window. Please allow pop-ups for this site and try again." : "No se pudo abrir la ventana del PDF. Permite las ventanas emergentes para este sitio e inténtalo de nuevo.");
-    return;
-  }
-  w.document.write(html);
-  w.document.close();
-  w.onload = function () {
-    w.focus();
-    w.print();
-  };
+  return html;
+}
+
+// ── PdfPreviewOverlay (reemplaza window.open: en Safari standalone/PWA el popup
+// no tiene barra de navegación ni botón compartir; este overlay usa controles propios) ──
+function PdfPreviewOverlay(_ref17) {
+  var html = _ref17.html,
+    onClose = _ref17.onClose,
+    isEn = _ref17.isEn;
+  var iframeRef = useRef(null);
+  return /*#__PURE__*/React.createElement("div", {
+    style: {
+      position: "fixed", inset: 0, zIndex: 1000,
+      background: "#0f1a22", display: "flex", flexDirection: "column"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex", gap: 8, padding: "10px", background: "#0f1a22",
+      borderBottom: "1px solid rgba(255,255,255,0.1)"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      padding: "10px 16px", background: "rgba(255,255,255,0.08)",
+      border: "1px solid rgba(255,255,255,0.15)", borderRadius: 8,
+      color: "#cfe3ee", fontWeight: 700, fontSize: 13, cursor: "pointer"
+    }
+  }, isEn ? "← Back" : "← Volver"), /*#__PURE__*/React.createElement("button", {
+    onClick: function () {
+      var w = iframeRef.current && iframeRef.current.contentWindow;
+      if (w) { w.focus(); w.print(); }
+    },
+    style: {
+      flex: 1, padding: "10px 16px",
+      background: "linear-gradient(135deg,#1a5a40,#1e7a55)",
+      border: "1px solid rgba(30,180,100,0.3)", borderRadius: 8,
+      color: "#fff", fontWeight: 700, fontSize: 13, cursor: "pointer"
+    }
+  }, isEn ? "🖨 Print / Save PDF" : "🖨 Imprimir / Guardar PDF")), /*#__PURE__*/React.createElement("iframe", {
+    ref: iframeRef,
+    srcDoc: html,
+    style: { flex: 1, border: "none", width: "100%", background: "#fff" }
+  }));
 }
 
 // ── InfoModal ─────────────────────────────────────────────────────────────────
