@@ -2495,14 +2495,16 @@ function AirportInput(_ref3) {
     suggestions = _useState10[0],
     setSuggestions = _useState10[1];
   var inputRef = useRef(null);
-  // Sincroniza el campo si el valor cambia externamente (p.ej. al importar una
-  // ruta FPL que rellena origen y destino automáticamente).
+  // Sincroniza el campo si el valor cambia EXTERNAMENTE (p.ej. al importar una
+  // ruta FPL que rellena origen y destino), pero nunca mientras el usuario está
+  // escribiendo: si no, al borrar el ICAO de "JFK · KJFK" el texto sobrante "JFK"
+  // se resolvía y el campo volvía a formatearse entero sin dejar borrar.
   useEffect(function () {
-    if (value && activeDB[value]) {
+    if (!focused && value && activeDB[value]) {
       setText("".concat(value, " \xB7 ").concat(activeDB[value].icao));
       setResolvedKey(value);
     }
-  }, [value]);
+  }, [value, focused]);
   function confirmItem(iata) {
     var ap = activeDB[iata];
     setText("".concat(iata, " \xB7 ").concat(ap.icao));
