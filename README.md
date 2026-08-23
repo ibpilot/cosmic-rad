@@ -19,7 +19,10 @@ A tool for pilots and cabin crew to estimate cosmic radiation exposure per fligh
 - **Auto-save** — flights saved automatically per month; restored on next visit
 - **Full airport database** — loads 7,600+ airports from OpenFlights on startup (IATA + ICAO codes, name search). Falls back to ~160 curated airports if offline
 - **PDF export** — professional report with sector breakdown, dose equivalences, ICRP usage, and career summary
-- **Real track (optional, maximum precision)** — upload the actual flown route (CSV from Flightradar24/OpenSky) per flight; the dose is then integrated over the real path, time and altitude (CARI-7A grid). `tools/download_opensky_track.py` downloads real tracks free from OpenSky (live flights)
+- **Route import (FPL or real track)** — paste your flight-plan route (FPL: `KJFK31L.JFK5.BDR..MAD..HFD..`) and it is resolved against a global **fix database** (125k+ waypoints, on-demand download), or upload a real track CSV (Flightradar24/OpenSky) per flight; the dose is then integrated over the real path, time and altitude (CARI-7A grid). `tools/download_opensky_track.py` downloads real tracks free from OpenSky (live flights)
+- **Flight-plan level steps** — optional separate field to paste the plan's step climbs (`F370 4730N04000W/F330 45N020W/F390 BANAL/…`); each segment is then computed at its own flight level and the FL selector locks
+- **How-the-dose-is-calculated info** — a small `ℹ️ Calculation` chip next to the import-route button explains the two modes (with and without a real route)
+- **Collapsible outbound+return pairs** — the "Add return" button groups both flights into one card that auto-collapses after a visible 10-second countdown (tap to cancel)
 - **PWA-ready** — install to home screen on iOS, Android, or desktop for offline use
 - **Single file** — no framework, no build step, no backend. One `.html` file
 
@@ -49,6 +52,22 @@ simplified EURADOS altitude/latitude band model:
 The grid is regenerated with the real CARI-7A binary by the GitHub Action workflow
 [`.github/workflows/generate-dose-grid.yml`](.github/workflows/generate-dose-grid.yml)
 (`tools/` contains the pipeline).
+
+### Route-based dose (FPL / real track)
+
+Without a route, the dose is estimated over the great-circle path between origin and
+destination at the selected flight level. When you import a route, the dose is integrated
+over the **real path**, segment by segment, with the same CARI-7A rate table:
+
+- **FPL route** — waypoints are resolved against a global fix database (one-time on-demand
+  download; unresolved fixes are skipped with a warning). Each leg uses the altitude of the
+  selected flight level, or the plan's **level steps** if provided.
+- **Level steps** (optional field) — `F370 4730N04000W/F330 45N020W/F390 BANAL/…` means the
+  flight climbs/descends to the listed flight level at each waypoint. Each segment is then
+  computed at its own altitude and the FL selector locks.
+- **Real track CSV** — the actual points (lat, lon, altitude, time) are used; track altitude
+  takes precedence and the FL selector locks. Gaps over 15 min are bridged by interpolating
+  while keeping real time; a gap over 60 min marks the leg as incomplete.
 
 ---
 
