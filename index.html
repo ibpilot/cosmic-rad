@@ -3056,6 +3056,7 @@ function FlightRow(_ref9) {
     style: {
       display: "flex",
       gap: 6,
+      flexWrap: "wrap",
       marginTop: 4,
       marginBottom: 2,
       alignItems: "center",
@@ -3080,9 +3081,10 @@ function FlightRow(_ref9) {
       fontSize: 10.5,
       fontWeight: 700,
       color: "#f0b95c",
-      whiteSpace: "nowrap"
+      whiteSpace: "nowrap",
+      flexShrink: 0
     }
-  }, "\u2708\uFE0F STEPS ", flight.steps.map(function (s) { return "F" + s.fl; }).join("\u2192"))) : /*#__PURE__*/React.createElement("button", {
+  }, "\u2708\uFE0F STEPS")) : /*#__PURE__*/React.createElement("button", {
     onClick: function onClick() {
       return onTrack(id);
     },
