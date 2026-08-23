@@ -1891,7 +1891,7 @@ function parseSteps(text) {
   }
   return steps.length ? steps : null;
 }
-function parseRouteString(text, origIata, destIata) {
+function parseRouteString(text, origIata, destIata, stepsText) {
   var tokens = text.replace(/\.\./g, ".").split(".").map(function (s) { return s.trim().toUpperCase(); }).filter(Boolean);
   if (tokens.length < 2) return { track: null, error: "la ruta parece vacía o incompleta" };
   var coordRe = /^(\d{2})(\d{2})?([NS])(\d{3})(\d{2})?([EW])$/;
@@ -1905,8 +1905,8 @@ function parseRouteString(text, origIata, destIata) {
   var pts = [], unresolved = [], F = FIXES || {};
   var tokIdx = {};
   tokens.forEach(function (tk, ti) { tokIdx[tk] = ti; });
-  // steps de FL del plan: waypoint → índice de token donde cambia el nivel
-  var steps = parseSteps(text);
+  // steps de FL del plan: campo separado si se pasó, si no auto-detección en la ruta
+  var steps = parseSteps(stepsText && stepsText.trim() ? stepsText : text);
   var ptTok = [];
   tokens.forEach(function (tok, ti) {
     var m = coordRe.exec(tok);
@@ -2003,12 +2003,15 @@ var LANG = {
     trackBadge: "track real",
     trackIncomplete: "incompleto",
     trackModalTitle: "Ruta real del vuelo",
-    trackModalDesc: "Pega la ruta del plan de vuelo (formato FPL: KJFK31L.JFK5.BDR..MAD..HFD…) o sube un CSV de track real. La ruta FPL se resuelve con la base de fixes (descarga única bajo demanda) y se calcula la dosis sobre el camino real; los fixes sin resolver se ignoran. Origen y destino se rellenan solos; con ruta FPL puedes elegir el nivel de vuelo. Si el plan incluye steps de nivel (F370 4730N04000W/F330 45N020W/…), se aplican por tramo y el selector de FL se bloquea.",
+    trackModalDesc: "Pega la ruta del plan de vuelo (formato FPL: KJFK31L.JFK5.BDR..MAD..HFD…) o sube un CSV de track real. La ruta FPL se resuelve con la base de fixes (descarga única bajo demanda) y se calcula la dosis sobre el camino real; los fixes sin resolver se ignoran. Origen y destino se rellenan solos; con ruta FPL puedes elegir el nivel de vuelo. Opcional: pega los steps de nivel del plan en el campo de abajo (F370 4730N04000W/F330 45N020W/…) — se aplican por tramo y el selector de FL se bloquea.",
     trackModalFile: "Elegir fichero CSV",
-    trackModalPlaceholder: "Pega aquí la ruta del plan de vuelo (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R\n\n— opcional, steps de nivel (Fxxx waypoint/Fxxx …) —\nF370 4730N04000W/F330 45N020W/F390 BANAL/F410\n\n— o un CSV de track real (lat, lon, altitud, hora) —",
+    trackModalPlaceholder: "Pega aquí la ruta del plan de vuelo (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R\n\n— o un CSV de track real (lat, lon, altitud, hora) —",
     trackModalImport: "Importar ruta",
     trackRoutePartial: "Ruta importada; fixes sin resolver (ignorados):",
     trackStepsDetected: "Steps de FL detectados:",
+    trackStepsLabel: "Steps de nivel (opcional)",
+    trackStepsPlaceholder: "F370 4730N04000W/F330 45N020W/F390 BANAL/F410…",
+    trackStepsIgnoredCsv: "Los steps se ignoran con track CSV real (la altitud real del track manda).",
     trackFixesFail: "No pude descargar la base de fixes (¿sin conexión?). Sin ella no puedo resolver los waypoints de la ruta FPL. Reintenta o importa un CSV de track real.",
     trackModalErr: "no pude importar el track",
     calcInfoTitle: "Cómo se calcula la dosis",
@@ -2233,12 +2236,15 @@ var LANG = {
     trackBadge: "real track",
     trackIncomplete: "incomplete",
     trackModalTitle: "Real flight route",
-    trackModalDesc: "Paste the flight-plan route (FPL format: KJFK31L.JFK5.BDR..MAD..HFD…) or upload a real-track CSV. The FPL route is resolved with the fix database (one-time on-demand download) and the dose is calculated over the real path; unresolved fixes are skipped. Origin and destination are filled in automatically; with an FPL route you can still pick the flight level. If the plan includes level steps (F370 4730N04000W/F330 45N020W/…), they are applied per segment and the FL selector is locked.",
+    trackModalDesc: "Paste the flight-plan route (FPL format: KJFK31L.JFK5.BDR..MAD..HFD…) or upload a real-track CSV. The FPL route is resolved with the fix database (one-time on-demand download) and the dose is calculated over the real path; unresolved fixes are skipped. Origin and destination are filled in automatically; with an FPL route you can still pick the flight level. Optional: paste the plan's level steps in the field below (F370 4730N04000W/F330 45N020W/…) — they are applied per segment and the FL selector is locked.",
     trackModalFile: "Choose CSV file",
-    trackModalPlaceholder: "Paste the flight-plan route here (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R\n\n— optional, level steps (Fxxx waypoint/Fxxx …) —\nF370 4730N04000W/F330 45N020W/F390 BANAL/F410\n\n— or a real-track CSV (lat, lon, altitude, time) —",
+    trackModalPlaceholder: "Paste the flight-plan route here (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R\n\n— or a real-track CSV (lat, lon, altitude, time) —",
     trackModalImport: "Import route",
     trackRoutePartial: "Route imported; unresolved fixes (skipped):",
     trackStepsDetected: "FL steps detected:",
+    trackStepsLabel: "Level steps (optional)",
+    trackStepsPlaceholder: "F370 4730N04000W/F330 45N020W/F390 BANAL/F410…",
+    trackStepsIgnoredCsv: "Steps are ignored with a real-track CSV (the real track altitude wins).",
     trackFixesFail: "Could not download the fix database (offline?). Without it I can't resolve FPL waypoints. Retry, or import a real-track CSV instead.",
     trackModalErr: "could not import the track",
     calcInfoTitle: "How the dose is calculated",
@@ -5230,6 +5236,10 @@ function TrackModal(_refTrack) {
     _useStateT6 = _slicedToArray(_useStateT5, 2),
     info = _useStateT6[0],
     setInfo = _useStateT6[1];
+  var _useStateT7 = useState(""),
+    _useStateT8 = _slicedToArray(_useStateT7, 2),
+    stepsText = _useStateT8[0],
+    setStepsText = _useStateT8[1];
   var onFile = function onFile(e) {
     var file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -5247,13 +5257,14 @@ function TrackModal(_refTrack) {
       // CSV (track real con puntos)
       var res = parseFlightCsv(txt);
       if (res.error || !res.track) { setErr(res.error || t.trackModalErr); return; }
+      if (stepsText && stepsText.trim()) setInfo(t.trackStepsIgnoredCsv);
       onApply(res.track);
       return;
     }
     // Ruta de plan de vuelo (FPL): requiere la base de fixes
     ensureFixes(function (err) {
       if (err) { setErr(t.trackFixesFail); return; }
-      var r2 = parseRouteString(txt, orig, dest);
+      var r2 = parseRouteString(txt, orig, dest, stepsText);
       if (r2.error || !r2.track) { setErr(r2.error || t.trackModalErr); return; }
       var warns = [];
       if (r2.unresolved && r2.unresolved.length > 0) {
@@ -5374,6 +5385,35 @@ function TrackModal(_refTrack) {
       minHeight: 110,
       background: "rgba(255,255,255,0.05)",
       border: "1px solid rgba(255,255,255,0.15)",
+      borderRadius: 10,
+      color: "#d0e8f4",
+      fontSize: 11,
+      fontFamily: "monospace",
+      padding: "10px",
+      outline: "none",
+      resize: "vertical",
+      boxSizing: "border-box"
+    }
+  }), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: "#f0b95c",
+      margin: "10px 0 4px",
+      textTransform: "uppercase",
+      letterSpacing: 0.6
+    }
+  }, "\uD83D\uDEEB\uFE0F ", t.trackStepsLabel), /*#__PURE__*/React.createElement("textarea", {
+    value: stepsText,
+    onChange: function onChange(e) {
+      return setStepsText(e.target.value);
+    },
+    placeholder: t.trackStepsPlaceholder,
+    style: {
+      width: "100%",
+      minHeight: 46,
+      background: "rgba(255,255,255,0.05)",
+      border: "1px solid rgba(245,178,66,0.25)",
       borderRadius: 10,
       color: "#d0e8f4",
       fontSize: 11,
