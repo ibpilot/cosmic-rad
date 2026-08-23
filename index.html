@@ -1815,7 +1815,7 @@ var FIXES = null;
 var _fixesLoading = false;
 var _fixesCbs = [];
 function ensureFixes(cb) {
-  if (FIXES) { if (cb) cb(); return; }
+  if (FIXES) { if (cb) cb(null); return; }
   if (cb) _fixesCbs.push(cb);
   if (_fixesLoading) return;
   _fixesLoading = true;
@@ -1824,12 +1824,12 @@ function ensureFixes(cb) {
     .then(function (d) {
       FIXES = d;
       _fixesLoading = false;
-      _fixesCbs.forEach(function (c) { try { c(); } catch (e) {} });
+      _fixesCbs.forEach(function (c) { try { c(null); } catch (e) {} });
       _fixesCbs = [];
     })
     .catch(function () {
       _fixesLoading = false;
-      _fixesCbs.forEach(function (c) { try { c(); } catch (e) {} });
+      _fixesCbs.forEach(function (c) { try { c(new Error("fixes fetch failed")); } catch (e) {} });
       _fixesCbs = [];
     });
 }
@@ -1928,6 +1928,7 @@ var LANG = {
     trackModalPlaceholder: "Pega aquí la ruta del plan de vuelo (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R\n\n— o un CSV de track real (lat, lon, altitud, hora) —",
     trackModalImport: "Importar ruta",
     trackRoutePartial: "Ruta importada; fixes sin resolver (ignorados):",
+    trackFixesFail: "No pude descargar la base de fixes (¿sin conexión?). Sin ella no puedo resolver los waypoints de la ruta FPL. Reintenta o importa un CSV de track real.",
     trackModalErr: "no pude importar el track",
     careerToggle: "Mostrar dosis de tu vida aeronáutica",
     careerYears: "Años de carrera",
@@ -2146,6 +2147,7 @@ var LANG = {
     trackModalPlaceholder: "Paste the flight-plan route here (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R\n\n— or a real-track CSV (lat, lon, altitude, time) —",
     trackModalImport: "Import route",
     trackRoutePartial: "Route imported; unresolved fixes (skipped):",
+    trackFixesFail: "Could not download the fix database (offline?). Without it I can't resolve FPL waypoints. Retry, or import a real-track CSV instead.",
     trackModalErr: "could not import the track",
     careerToggle: "Show aeronautical career dose",
     careerYears: "Career years",
@@ -5046,7 +5048,8 @@ function TrackModal(_refTrack) {
       return;
     }
     // Ruta de plan de vuelo (FPL): requiere la base de fixes
-    ensureFixes(function () {
+    ensureFixes(function (err) {
+      if (err) { setErr(t.trackFixesFail); return; }
       var r2 = parseRouteString(txt, orig, dest);
       if (r2.error || !r2.track) { setErr(r2.error || t.trackModalErr); return; }
       if (r2.unresolved && r2.unresolved.length > 0) {
