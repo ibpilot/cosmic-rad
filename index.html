@@ -1959,6 +1959,14 @@ var LANG = {
     trackRoutePartial: "Ruta importada; fixes sin resolver (ignorados):",
     trackFixesFail: "No pude descargar la base de fixes (¿sin conexión?). Sin ella no puedo resolver los waypoints de la ruta FPL. Reintenta o importa un CSV de track real.",
     trackModalErr: "no pude importar el track",
+    calcInfoTitle: "Cómo se calcula la dosis",
+    calcInfoSubtitle: "Con o sin ruta real",
+    calcInfoBtn: "ℹ️ Cálculo",
+    calcInfoNoRoute: "Sin ruta · gran círculo",
+    calcInfoNoRouteBody: "Se traza el camino ortodrómico (círculo máximo) entre origen y destino y se divide en tramos. Para cada tramo se suma la tasa de dosis (µSv/h) según latitud, altitud y ciclo solar (HP), multiplicada por el tiempo de vuelo del tramo. La tasa sale de la tabla real CARI-7A embebida (91 lat × 11 alt × 10 HP), con la altitud del FL elegido.",
+    calcInfoRoute: "Con ruta · FPL o track CSV",
+    calcInfoRouteBody: "La dosis se calcula sobre el camino real, tramo a tramo, con la misma tabla de tasas. Con ruta FPL, los waypoints se resuelven contra la base de fixes (descarga única bajo demanda) y la altitud es la del FL elegido. Con track CSV real se usan los puntos reales (lat, lon, altitud, hora): la altitud del track manda y el FL queda bloqueado. Los huecos de más de 15 min se cubren interpolando y conservando el tiempo real; un hueco de más de 60 min marca el tramo como incompleto.",
+    calcInfoFootnote: "Estimación orientativa basada en CARI-7A (FAA), no dosimetría certificada.",
     careerToggle: "Mostrar dosis de tu vida aeronáutica",
     careerYears: "Años de carrera",
     tabPlanner: "📋 Planificador mensual",
@@ -2180,6 +2188,14 @@ var LANG = {
     trackRoutePartial: "Route imported; unresolved fixes (skipped):",
     trackFixesFail: "Could not download the fix database (offline?). Without it I can't resolve FPL waypoints. Retry, or import a real-track CSV instead.",
     trackModalErr: "could not import the track",
+    calcInfoTitle: "How the dose is calculated",
+    calcInfoSubtitle: "With or without a real route",
+    calcInfoBtn: "ℹ️ Calculation",
+    calcInfoNoRoute: "Without route · great circle",
+    calcInfoNoRouteBody: "The great-circle (orthodromic) path between origin and destination is drawn and split into segments. For each segment, the dose rate (µSv/h) for that latitude, altitude and solar cycle (HP) is multiplied by the segment's flight time. The rate comes from the embedded real CARI-7A table (91 lat × 11 alt × 10 HP), at the altitude of the selected FL.",
+    calcInfoRoute: "With route · FPL or track CSV",
+    calcInfoRouteBody: "The dose is computed along the real path, segment by segment, with the same rate table. With an FPL route, waypoints are resolved against the global fix database (one-time on-demand download) and the altitude is the selected FL. With a real track CSV, the actual points (lat, lon, altitude, time) are used: track altitude takes precedence and FL is locked. Gaps over 15 min are bridged by interpolating and keeping real time; a gap over 60 min marks the leg as incomplete.",
+    calcInfoFootnote: "Orientation estimate based on CARI-7A (FAA), not certified dosimetry.",
     careerToggle: "Show aeronautical career dose",
     careerYears: "Career years",
     tabPlanner: "📋 Monthly planner",
@@ -2871,6 +2887,10 @@ function FlightRow(_ref9) {
   if (!FL_OPTIONS[flIdx]) flIdx = 1; // guard against out-of-range index from imported/corrupted data
   var calc = (valid || hasTrack) ? flightCalc(flight, hpMV) : null;
   var totalUsv = calc ? calc.doseUsv * legs : 0;
+  var _useStateR = useState(false),
+    _useStateR2 = _slicedToArray(_useStateR, 2),
+    showCalc = _useStateR2[0],
+    setShowCalc = _useStateR2[1];
   return /*#__PURE__*/React.createElement("div", {
     style: {
       background: "rgba(255,255,255,0.04)",
@@ -3004,7 +3024,24 @@ function FlightRow(_ref9) {
       padding: "4px 10px",
       alignSelf: "flex-start"
     }
-  }, "\uD83D\uDCF0 ", t.trackBtn), hasTrack ? /*#__PURE__*/React.createElement("button", {
+  }, "\uD83D\uDCF0 ", t.trackBtn), /*#__PURE__*/React.createElement("button", {
+    onClick: function onClick() {
+      return setShowCalc(true);
+    },
+    title: t.calcInfoTitle,
+    style: {
+      background: "rgba(59,158,222,0.12)",
+      border: "1px solid rgba(59,158,222,0.3)",
+      borderRadius: 6,
+      color: "#3b9ede",
+      cursor: "pointer",
+      fontSize: 10.5,
+      fontWeight: 700,
+      padding: "4px 10px",
+      whiteSpace: "nowrap",
+      alignSelf: "flex-start"
+    }
+  }, t.calcInfoBtn), hasTrack ? /*#__PURE__*/React.createElement("button", {
     onClick: function onClick() {
       return _onChange(id, "track", null);
     },
@@ -3055,7 +3092,12 @@ function FlightRow(_ref9) {
       fontSize: 11,
       color: "#e09020"
     }
-  }, t.sameAirportWarn) : null));
+  }, t.sameAirportWarn) : null), showCalc && /*#__PURE__*/React.createElement(CalcInfoModal, {
+    t: t,
+    onClose: function onClose() {
+      return setShowCalc(false);
+    }
+  }));
 }
 
 // ── FlightPair (par ida/vuelta colapsable) ─────────────────────────────────────
@@ -5301,6 +5343,141 @@ function TrackModal(_refTrack) {
       cursor: !text.trim() ? "not-allowed" : "pointer"
     }
   }, t.trackModalImport)));
+}
+// ── CalcInfoModal (cómo se calcula la dosis) ───────────────────────────────────
+function CalcInfoModal(_refCalcInfo) {
+  var onClose = _refCalcInfo.onClose,
+    t = _refCalcInfo.t;
+  var sections = [{
+    icon: "\uD83D\uDCCD",
+    title: t.calcInfoNoRoute,
+    body: t.calcInfoNoRouteBody
+  }, {
+    icon: "\uD83D\uDCF0",
+    title: t.calcInfoRoute,
+    body: t.calcInfoRouteBody
+  }];
+  return /*#__PURE__*/React.createElement("div", {
+    className: "modal-wrap",
+    style: {
+      position: "fixed",
+      inset: 0,
+      zIndex: 1000,
+      background: "rgba(0,0,0,0.7)",
+      display: "flex",
+      alignItems: "flex-end",
+      justifyContent: "center",
+      backdropFilter: "blur(4px)",
+      padding: 0
+    },
+    onClick: function onClick(e) {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "modal-sheet",
+    style: {
+      width: "100%",
+      maxWidth: 500,
+      background: "linear-gradient(180deg,#0d1e2e,#091622)",
+      border: "1px solid rgba(255,255,255,0.1)",
+      borderRadius: "18px 18px 0 0",
+      maxHeight: "88vh",
+      overflowY: "auto",
+      WebkitOverflowScrolling: "touch",
+      padding: "0 0 32px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "center",
+      padding: "12px 0 4px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      background: "rgba(255,255,255,0.2)"
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: "8px 18px 14px"
+    }
+  }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 800,
+      color: "#e8f4fc"
+    }
+  }, "\uD83E\uDDE0 ", t.calcInfoTitle), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 10,
+      color: "#4a6a80",
+      marginTop: 2
+    }
+  }, t.calcInfoSubtitle)), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: "rgba(255,255,255,0.07)",
+      border: "1px solid rgba(255,255,255,0.12)",
+      borderRadius: 8,
+      color: "#6a8fa8",
+      cursor: "pointer",
+      fontSize: 16,
+      padding: "4px 10px",
+      fontWeight: 700
+    }
+  }, "\u2715")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "0 14px"
+    }
+  }, sections.map(function (s, i) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: i,
+      style: {
+        marginBottom: 8,
+        background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.08)",
+        borderRadius: 12,
+        padding: "12px 14px"
+      }
+    }, /*#__PURE__*/React.createElement("div", {
+      style: {
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        marginBottom: 6
+      }
+    }, /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 14,
+        flexShrink: 0
+      }
+    }, s.icon), /*#__PURE__*/React.createElement("span", {
+      style: {
+        fontSize: 12.5,
+        fontWeight: 700,
+        color: "#d0e8f4"
+      }
+    }, s.title)), /*#__PURE__*/React.createElement("div", {
+      style: {
+        fontSize: 12,
+        color: "#90b8cc",
+        lineHeight: 1.7
+      }
+    }, s.body));
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 9.5,
+      color: "#2a4050",
+      textAlign: "center",
+      padding: "12px 16px 0",
+      lineHeight: 1.6
+    }
+  }, t.calcInfoFootnote)));
 }
 // ── InfoModal ─────────────────────────────────────────────────────────────────
 // ── InfoModal ─────────────────────────────────────────────────────────────────
