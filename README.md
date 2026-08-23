@@ -10,7 +10,7 @@ A tool for pilots and cabin crew to estimate cosmic radiation exposure per fligh
 
 - **Monthly flight planner** — add all your sectors for the month, with individual flight level (FL310–FL410) and number of legs per sector
 - **Per-flight FL selector** — fine-tune radiation dose per sector, not just globally
-- **Solar cycle adjustment** — accounts for galactic cosmic ray flux variation (solar minimum / mean / maximum). Currently near Cycle 25 solar maximum (~2025)
+- **Solar cycle adjustment** — real monthly **heliocentric potential** from the FAA (2011–present, auto-updated). Dose rates are interpolated from a precomputed dose grid generated offline with **CARI-7A** (FAA CAMI) — latitude × altitude × heliocentric potential (ICRP 103 effective dose). Manual presets available (solar min/mean/max).
 - **Dose comparisons** — your monthly and annual dose vs. chest X-ray, mammography, CT scan, PET-CT, natural background, and ICRP crew limit (20 mSv/year)
 - **ICRP progress ring** — visual indicator of how much of your annual regulatory limit you've used
 - **Pregnant crew toggle** — dedicated section with ICRP limit for pregnancy (1 mSv total), monthly budget bar, and regulatory references (RD 783/2001, AESA)
@@ -26,7 +26,16 @@ A tool for pilots and cabin crew to estimate cosmic radiation exposure per fligh
 
 ## How it works
 
-Dose estimation is based on the EURADOS generalized altitude/latitude model:
+Dose estimation is based on a **precomputed dose-rate grid generated offline with CARI-7A**
+(FAA Civil Aerospace Medical Institute). The grid covers latitude 0–90°, altitude
+FL260–FL430, and heliocentric potential 300–1200 MV, and is interpolated trilinearly at
+runtime. Flight time is estimated at 830 km/h average ground speed; route effective
+latitude is computed via the great-circle midpoint (Clairaut's formula). The solar state
+uses the **real monthly heliocentric potential** published by the FAA for the flight's
+month (automatic mode), or a manual preset.
+
+If the dose grid is missing (e.g. first load), the app falls back to the previous
+simplified EURADOS altitude/latitude band model:
 
 | Latitude | Dose rate at FL350 (solar neutral) |
 |---|---|
@@ -36,13 +45,9 @@ Dose estimation is based on the EURADOS generalized altitude/latitude model:
 | 45–60° | ~4.8 µSv/h |
 | > 60° (polar) | ~6.0 µSv/h |
 
-**Flight level factors** (relative to FL350):
-- FL310: ×0.82 | FL350: ×1.00 | FL390: ×1.18 | FL410: ×1.30
-
-**Solar cycle factors** (mid/high latitudes):
-- Solar minimum: ×1.18 | Mean: ×1.00 | Solar maximum: ×0.87
-
-Route effective latitude is computed via the great-circle midpoint (Clairaut's formula). Flight time is estimated at 830 km/h average ground speed.
+The grid is regenerated with the real CARI-7A binary by the GitHub Action workflow
+[`.github/workflows/generate-dose-grid.yml`](.github/workflows/generate-dose-grid.yml)
+(`tools/` contains the pipeline).
 
 ---
 
@@ -63,7 +68,9 @@ Route effective latitude is computed via the great-circle midpoint (Clairaut's f
 
 ## Scientific sources
 
-- **EURADOS Report 2004-1** — Cosmic radiation exposure of aircraft crew: compilation of measured and calculated data
+- **CARI-7A (FAA CAMI)** — dose-rate grid: transport of cosmic ray showers (MCNPX 2.7.0), geomagnetic cutoffs, heliocentric-potential modulation. [FAA radiobiology](https://www.faa.gov/data_research/research/med_humanfacs/aeromedical/radiobiology/cari7)
+- **FAA monthly heliocentric potential** — `MV-DATES` file, auto-updated monthly by the pipeline
+- **EURADOS Report 2004-1** — fallback band model
 - **ICRP Publication 103** (2007) — The 2007 Recommendations of the International Commission on Radiological Protection
 - **UNSCEAR 2008** — Sources and Effects of Ionizing Radiation, Annex B (natural radiation sources)
 - **Mewaldt R.A. (2010)** — Galactic cosmic ray composition and energy spectra (solar cycle modulation estimates)
@@ -86,11 +93,11 @@ For official occupational radiation surveillance, consult your company's Occupat
 
 ## Limitations
 
-- Dose rates are generalized by latitude band, not computed from actual atmospheric models
-- Does not account for terrestrial background radiation at altitude (e.g. high-altitude airports like Bogotá or Quito)
+- The dose grid is indexed by absolute latitude with a representative longitude (Europe); routes in other longitudes are approximated
+- Dose rates come from a monthly-average model; **solar particle events (SPEs) are not modeled** — these rare events can temporarily increase dose significantly on polar routes
 - Ground speed is fixed at 830 km/h — actual flight time may differ
-- Solar cycle modulation factors are estimates based on published literature, not real-time solar activity data
-- Solar Particle Events (SPEs / solar flares) are not modeled — these rare events can temporarily increase dose significantly on polar routes
+- The geomagnetic field model in the grid is static (no annual cutoff-rigidity drift)
+- Terrestrial background radiation at altitude (e.g. high-altitude airports like Bogotá or Quito) is not included
 
 ---
 
@@ -104,7 +111,23 @@ cd cosmic-rad
 open index.html
 ```
 
-React 18 and Babel are loaded from CDN. An internet connection is required on first load to fetch the full airport database from OpenFlights. Subsequent visits use the browser cache.
+React 18 and ReactDOM are inlined in the single file (no CDN). An internet connection
+is required on first load to fetch the full airport database from OpenFlights.
+Subsequent visits use the browser cache.
+
+### Dose grid generation (CARI-7A)
+
+The dose-rate grid is generated offline with the real CARI-7A binary (FAA) — see
+`tools/` and `.github/workflows/generate-dose-grid.yml`. To regenerate and embed it:
+
+1. Push the repo and run the **"CARI-7A dose grid"** workflow (manual dispatch) on GitHub.
+   It runs a fidelity self-test, generates the grid in parallel across 10 heliocentric
+   potentials, validates monotonicity, embeds the new `DOSE_GRID` block into
+   `index.html` and commits it.
+2. A monthly schedule refreshes the `HP_MONTHS` heliocentric potentials from the FAA.
+
+While the grid is absent (`DOSE_GRID.data = null`), the app uses the simplified
+EURADOS band model as fallback.
 
 ---
 

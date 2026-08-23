@@ -1,0 +1,143 @@
+name: CARI-7A dose grid
+
+# Genera la rejilla de tasas de dosis con CARI-7A real (FAA CAMI) y la embebe
+# en index.html. También refresca mensualmente el potencial heliocéntrico.
+#
+#  - workflow_dispatch (manual): selftest de fidelidad → rejilla (10 HP en
+#    paralelo) → ensamblado/validación → embed → commit+push.
+#  - schedule (día 1 de cada mes): solo refresca HP_MONTHS desde MV-DATES.L99.
+#
+# El binario Linux de CARI-7A se descarga de la página oficial de la FAA.
+
+on:
+  workflow_dispatch:
+    inputs:
+      regenerate_grid:
+        description: 'Regenerar la rejilla completa (10 niveles HP, ~20-40 min)'
+        type: boolean
+        default: true
+      update_hp_only:
+        description: 'Solo refrescar HP_MONTHS (rápido)'
+        type: boolean
+        default: false
+  schedule:
+    - cron: '23 3 1 * *'   # día 1 de cada mes, 03:23 UTC
+
+permissions:
+  contents: write
+
+concurrency:
+  group: dose-grid
+  cancel-in-progress: true
+
+env:
+  FAA_CARI7A_ZIP: https://www.faa.gov/sites/faa.gov/files/data_research/research/med_humanfacs/aeromedical/cari_7Aexe.zip
+  FAA_MVDATES_ZIP: https://www.faa.gov/sites/faa.gov/files/data_research/research/med_humanfacs/aeromedical/MV-DATES.zip
+  CARI_BIN: "cari7a_4.2.0(intel_linux)"
+
+jobs:
+  selftest:
+    # Autocomprobación: la configuración batch debe reproducir la salida de
+    # referencia oficial (Examples/EXAMPLES.LOC -> EXAMPLES.ANS, tol 5%).
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar runtime Fortran
+        run: sudo apt-get update && sudo apt-get install -y libgfortran5
+      - name: Descargar CARI-7A (FAA)
+        run: curl -sL -o cari7a.zip "$FAA_CARI7A_ZIP" && unzip -q cari7a.zip
+      - name: Selftest de fidelidad
+        run: python3 tools/cari7_generate.py --selftest-only --cari-dir CARI_7A_DVD --binary "$CARI_BIN"
+
+  grid:
+    needs: selftest
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.regenerate_grid == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        hp: [300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Instalar runtime Fortran
+        run: sudo apt-get update && sudo apt-get install -y libgfortran5
+      - name: Descargar CARI-7A (FAA)
+        run: curl -sL -o cari7a.zip "$FAA_CARI7A_ZIP" && unzip -q cari7a.zip
+      - name: Generar + ejecutar CARI-7A (HP ${{ matrix.hp }} MV)
+        run: python3 tools/cari7_generate.py --hp ${{ matrix.hp }} --cari-dir CARI_7A_DVD --binary "$CARI_BIN" --out rates_hp${{ matrix.hp }}.csv
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rates-hp-${{ matrix.hp }}
+          path: rates_hp${{ matrix.hp }}.csv
+
+  assemble:
+    needs: grid
+    if: always() && needs.grid.result == 'success' && !cancelled()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: rates
+      - name: Fusionar CSVs
+        run: |
+          python3 - <<'PY'
+          import csv, glob
+          rows, header = [], None
+          for p in sorted(glob.glob("rates/rates-hp-*/rates_hp*.csv")):
+              with open(p) as f:
+                  r = csv.reader(f)
+                  h = next(r)
+                  if header is None: header = h
+                  assert h == header, (p, h, header)
+                  rows.extend(list(r))
+          with open("rates_all.csv", "w", newline="") as f:
+              w = csv.writer(f)
+              w.writerow(header)
+              w.writerows(rows)
+          print("total puntos:", len(rows))
+          PY
+      - name: Ensamblar rejilla + validar + embeber
+        run: |
+          python3 tools/generate_dose_grid.py --input rates_all.csv \
+            --axes "0:90:1,8.0:13.0:0.5,300:1200:100" --out dose_grid.js
+          python3 tools/embed_dose_grid.py --grid dose_grid.js --index index.html
+      - name: Sanity check de monotonicidad (rejilla embebida)
+        run: |
+          node -e '
+          const fs=require("fs"),vm=require("vm");
+          const html=fs.readFileSync("index.html","utf8");
+          const m=html.match(/<script type="text\/javascript">([\s\S]*?)<\/script>/);
+          const sb={React:{useState:()=>[null,()=>{}],useCallback:f=>f,useRef:()=>({current:null}),useEffect:()=>{},createElement:()=>({})},ReactDOM:{createRoot:()=>({render(){}})},document:{getElementById:()=>({})},atob:s=>Buffer.from(s,"base64").toString("binary"),console};
+          vm.createContext(sb); vm.runInContext(m[1],sb,{filename:"app.js"});
+          const r=e=>vm.runInContext(e,sb);
+          const a=r("doseRateGrid(70,10.668,650)"), b=r("doseRateGrid(10,10.668,650)");
+          const c=r("doseRateGrid(45,12.5,650)"), d=r("doseRateGrid(45,9,650)");
+          const e=r("doseRateGrid(45,10.668,400)"), f=r("doseRateGrid(45,10.668,1100)");
+          if(!(a>b&&c>d&&e>f)){console.error("MONOTONICITY FAIL",a,b,c,d,e,f);process.exit(1);}
+          console.log("monotonicidad OK:",a.toFixed(2),b.toFixed(2),c.toFixed(2),d.toFixed(2),e.toFixed(2),f.toFixed(2));
+          '
+      - name: Commit y push
+        run: |
+          git config user.name "cosmic-rad-bot"
+          git config user.email "cosmic-rad-bot@users.noreply.github.com"
+          git add index.html
+          git diff --cached --quiet || (git commit -m "chore(dose): regenerate CARI-7A effective-dose grid (FAA CAMI)" && git push)
+
+  hp-months:
+    # Refresco mensual del potencial heliocéntrico (MV-DATES.L99 de la FAA).
+    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.update_hp_only == 'true')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Descargar MV-DATES (FAA)
+        run: curl -sL -o mv.zip "$FAA_MVDATES_ZIP" && unzip -q mv.zip
+      - name: Actualizar HP_MONTHS en index.html
+        run: python3 tools/update_hp_months.py --mv-dates MV-DATES.L99 --index index.html --since 2011
+      - name: Commit y push
+        run: |
+          git config user.name "cosmic-rad-bot"
+          git config user.email "cosmic-rad-bot@users.noreply.github.com"
+          git add index.html
+          git diff --cached --quiet || (git commit -m "chore(dose): refresh monthly heliocentric potential (FAA MV-DATES)" && git push)

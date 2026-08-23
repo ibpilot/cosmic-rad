@@ -1557,19 +1557,119 @@ function effectiveLatitude(lat1, lon1, lat2, lon2) {
   var peak = deg(Math.asin(Math.min(1, Math.sqrt(1 - cosMax * cosMax))));
   return (Math.abs(lat1) + peak + Math.abs(lat2)) / 3;
 }
-function calcFlight(orig, dest, flFactor, solarFactor) {
+// ── DOSE_GRID: rejilla de tasas de dosis precomputada (CARI-7A) ───────────────
+// data: Float32LE en base64, orden lat-major → alt → hp, en µSv/h.
+// Generada fuera de línea (pipeline CI/script, ver docs/option1-cari7a-design.md).
+// Si data es null → fallback al modelo de bandas EURADOS (comportamiento previo).
+var DOSE_GRID = {
+  lat: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,52,53,54,55,56,57,58,59,60,61,62,63,64,65,66,67,68,69,70,71,72,73,74,75,76,77,78,79,80,81,82,83,84,85,86,87,88,89,90],
+  alt: [8,8.5,9,9.5,10,10.5,11,11.5,12,12.5,13],
+  hp: [300,400,500,600,700,800,900,1000,1100,1200],
+  data: null // TODO: tabla real CARI-7A (pipeline de generación)
+};
+// Potencial heliocéntrico mensual (FAA, MV). Fuente: página "Heliocentric
+// Potential" de la FAA (radiobiology). Actualizar con cada publicación mensual.
+var HP_MONTHS = {
+    "2011-01": 362,     "2011-02": 357,     "2011-03": 392,     "2011-04": 460,     "2011-05": 420,     "2011-06": 517,     "2011-07": 485,     "2011-08": 477,
+    "2011-09": 483,     "2011-10": 497,     "2011-11": 463,     "2011-12": 423,     "2012-01": 466,     "2012-02": 508,     "2012-03": 593,     "2012-04": 466,
+    "2012-05": 460,     "2012-06": 517,     "2012-07": 635,     "2012-08": 612,     "2012-09": 555,     "2012-10": 546,     "2012-11": 540,     "2012-12": 505,
+    "2013-01": 505,     "2013-02": 485,     "2013-03": 517,     "2013-04": 511,     "2013-05": 622,     "2013-06": 642,     "2013-07": 618,     "2013-08": 599,
+    "2013-09": 577,     "2013-10": 546,     "2013-11": 577,     "2013-12": 622,     "2014-01": 579,     "2014-02": 628,     "2014-03": 590,     "2014-04": 578,
+    "2014-05": 545,     "2014-06": 612,     "2014-07": 586,     "2014-08": 499,     "2014-09": 585,     "2014-10": 565,     "2014-11": 604,     "2014-12": 689,
+    "2015-01": 667,     "2015-02": 668,     "2015-03": 683,     "2015-04": 647,     "2015-05": 596,     "2015-06": 617,     "2015-07": 572,     "2015-08": 570,
+    "2015-09": 568,     "2015-10": 536,     "2015-11": 525,     "2015-12": 530,     "2016-01": 465,     "2016-02": 428,     "2016-03": 418,     "2016-04": 417,
+    "2016-05": 411,     "2016-06": 409,     "2016-07": 424,     "2016-08": 402,     "2016-09": 392,     "2016-10": 368,     "2016-11": 352,     "2016-12": 346,
+    "2017-01": 349,     "2017-02": 319,     "2017-03": 294,     "2017-04": 310,     "2017-05": 306,     "2017-06": 303,     "2017-07": 339,     "2017-08": 375,
+    "2017-09": 398,     "2017-10": 354,     "2017-11": 319,     "2017-12": 329,     "2018-01": 326,     "2018-02": 350,     "2018-03": 339,     "2018-04": 286,
+    "2018-05": 301,     "2018-06": 284,     "2018-07": 293,     "2018-08": 289,     "2018-09": 278,     "2018-10": 263,     "2018-11": 278,     "2018-12": 289,
+    "2019-01": 339,     "2019-02": 310,     "2019-03": 255,     "2019-04": 267,     "2019-05": 284,     "2019-06": 274,     "2019-07": 288,     "2019-08": 292,
+    "2019-09": 274,     "2019-10": 267,     "2019-11": 290,     "2019-12": 296,     "2020-01": 275,     "2020-02": 254,     "2020-03": 253,     "2020-04": 261,
+    "2020-05": 253,     "2020-06": 268,     "2020-07": 272,     "2020-08": 276,     "2020-09": 271,     "2020-10": 272,     "2020-11": 276,     "2020-12": 305,
+    "2021-01": 325,     "2021-02": 374,     "2021-03": 267,     "2021-04": 266,     "2021-05": 267,     "2021-06": 287,     "2021-07": 303,     "2021-08": 293,
+    "2021-09": 292,     "2021-10": 297,     "2021-11": 327,     "2021-12": 321,     "2022-01": 330,     "2022-02": 347,     "2022-03": 335,     "2022-04": 347,
+    "2022-05": 390,     "2022-06": 452,     "2022-07": 493,     "2022-08": 532,     "2022-09": 480,     "2022-10": 439,     "2022-11": 459,     "2022-12": 545,
+    "2023-01": 605,     "2023-02": 642,     "2023-03": 632,     "2023-04": 582,     "2023-05": 609,     "2023-06": 643,     "2023-07": 699,     "2023-08": 770,
+    "2023-09": 781,     "2023-10": 688,     "2023-11": 770,     "2023-12": 818,     "2024-01": 811,     "2024-02": 775,     "2024-03": 757,     "2024-04": 751,
+    "2024-05": 853,     "2024-06": 794,     "2024-07": 733,     "2024-08": 835,     "2024-09": 959,     "2024-10": 1040,     "2024-11": 1032,     "2024-12": 1035,
+    "2025-01": 956,     "2025-02": 903,     "2025-03": 906,     "2025-04": 952,     "2025-05": 918,     "2025-06": 1041,     "2025-07": 978,     "2025-08": 918,
+    "2025-09": 984,     "2025-10": 918,     "2025-11": 1141,     "2025-12": 1090,     "2026-01": 1185,     "2026-02": 1069,     "2026-03": 916,     "2026-04": 880,
+    "2026-05": 681,     "2026-06": 704,
+};
+var _doseF32 = null;
+function ensureDoseGrid() {
+  if (!DOSE_GRID || !DOSE_GRID.data) {
+    _doseF32 = null;
+    return;
+  }
+  if (_doseF32) return;
+  try {
+    var bin = atob(DOSE_GRID.data);
+    var b = new Uint8Array(bin.length);
+    for (var i = 0; i < bin.length; i++) b[i] = bin.charCodeAt(i);
+    _doseF32 = new Float32Array(b.buffer);
+  } catch (e) {
+    _doseF32 = null;
+  }
+}
+// Interpolación trilineal (bilineal lat/alt + lineal HP) sobre la rejilla.
+// Devuelve null si no hay tabla (el llamador usa el fallback EURADOS).
+function doseRateGrid(lat, altKm, hpMV) {
+  ensureDoseGrid();
+  if (!_doseF32 || !DOSE_GRID || !DOSE_GRID.lat || !DOSE_GRID.alt || !DOSE_GRID.hp) return null;
+  var cl = function (x, lo, hi) { return Math.max(lo, Math.min(hi, x)); };
+  var la = DOSE_GRID.lat, al = DOSE_GRID.alt, hp = DOSE_GRID.hp;
+  var nLat = la.length, nAlt = al.length, nHp = hp.length;
+  if (nLat < 2 || nAlt < 2 || nHp < 2) return null;
+  var latC = cl(Math.abs(lat), la[0], la[nLat - 1]);
+  var altC = cl(altKm, al[0], al[nAlt - 1]);
+  var hpC = cl(hpMV, hp[0], hp[nHp - 1]);
+  var li = cl(Math.floor((latC - la[0]) / (la[1] - la[0])), 0, nLat - 2);
+  var ai = cl(Math.floor((altC - al[0]) / (al[1] - al[0])), 0, nAlt - 2);
+  var hi = cl(Math.floor((hpC - hp[0]) / (hp[1] - hp[0])), 0, nHp - 2);
+  var fl = (latC - la[li]) / (la[1] - la[0]);
+  var fa = (altC - al[ai]) / (al[1] - al[0]);
+  var fh = (hpC - hp[hi]) / (hp[1] - hp[0]);
+  var g = function (L, A, H) { return _doseF32[(L * nAlt + A) * nHp + H]; };
+  var lerp = function (a, b, t) { return a + (b - a) * t; };
+  var c000 = g(li, ai, hi), c100 = g(li + 1, ai, hi), c010 = g(li, ai + 1, hi), c110 = g(li + 1, ai + 1, hi);
+  var c001 = g(li, ai, hi + 1), c101 = g(li + 1, ai, hi + 1), c011 = g(li, ai + 1, hi + 1), c111 = g(li + 1, ai + 1, hi + 1);
+  var x00 = lerp(c000, c100, fl), x10 = lerp(c010, c110, fl);
+  var x01 = lerp(c001, c101, fl), x11 = lerp(c011, c111, fl);
+  var y0 = lerp(x00, x10, fa), y1 = lerp(x01, x11, fa);
+  return lerp(y0, y1, fh);
+}
+// Factor solar de respaldo (solo sin rejilla): interpolación por tramos a través
+// de los presets históricos (mín 270→1.18, medio 650→1.00, máx 1050→0.87).
+function solarFactorForHp(hpMV) {
+  if (hpMV == null) return 1.00;
+  var pts = [[270, 1.18], [650, 1.00], [1050, 0.87]];
+  var h = Math.max(pts[0][0], Math.min(pts[2][0], hpMV));
+  for (var i = 0; i < pts.length - 1; i++) {
+    if (h <= pts[i + 1][0]) {
+      var t = (h - pts[i][0]) / (pts[i + 1][0] - pts[i][0]);
+      return pts[i][1] + (pts[i + 1][1] - pts[i][1]) * t;
+    }
+  }
+  return pts[2][1];
+}
+function calcFlight(orig, dest, flIdx, hpMV) {
   var A = activeDB[orig],
     B = activeDB[dest];
   if (!A || !B) return null;
+  var fi = flIdx == null ? 1 : flIdx;
+  if (!FL_OPTIONS[fi]) fi = 1;
   var distKm = gcDistance(A.lat, A.lon, B.lat, B.lon);
   var timeH = distKm / 830;
   var effLat = effectiveLatitude(A.lat, A.lon, B.lat, B.lon);
-  var doseUsv = getDoseRate(effLat) * flFactor * solarFactor * timeH;
+  var rateUsvh = doseRateGrid(effLat, FL_OPTIONS[fi].altKm, hpMV);
+  if (rateUsvh == null) rateUsvh = getDoseRate(effLat) * FL_OPTIONS[fi].factor * solarFactorForHp(hpMV);
+  var doseUsv = rateUsvh * timeH;
   return {
     distKm: Math.round(distKm),
     timeH: timeH,
     doseUsv: doseUsv,
-    effLat: effLat
+    effLat: effLat,
+    rateUsvh: rateUsvh
   };
 }
 
@@ -1596,12 +1696,14 @@ var LANG = {
     dbLocal: "📡 Sin conexión · base local activa",
     flightLevel: "Nivel de vuelo",
     solarCycle: "Ciclo solar",
+    solarAuto: "Automático",
+    solarAutoSub: "HP mensual FAA",
     solarMin: "Mínimo ☁️",
-    solarMinSub: "+18% GCR",
+    solarMinSub: "HP ~270",
     solarMid: "Medio",
-    solarMidSub: "promedio",
+    solarMidSub: "HP ~650",
     solarMax: "Máximo ☀️",
-    solarMaxSub: "ahora ~2025",
+    solarMaxSub: "HP ~1050",
     careerToggle: "Mostrar dosis de tu vida aeronáutica",
     careerYears: "Años de carrera",
     tabPlanner: "📋 Planificador mensual",
@@ -1802,12 +1904,14 @@ var LANG = {
     dbLocal: "📡 Offline · local database active",
     flightLevel: "Flight level",
     solarCycle: "Solar cycle",
+    solarAuto: "Automatic",
+    solarAutoSub: "monthly FAA HP",
     solarMin: "Minimum ☁️",
-    solarMinSub: "+18% GCR",
+    solarMinSub: "HP ~270",
     solarMid: "Average",
-    solarMidSub: "mean",
+    solarMidSub: "HP ~650",
     solarMax: "Maximum ☀️",
-    solarMaxSub: "now ~2025",
+    solarMaxSub: "HP ~1050",
     careerToggle: "Show aeronautical career dose",
     careerYears: "Career years",
     tabPlanner: "📋 Monthly planner",
@@ -2031,31 +2135,43 @@ function useLang() {
 var FL_OPTIONS = [{
   label: "FL310",
   sublabel: "-18%",
-  factor: 0.82
+  factor: 0.82,
+  altKm: 9.449
 }, {
   label: "FL350",
   sublabel: "base",
-  factor: 1.00
+  factor: 1.00,
+  altKm: 10.668
 }, {
   label: "FL390",
   sublabel: "+18%",
-  factor: 1.18
+  factor: 1.18,
+  altKm: 11.887
 }, {
   label: "FL410",
   sublabel: "+30%",
-  factor: 1.30
+  factor: 1.30,
+  altKm: 12.497
 }];
 var SOLAR_OPTIONS = [{
+  label: "Automático",
+  sublabel: "FAA mensual",
+  hp: null,
+  factor: 1.00
+}, {
   label: "Mínimo ☁️",
-  sublabel: "+18% GCR",
+  sublabel: "HP ~270",
+  hp: 270,
   factor: 1.18
 }, {
   label: "Medio",
-  sublabel: "promedio",
+  sublabel: "HP ~650",
+  hp: 650,
   factor: 1.00
 }, {
   label: "Máximo ☀️",
-  sublabel: "ahora ~2025",
+  sublabel: "HP ~1050",
+  hp: 1050,
   factor: 0.87
 }];
 var CARD = {
@@ -2455,7 +2571,7 @@ function Chip(_ref8) {
 // ── FlightRow ─────────────────────────────────────────────────────────────────
 function FlightRow(_ref9) {
   var flight = _ref9.flight,
-    solarFactor = _ref9.solarFactor,
+    hpMV = _ref9.hpMV,
     _onChange = _ref9.onChange,
     onRemove = _ref9.onRemove,
     onAddReturn = _ref9.onAddReturn,
@@ -2468,8 +2584,7 @@ function FlightRow(_ref9) {
     flIdx = _flight$flIdx === void 0 ? 1 : _flight$flIdx;
   var valid = orig && dest && orig !== dest && activeDB[orig] && activeDB[dest];
   if (!FL_OPTIONS[flIdx]) flIdx = 1; // guard against out-of-range index from imported/corrupted data
-  var flFactor = FL_OPTIONS[flIdx].factor;
-  var calc = valid ? calcFlight(orig, dest, flFactor, solarFactor) : null;
+  var calc = valid ? calcFlight(orig, dest, flIdx, hpMV) : null;
   var totalUsv = calc ? calc.doseUsv * legs : 0;
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2621,7 +2736,7 @@ function FlightRow(_ref9) {
 function FlightPair(_ref10) {
   var ida = _ref10.ida,
     vuelta = _ref10.vuelta,
-    solarFactor = _ref10.solarFactor,
+    hpMV = _ref10.hpMV,
     onChange = _ref10.onChange,
     onRemove = _ref10.onRemove,
     onAddReturn = _ref10.onAddReturn,
@@ -2646,7 +2761,7 @@ function FlightPair(_ref10) {
     if (!FL_OPTIONS[fi]) fi = 1;
     var legs = fl.legs || 1;
     var valid = fl.orig && fl.dest && fl.orig !== fl.dest && activeDB[fl.orig] && activeDB[fl.dest];
-    var c = valid ? calcFlight(fl.orig, fl.dest, FL_OPTIONS[fi].factor, solarFactor) : null;
+    var c = valid ? calcFlight(fl.orig, fl.dest, fi, hpMV) : null;
     return {
       fi: fi,
       dose: c ? c.doseUsv * legs : 0,
@@ -2747,7 +2862,7 @@ function FlightPair(_ref10) {
   }, "▲ min")), /*#__PURE__*/React.createElement(FlightRow, {
     key: ida.id,
     flight: ida,
-    solarFactor: solarFactor,
+    hpMV: hpMV,
     t: t,
     onChange: onChange,
     onRemove: onRemove,
@@ -2755,7 +2870,7 @@ function FlightPair(_ref10) {
   }), /*#__PURE__*/React.createElement(FlightRow, {
     key: vuelta.id,
     flight: vuelta,
-    solarFactor: solarFactor,
+    hpMV: hpMV,
     t: t,
     onChange: onChange,
     onRemove: onRemove,
@@ -2770,17 +2885,21 @@ function App() {
     toggleLang = _useLang.toggleLang,
     t = _useLang.t;
   var SOLAR_OPTIONS_T = [{
+    label: t.solarAuto,
+    sublabel: t.solarAutoSub,
+    hp: null
+  }, {
     label: t.solarMin,
     sublabel: t.solarMinSub,
-    factor: 1.18
+    hp: 270
   }, {
     label: t.solarMid,
     sublabel: t.solarMidSub,
-    factor: 1.00
+    hp: 650
   }, {
     label: t.solarMax,
     sublabel: t.solarMaxSub,
-    factor: 0.87
+    hp: 1050
   }];
   var _useState11 = useState("planner"),
     _useState12 = _slicedToArray(_useState11, 2),
@@ -2812,7 +2931,7 @@ function App() {
     _useState20 = _slicedToArray(_useState19, 2),
     dbStatus = _useState20[0],
     setDbStatus = _useState20[1];
-  var _useState21 = useState(2),
+  var _useState21 = useState(0),
     _useState22 = _slicedToArray(_useState21, 2),
     solarIdx = _useState22[0],
     setSolarIdx = _useState22[1];
@@ -3010,7 +3129,13 @@ function App() {
     _useState38 = _slicedToArray(_useState37, 2),
     singleFlIdx = _useState38[0],
     setSingleFlIdx = _useState38[1];
+  // Solar: modo Automático (por defecto) usa el potencial heliocéntrico real del
+  // mes (FAA). Presets manuales (mín/medio/máx) fijan un HP concreto.
+  var hpMV = SOLAR_OPTIONS[solarIdx].hp != null ? SOLAR_OPTIONS[solarIdx].hp : (HP_MONTHS[currentMonth] != null ? HP_MONTHS[currentMonth] : 650);
   var solarFactor = SOLAR_OPTIONS[solarIdx].factor;
+  var solarLabel = SOLAR_OPTIONS_T[solarIdx].hp == null
+    ? SOLAR_OPTIONS_T[solarIdx].label + " · HP " + hpMV + " (" + currentMonth + ")"
+    : SOLAR_OPTIONS_T[solarIdx].label + " · HP " + hpMV;
   var newPairIdsRef = useRef(new Set());
   var addFlight = function addFlight() {
     return setFlights(function (f) {
@@ -3066,13 +3191,13 @@ function App() {
   });
   var monthlyUsv = validFlights.reduce(function (s, f) {
     var _f$flIdx;
-    var ff = FL_OPTIONS[(_f$flIdx = f.flIdx) !== null && _f$flIdx !== void 0 ? _f$flIdx : 1].factor;
-    return s + calcFlight(f.orig, f.dest, ff, solarFactor).doseUsv * f.legs;
+    var fi = (_f$flIdx = f.flIdx) !== null && _f$flIdx !== void 0 ? _f$flIdx : 1;
+    return s + calcFlight(f.orig, f.dest, fi, hpMV).doseUsv * f.legs;
   }, 0);
   var monthlyHours = validFlights.reduce(function (s, f) {
     var _f$flIdx2;
-    var ff = FL_OPTIONS[(_f$flIdx2 = f.flIdx) !== null && _f$flIdx2 !== void 0 ? _f$flIdx2 : 1].factor;
-    return s + calcFlight(f.orig, f.dest, ff, solarFactor).timeH * f.legs;
+    var fi = (_f$flIdx2 = f.flIdx) !== null && _f$flIdx2 !== void 0 ? _f$flIdx2 : 1;
+    return s + calcFlight(f.orig, f.dest, fi, hpMV).timeH * f.legs;
   }, 0);
   // Dynamic annual estimate: average dose across all recorded months of current year × 12
   var currentYear = currentMonth.split("-")[0];
@@ -3083,9 +3208,9 @@ function App() {
     if (!key.startsWith(currentYear) || key === currentMonth) return;
     if (!Array.isArray(mf) || mf.length === 0) return;
     var dose = mf.reduce(function(s, f) {
-      var ff = FL_OPTIONS[f.flIdx != null ? f.flIdx : 1].factor;
+      var fi = f.flIdx != null ? f.flIdx : 1;
       if (!activeDB[f.orig] || !activeDB[f.dest] || f.orig === f.dest) return s;
-      return s + calcFlight(f.orig, f.dest, ff, solarFactor).doseUsv * (f.legs || 1);
+      return s + calcFlight(f.orig, f.dest, fi, hpMV).doseUsv * (f.legs || 1);
     }, 0);
     if (dose > 0) { pastMonthsTotal += dose; pastMonthsCount++; computedMonthKeys.push(key); }
   });
@@ -3107,7 +3232,7 @@ function App() {
   var pctIcrp = annualUsv / 20000 * 100;
   var nonFlyer = 2400;
   var barMax = Math.max(annualUsv + nonFlyer, annualUsv, nonFlyer, 20000, 14000) * 1.08;
-  var singleCalc = sOrig && sDest && sOrig !== sDest && activeDB[sOrig] && activeDB[sDest] ? calcFlight(sOrig, sDest, FL_OPTIONS[singleFlIdx].factor, solarFactor) : null;
+  var singleCalc = sOrig && sDest && sOrig !== sDest && activeDB[sOrig] && activeDB[sDest] ? calcFlight(sOrig, sDest, singleFlIdx, hpMV) : null;
   return /*#__PURE__*/React.createElement("div", {
     style: {
       minHeight: "100vh",
@@ -3548,7 +3673,7 @@ function App() {
             key: "pair-" + f.pairId,
             ida: f,
             vuelta: mate,
-            solarFactor: solarFactor,
+            hpMV: hpMV,
             t: t,
             onChange: updateFlight,
             onRemove: removeFlight,
@@ -3562,7 +3687,7 @@ function App() {
       els.push(/*#__PURE__*/React.createElement(FlightRow, {
         key: f.id,
         flight: f,
-        solarFactor: solarFactor,
+        hpMV: hpMV,
         t: t,
         onChange: updateFlight,
         onRemove: removeFlight,
@@ -3833,7 +3958,8 @@ function App() {
     }, h);
   }))), /*#__PURE__*/React.createElement("tbody", null, validFlights.map(function (f) {
     var _f$flIdx2;
-    var c = calcFlight(f.orig, f.dest, FL_OPTIONS[(_f$flIdx2 = f.flIdx) !== null && _f$flIdx2 !== void 0 ? _f$flIdx2 : 1].factor, solarFactor);
+    var fi = (_f$flIdx2 = f.flIdx) !== null && _f$flIdx2 !== void 0 ? _f$flIdx2 : 1;
+    var c = calcFlight(f.orig, f.dest, fi, hpMV);
     return /*#__PURE__*/React.createElement("tr", {
       key: f.id,
       style: {
@@ -3997,8 +4123,9 @@ function App() {
   }, t.flVisualTitle), FL_OPTIONS.map(function (fl, i) {
     var baseRef = 3.5;
     var fl390Factor = FL_OPTIONS[2].factor; // FL390 = reference
-    var rate = (baseRef * fl.factor * SOLAR_OPTIONS[solarIdx].factor).toFixed(2);
-    var maxRate = baseRef * FL_OPTIONS[FL_OPTIONS.length - 1].factor * SOLAR_OPTIONS[solarIdx].factor;
+    var flRate = doseRateGrid(40, fl.altKm, hpMV);
+    var rate = flRate != null ? flRate.toFixed(2) : (baseRef * fl.factor * solarFactor).toFixed(2);
+    var maxRate = flRate != null ? doseRateGrid(40, FL_OPTIONS[FL_OPTIONS.length - 1].altKm, hpMV) : baseRef * FL_OPTIONS[FL_OPTIONS.length - 1].factor * solarFactor;
     var pct = rate / maxRate * 100;
     var isRef = i === 2; // FL390 is reference
     var diffVsFL390 = ((fl.factor / fl390Factor - 1) * 100).toFixed(0);
@@ -4087,9 +4214,9 @@ function App() {
     onClick: function onClick() {
       return setPdfReportHtml(buildPdfHtml({
         validFlights: validFlights,
-        solarFactor: solarFactor,
+        hpMV: hpMV,
         t: t,
-        solarLabel: SOLAR_OPTIONS_T[solarIdx].label,
+        solarLabel: solarLabel,
         monthlyUsv: monthlyUsv,
         annualUsv: annualUsv,
         nonFlyer: nonFlyer,
@@ -4177,7 +4304,7 @@ function App() {
     v: fmtTime(singleCalc.timeH)
   }, {
     l: t.singleEffRate,
-    v: "".concat((getDoseRate(singleCalc.effLat) * FL_OPTIONS[singleFlIdx].factor * solarFactor).toFixed(2), " \xB5Sv/h"),
+    v: "".concat(singleCalc.rateUsvh.toFixed(2), " \xB5Sv/h"),
     c: "#3b9ede"
   }].map(function (s) {
     return /*#__PURE__*/React.createElement("div", {
@@ -4477,7 +4604,7 @@ function OnboardingModal(_ref12) {
 // ── PDF Export ────────────────────────────────────────────────────────────────
 function buildPdfHtml(_ref13) {
   var validFlights = _ref13.validFlights,
-    solarFactor = _ref13.solarFactor,
+    hpMV = _ref13.hpMV,
     solarLabel = _ref13.solarLabel,
     t = _ref13.t,
     monthlyUsv = _ref13.monthlyUsv,
@@ -4505,8 +4632,8 @@ function buildPdfHtml(_ref13) {
   });
   var rows = validFlights.map(function (f) {
     var _f$flIdx3, _activeDB$f$orig, _activeDB$f$dest, _f$flIdx4;
-    var ff = FL_OPTIONS[(_f$flIdx3 = f.flIdx) !== null && _f$flIdx3 !== void 0 ? _f$flIdx3 : 1].factor;
-    var c = calcFlight(f.orig, f.dest, ff, solarFactor);
+    var fi = (_f$flIdx3 = f.flIdx) !== null && _f$flIdx3 !== void 0 ? _f$flIdx3 : 1;
+    var c = calcFlight(f.orig, f.dest, fi, hpMV);
     var total = c.doseUsv * f.legs;
     return "\n      <tr>\n        <td>".concat(esc(f.orig), " \u2192 ").concat(esc(f.dest), "</td>\n        <td>").concat(esc(((_activeDB$f$orig = activeDB[f.orig]) === null || _activeDB$f$orig === void 0 ? void 0 : _activeDB$f$orig.name) || ""), " \u2192 ").concat(esc(((_activeDB$f$dest = activeDB[f.dest]) === null || _activeDB$f$dest === void 0 ? void 0 : _activeDB$f$dest.name) || ""), "</td>\n        <td class=\"num\">").concat(FL_OPTIONS[(_f$flIdx4 = f.flIdx) !== null && _f$flIdx4 !== void 0 ? _f$flIdx4 : 1].label, "</td>\n        <td class=\"num\">").concat((c.distKm / 1000).toFixed(1), " km</td>\n        <td class=\"num\">").concat(Math.floor(c.timeH), "h ").concat(Math.round(c.timeH % 1 * 60), "m</td>\n        <td class=\"num\">").concat(fmtDose(c.doseUsv), "</td>\n        <td class=\"num\">\xD7 ").concat(f.legs, "</td>\n        <td class=\"num bold\">").concat(fmtDose(total), "</td>\n      </tr>");
   }).join("");
@@ -4515,12 +4642,12 @@ function buildPdfHtml(_ref13) {
     return s + f.legs;
   }, 0), " ").concat(t.pdfSectors, "</span>\n    <span class=\"param\">\uD83D\uDCCF ").concat((validFlights.reduce(function (s, f) {
     var _f$flIdx5;
-    var c = calcFlight(f.orig, f.dest, FL_OPTIONS[(_f$flIdx5 = f.flIdx) !== null && _f$flIdx5 !== void 0 ? _f$flIdx5 : 1].factor, solarFactor);
+    var c = calcFlight(f.orig, f.dest, (_f$flIdx5 = f.flIdx) !== null && _f$flIdx5 !== void 0 ? _f$flIdx5 : 1, hpMV);
     return s + c.distKm * f.legs;
   }, 0) / 1000).toFixed(0), " ").concat(t.pdfKmTotal, "</span>\n    <span class=\"param\">\u23F1 ").concat(function () {
     var h = validFlights.reduce(function (s, f) {
       var _f$flIdx6;
-      var c = calcFlight(f.orig, f.dest, FL_OPTIONS[(_f$flIdx6 = f.flIdx) !== null && _f$flIdx6 !== void 0 ? _f$flIdx6 : 1].factor, solarFactor);
+      var c = calcFlight(f.orig, f.dest, (_f$flIdx6 = f.flIdx) !== null && _f$flIdx6 !== void 0 ? _f$flIdx6 : 1, hpMV);
       return s + c.timeH * f.legs;
     }, 0);
     return "".concat(Math.floor(h), "h ").concat(Math.round(h % 1 * 60), "m");
