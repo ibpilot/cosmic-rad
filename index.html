@@ -1675,92 +1675,11 @@ function calcFlight(orig, dest, flIdx, hpMV) {
   };
 }
 
-// ── Track real de vuelo (precisión máxima, opcional) ─────────────────────────
-// parseFlightCsv(text): parsea un CSV de track (FR24, OpenSky o similar).
-// Devuelve { track|null, mode:"time"|"waypoints", error|null }.
-//   track: [[tMin, lat, lon, altKm], ...]  (tMin = minutos desde el inicio; null sin hora)
-// Columnas detectadas por nombre difuso; altitud pies/metros/km por magnitud;
-// adelgazado a ~1 punto cada 120 s; horas: ISO, "YYYY-MM-DD HH:MM:SS", "HH:MM:SS" o epoch.
-function parseFlightCsv(text) {
-  if (!text || !text.trim()) return { track: null, mode: null, error: "el archivo está vacío" };
-  try {
-    var lines = text.split(/\r?\n/);
-    var hdrIdx = -1, cols = null;
-    for (var i = 0; i < Math.min(lines.length, 30); i++) {
-      var c = lines[i].split(",").map(function (s) { return s.replace(/^"|"$/g, "").trim().toLowerCase(); });
-      var hasLat = c.some(function (x) { return x.indexOf("lat") >= 0; });
-      var hasLon = c.some(function (x) { return x.indexOf("lon") >= 0 || x.indexOf("lng") >= 0; });
-      if (hasLat && hasLon) { hdrIdx = i; cols = c; break; }
-    }
-    if (hdrIdx < 0) return { track: null, mode: null, error: "no encontré columnas de lat/lon en la cabecera" };
-    var find = function (keys) {
-      for (var k = 0; k < cols.length; k++) for (var j = 0; j < keys.length; j++) if (cols[k].indexOf(keys[j]) >= 0) return k;
-      return -1;
-    };
-    var iLat = find(["lat"]), iLon = find(["lon", "lng", "long"]);
-    var iAlt = find(["alt"]), iTime = find(["utc", "time", "timestamp", "date"]);
-    if (iLat < 0 || iLon < 0) return { track: null, mode: null, error: "no encontré columnas de latitud/longitud" };
-    var altVals = [];
-    var raw = [];
-    for (var r = hdrIdx + 1; r < lines.length; r++) {
-      var parts = lines[r].split(",");
-      if (parts.length < 2) continue;
-      var lat = parseFloat(parts[iLat].replace(/"/g, "")), lon = parseFloat(parts[iLon].replace(/"/g, ""));
-      if (isNaN(lat) || isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
-      var altRaw = iAlt >= 0 ? parseFloat((parts[iAlt] || "").replace(/"/g, "")) : NaN;
-      raw.push({ lat: lat, lon: lon, altRaw: altRaw, tRaw: iTime >= 0 ? parts[iTime].replace(/"/g, "").trim() : null });
-      if (!isNaN(altRaw) && altRaw > 0) altVals.push(altRaw);
-    }
-    if (raw.length < 2) return { track: null, mode: null, error: "menos de 2 puntos válidos en el archivo" };
-    // unidad de altitud por magnitud (pies / metros / km): el máximo distingue
-    // pies (crucero 30-45k ft) de metros (crucero 7-14 km)
-    var maxAlt = 0;
-    for (var ai2 = 0; ai2 < altVals.length; ai2++) if (altVals[ai2] > maxAlt) maxAlt = altVals[ai2];
-    var altFactor = 1;
-    if (!isNaN(maxAlt) && maxAlt > 20000) altFactor = 1 / 3280.84; // pies
-    else if (!isNaN(maxAlt) && maxAlt > 100) altFactor = 1 / 1000; // metros
-    // tiempo: epoch/ISO → segundos desde el inicio; "HH:MM:SS" → segundos de día
-    var hasTime = raw.some(function (p) { return p.tRaw != null && p.tRaw !== ""; });
-    var secs = null;
-    if (hasTime) {
-      secs = raw.map(function (p) {
-        if (p.tRaw == null) return null;
-        var t = p.tRaw;
-        if (/^\d{9,}$/.test(t)) return parseInt(t, 10);
-        if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(t)) {
-          var hm = t.split(":").map(Number);
-          return hm[0] * 3600 + hm[1] * 60 + (hm[2] || 0);
-        }
-        var d = Date.parse(t.replace(" ", "T"));
-        return isNaN(d) ? null : d / 1000;
-      });
-      var firstT = null;
-      for (var q = 0; q < secs.length; q++) if (secs[q] != null) { firstT = secs[q]; break; }
-      if (firstT == null) hasTime = false;
-    }
-    // construir puntos + adelgazado (>=120 s) en modo tiempo; completo en modo waypoints
-    var pts = [];
-    for (var s = 0; s < raw.length; s++) {
-      var p = raw[s];
-      var altKm = isNaN(p.altRaw) ? 10.668 : p.altRaw * altFactor;
-      pts.push({ t: hasTime && secs[s] != null ? (secs[s] - firstT) / 60 : null, lat: p.lat, lon: p.lon, altKm: altKm });
-    }
-    var thin = [pts[0]];
-    for (var u = 1; u < pts.length; u++) {
-      if (!hasTime || pts[u].t == null || pts[u].t - thin[thin.length - 1].t >= 2) thin.push(pts[u]);
-    }
-    if (thin[thin.length - 1] !== pts[pts.length - 1]) thin.push(pts[pts.length - 1]);
-    var track = thin.map(function (p) { return [p.t, Math.round(p.lat * 1e4) / 1e4, Math.round(p.lon * 1e4) / 1e4, Math.round(p.altKm * 100) / 100]; });
-    return { track: track, mode: hasTime ? "time" : "waypoints", error: null };
-  } catch (e) {
-    return { track: null, mode: null, error: "no pude leer el CSV: " + e.message };
-  }
-}
-// calcTrack(track, hpMV, altKm): dosis integrada sobre el track real.
-// Σ doseRate(lat, alt, HP) × Δt; huecos >15 min se cubren con sub-puntos
-// interpolados (gran círculo aprox.) conservando el tiempo real; hueco >60 min
-// marca incomplete. Sin hora → dist/830 por tramo y altitud = altKm (el FL del
-// vuelo) si se pasa; con hora (track CSV) la altitud real del track manda.
+// ── Track de vuelo (ruta FPL resuelta en waypoints) ───────────────────────────
+// calcTrack(track, hpMV, altKm): dosis integrada sobre el track.
+// Σ doseRate(lat, alt, HP) × Δt; sin hora → dist/830 por tramo y altitud =
+// altKm (el FL del vuelo) si se pasa; con hora la altitud del punto manda
+// (compatibilidad con tracks guardados anteriormente).
 function calcTrack(track, hpMV, altKm) {
   if (!track || track.length < 2) return null;
   var hasTime = track[0][0] != null;
@@ -1802,7 +1721,7 @@ function calcTrack(track, hpMV, altKm) {
   }
   return { distKm: Math.round(distKm), timeH: timeH, doseUsv: doseUsv, effLat: null, rateUsvh: timeH > 0 ? doseUsv / timeH : 0, nPts: track.length, incomplete: incomplete };
 }
-// flightCalc(f, hpMV): usa el track real si existe (≥2 pts), si no el gran círculo.
+// flightCalc(f, hpMV): usa el track de la ruta si existe (≥2 pts), si no el gran círculo.
 function flightCalc(f, hpMV) {
   if (f && Array.isArray(f.track) && f.track.length >= 2) {
     var fi = f.flIdx != null ? f.flIdx : 1;
@@ -1812,7 +1731,7 @@ function flightCalc(f, hpMV) {
     var hasSteps = Array.isArray(f.steps) && f.steps.length > 0;
     if (hasSteps) return calcTrack(f.track, hpMV, null);
     // Ruta FPL (waypoints, sin hora): la altitud la manda el FL elegido.
-    // Track CSV (con hora): calcTrack usa la altitud real e ignora altKm.
+    // Tracks con hora guardados anteriormente: calcTrack usa la altitud del punto.
     return calcTrack(f.track, hpMV, FL_OPTIONS[fi].altKm);
   }
   var fi2 = f && f.flIdx != null ? f.flIdx : 1;
@@ -1999,28 +1918,26 @@ var LANG = {
     solarMidSub: "HP ~650",
     solarMax: "Máximo ☀️",
     solarMaxSub: "HP ~1050",
-    trackBtn: "Importar ruta (CSV)",
-    trackBadge: "track real",
+    trackBtn: "Importar ruta",
+    trackBadge: "ruta",
     trackIncomplete: "incompleto",
-    trackModalTitle: "Ruta real del vuelo",
-    trackModalDesc: "Pega la ruta del plan de vuelo (formato FPL: KJFK31L.JFK5.BDR..MAD..HFD…) o sube un CSV de track real. La ruta FPL se resuelve con la base de fixes (descarga única bajo demanda) y se calcula la dosis sobre el camino real; los fixes sin resolver se ignoran. Origen y destino se rellenan solos; con ruta FPL puedes elegir el nivel de vuelo. Opcional: pega los steps de nivel del plan en el campo de abajo (F370 4730N04000W/F330 45N020W/…) — se aplican por tramo y el selector de FL se bloquea.",
-    trackModalFile: "Elegir fichero CSV",
-    trackModalPlaceholder: "Pega aquí la ruta del plan de vuelo (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R\n\n— o un CSV de track real (lat, lon, altitud, hora) —",
+    trackModalTitle: "Ruta del vuelo",
+    trackModalDesc: "Pega la ruta del plan de vuelo (formato FPL: KJFK31L.JFK5.BDR..MAD..HFD…). La ruta se resuelve con la base de fixes (descarga única bajo demanda) y se calcula la dosis sobre el camino real; los fixes sin resolver se ignoran. Origen y destino se rellenan solos. Opcional: pega los steps de nivel del plan en el campo de abajo (F370 4730N04000W/F330 45N020W/…) — se aplican por tramo y el selector de FL se bloquea.",
+    trackModalPlaceholder: "Pega aquí la ruta del plan de vuelo (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R",
     trackModalImport: "Importar ruta",
     trackRoutePartial: "Ruta importada; fixes sin resolver (ignorados):",
     trackStepsDetected: "Steps de FL detectados:",
     trackStepsLabel: "Steps de nivel (opcional)",
     trackStepsPlaceholder: "F370 4730N04000W/F330 45N020W/F390 BANAL/F410…",
-    trackStepsIgnoredCsv: "Los steps se ignoran con track CSV real (la altitud real del track manda).",
-    trackFixesFail: "No pude descargar la base de fixes (¿sin conexión?). Sin ella no puedo resolver los waypoints de la ruta FPL. Reintenta o importa un CSV de track real.",
-    trackModalErr: "no pude importar el track",
+    trackFixesFail: "No pude descargar la base de fixes (¿sin conexión?). Sin ella no puedo resolver los waypoints de la ruta FPL. Reintenta más tarde.",
+    trackModalErr: "no pude importar la ruta",
     calcInfoTitle: "Cómo se calcula la dosis",
     calcInfoSubtitle: "Con o sin ruta real",
     calcInfoBtn: "ℹ️ Cálculo",
     calcInfoNoRoute: "Sin ruta · gran círculo",
     calcInfoNoRouteBody: "Se traza el camino ortodrómico (círculo máximo) entre origen y destino y se divide en tramos. Para cada tramo se suma la tasa de dosis (µSv/h) según latitud, altitud y ciclo solar (HP), multiplicada por el tiempo de vuelo del tramo. La tasa sale de la tabla real CARI-7A embebida (91 lat × 11 alt × 10 HP), con la altitud del FL elegido.",
-    calcInfoRoute: "Con ruta · FPL o track CSV",
-    calcInfoRouteBody: "La dosis se calcula sobre el camino real, tramo a tramo, con la misma tabla de tasas. Con ruta FPL, los waypoints se resuelven contra la base de fixes (descarga única bajo demanda) y la altitud es la del FL elegido. Con track CSV real se usan los puntos reales (lat, lon, altitud, hora): la altitud del track manda y el FL queda bloqueado. Los huecos de más de 15 min se cubren interpolando y conservando el tiempo real; un hueco de más de 60 min marca el tramo como incompleto.",
+    calcInfoRoute: "Con ruta · FPL o steps de nivel",
+    calcInfoRouteBody: "La dosis se calcula sobre el camino real, tramo a tramo, con la misma tabla de tasas. Los waypoints de la ruta FPL se resuelven contra la base de fixes (descarga única bajo demanda). La altitud de cada tramo es la del FL elegido, o la de los steps de nivel del plan si los has pegado (se aplican por tramo y el selector de FL se bloquea).",
     calcInfoFootnote: "Estimación orientativa basada en CARI-7A (FAA), no dosimetría certificada.",
     careerToggle: "Mostrar dosis de tu vida aeronáutica",
     careerYears: "Años de carrera",
@@ -2232,28 +2149,26 @@ var LANG = {
     solarMidSub: "HP ~650",
     solarMax: "Maximum ☀️",
     solarMaxSub: "HP ~1050",
-    trackBtn: "Import route (CSV)",
-    trackBadge: "real track",
+    trackBtn: "Import route",
+    trackBadge: "route",
     trackIncomplete: "incomplete",
-    trackModalTitle: "Real flight route",
-    trackModalDesc: "Paste the flight-plan route (FPL format: KJFK31L.JFK5.BDR..MAD..HFD…) or upload a real-track CSV. The FPL route is resolved with the fix database (one-time on-demand download) and the dose is calculated over the real path; unresolved fixes are skipped. Origin and destination are filled in automatically; with an FPL route you can still pick the flight level. Optional: paste the plan's level steps in the field below (F370 4730N04000W/F330 45N020W/…) — they are applied per segment and the FL selector is locked.",
-    trackModalFile: "Choose CSV file",
-    trackModalPlaceholder: "Paste the flight-plan route here (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R\n\n— or a real-track CSV (lat, lon, altitude, time) —",
+    trackModalTitle: "Flight route",
+    trackModalDesc: "Paste the flight-plan route (FPL format: KJFK31L.JFK5.BDR..MAD..HFD…). The route is resolved with the fix database (one-time on-demand download) and the dose is calculated over the real path; unresolved fixes are skipped. Origin and destination are filled in automatically. Optional: paste the plan's level steps in the field below (F370 4730N04000W/F330 45N020W/…) — they are applied per segment and the FL selector is locked.",
+    trackModalPlaceholder: "Paste the flight-plan route here (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R",
     trackModalImport: "Import route",
     trackRoutePartial: "Route imported; unresolved fixes (skipped):",
     trackStepsDetected: "FL steps detected:",
     trackStepsLabel: "Level steps (optional)",
     trackStepsPlaceholder: "F370 4730N04000W/F330 45N020W/F390 BANAL/F410…",
-    trackStepsIgnoredCsv: "Steps are ignored with a real-track CSV (the real track altitude wins).",
-    trackFixesFail: "Could not download the fix database (offline?). Without it I can't resolve FPL waypoints. Retry, or import a real-track CSV instead.",
-    trackModalErr: "could not import the track",
+    trackFixesFail: "Could not download the fix database (offline?). Without it I can't resolve FPL waypoints. Try again later.",
+    trackModalErr: "could not import the route",
     calcInfoTitle: "How the dose is calculated",
     calcInfoSubtitle: "With or without a real route",
     calcInfoBtn: "ℹ️ Calculation",
     calcInfoNoRoute: "Without route · great circle",
     calcInfoNoRouteBody: "The great-circle (orthodromic) path between origin and destination is drawn and split into segments. For each segment, the dose rate (µSv/h) for that latitude, altitude and solar cycle (HP) is multiplied by the segment's flight time. The rate comes from the embedded real CARI-7A table (91 lat × 11 alt × 10 HP), at the altitude of the selected FL.",
-    calcInfoRoute: "With route · FPL or track CSV",
-    calcInfoRouteBody: "The dose is computed along the real path, segment by segment, with the same rate table. With an FPL route, waypoints are resolved against the global fix database (one-time on-demand download) and the altitude is the selected FL. With a real track CSV, the actual points (lat, lon, altitude, time) are used: track altitude takes precedence and FL is locked. Gaps over 15 min are bridged by interpolating and keeping real time; a gap over 60 min marks the leg as incomplete.",
+    calcInfoRoute: "With route · FPL or level steps",
+    calcInfoRouteBody: "The dose is computed along the real path, segment by segment, with the same rate table. FPL waypoints are resolved against the global fix database (one-time on-demand download). Each segment uses the altitude of the selected FL, or the plan's level steps if you pasted them (applied per segment; the FL selector locks).",
     calcInfoFootnote: "Orientation estimate based on CARI-7A (FAA), not certified dosimetry.",
     careerToggle: "Show aeronautical career dose",
     careerYears: "Career years",
@@ -2939,9 +2854,9 @@ function FlightRow(_ref9) {
     _flight$flIdx = flight.flIdx,
     flIdx = _flight$flIdx === void 0 ? 1 : _flight$flIdx;
   var hasTrack = Array.isArray(flight.track) && flight.track.length >= 2;
-  // Track CSV real (con hora): la altitud real manda → FL bloqueado.
   // Ruta FPL (waypoints, sin hora): el FL elegido marca la altitud de crucero,
   // salvo que el plan traiga steps de FL (entonces la altitud por punto manda).
+  // Tracks con hora guardados anteriormente: la altitud real manda → FL bloqueado.
   var trackHasTime = hasTrack && Array.isArray(flight.track[0]) && flight.track[0][0] != null;
   var trackHasSteps = hasTrack && Array.isArray(flight.steps) && flight.steps.length > 0;
   var flLocked = trackHasTime || trackHasSteps;
@@ -3034,7 +2949,7 @@ function FlightRow(_ref9) {
     return /*#__PURE__*/React.createElement("button", {
       key: i,
       onClick: function onClick() {
-        if (flLocked) return; // track CSV real o steps de FL: la altitud manda
+        if (flLocked) return; // track con hora o steps de FL: la altitud manda
         return _onChange(id, "flIdx", i);
       },
       style: {
@@ -5218,7 +5133,7 @@ function PdfPreviewOverlay(_ref17) {
   }));
 }
 
-// ── TrackModal: importar ruta real (CSV) para un vuelo ──────────────────────
+// ── TrackModal: importar la ruta del vuelo (FPL + steps) ─────────────────────
 function TrackModal(_refTrack) {
   var t = _refTrack.t,
     onClose = _refTrack.onClose,
@@ -5242,27 +5157,10 @@ function TrackModal(_refTrack) {
     _useStateT8 = _slicedToArray(_useStateT7, 2),
     stepsText = _useStateT8[0],
     setStepsText = _useStateT8[1];
-  var onFile = function onFile(e) {
-    var file = e.target.files && e.target.files[0];
-    if (!file) return;
-    var reader = new FileReader();
-    reader.onload = function () {
-      setText(String(reader.result || ""));
-    };
-    reader.readAsText(file);
-  };
   var onImport = function onImport() {
     var txt = text.trim();
     setErr(null);
     setInfo("");
-    if (txt.indexOf(",") >= 0) {
-      // CSV (track real con puntos)
-      var res = parseFlightCsv(txt);
-      if (res.error || !res.track) { setErr(res.error || t.trackModalErr); return; }
-      if (stepsText && stepsText.trim()) setInfo(t.trackStepsIgnoredCsv);
-      onApply(res.track);
-      return;
-    }
     // Ruta de plan de vuelo (FPL): requiere la base de fixes
     ensureFixes(function (err) {
       if (err) { setErr(t.trackFixesFail); return; }
@@ -5357,26 +5255,7 @@ function TrackModal(_refTrack) {
       lineHeight: 1.6,
       marginBottom: 12
     }
-  }, t.trackModalDesc), /*#__PURE__*/React.createElement("label", {
-    style: {
-      display: "block",
-      marginBottom: 10,
-      textAlign: "center",
-      background: "rgba(59,158,222,0.1)",
-      border: "1px dashed rgba(59,158,222,0.4)",
-      borderRadius: 10,
-      padding: "12px",
-      cursor: "pointer",
-      color: "#3b9ede",
-      fontWeight: 700,
-      fontSize: 12.5
-    }
-  }, "\uD83D\uDCC1 ", t.trackModalFile, /*#__PURE__*/React.createElement("input", {
-    type: "file",
-    accept: ".csv,text/csv",
-    style: { display: "none" },
-    onChange: onFile
-  })), /*#__PURE__*/React.createElement("textarea", {
+  }, t.trackModalDesc), /*#__PURE__*/React.createElement("textarea", {
     value: text,
     onChange: function onChange(e) {
       return setText(e.target.value);

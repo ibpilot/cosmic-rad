@@ -19,7 +19,7 @@ A tool for pilots and cabin crew to estimate cosmic radiation exposure per fligh
 - **Auto-save** — flights saved automatically per month; restored on next visit
 - **Full airport database** — loads 7,600+ airports from OpenFlights on startup (IATA + ICAO codes, name search). Falls back to ~160 curated airports if offline
 - **PDF export** — professional report with sector breakdown, dose equivalences, ICRP usage, and career summary
-- **Route import (FPL or real track)** — paste your flight-plan route (FPL: `KJFK31L.JFK5.BDR..MAD..HFD..`) and it is resolved against a global **fix database** (125k+ waypoints, on-demand download), or upload a real track CSV (Flightradar24/OpenSky) per flight; the dose is then integrated over the real path, time and altitude (CARI-7A grid). `tools/download_opensky_track.py` downloads real tracks free from OpenSky (live flights)
+- **Route import (FPL)** — paste your flight-plan route (FPL: `KJFK31L.JFK5.BDR..MAD..HFD..`) and it is resolved against a global **fix database** (125k+ waypoints, on-demand download); the dose is then integrated over the real path at the selected flight level (CARI-7A grid)
 - **Flight-plan level steps** — optional separate field to paste the plan's step climbs (`F370 4730N04000W/F330 45N020W/F390 BANAL/…`); each segment is then computed at its own flight level and the FL selector locks
 - **How-the-dose-is-calculated info** — a small `ℹ️ Calculation` chip next to the import-route button explains the two modes (with and without a real route)
 - **Collapsible outbound+return pairs** — the "Add return" button groups both flights into one card that auto-collapses after a visible 10-second countdown (tap to cancel)
@@ -53,7 +53,7 @@ The grid is regenerated with the real CARI-7A binary by the GitHub Action workfl
 [`.github/workflows/generate-dose-grid.yml`](.github/workflows/generate-dose-grid.yml)
 (`tools/` contains the pipeline).
 
-### Route-based dose (FPL / real track)
+### Route-based dose (FPL)
 
 Without a route, the dose is estimated over the great-circle path between origin and
 destination at the selected flight level. When you import a route, the dose is integrated
@@ -65,9 +65,6 @@ over the **real path**, segment by segment, with the same CARI-7A rate table:
 - **Level steps** (optional field) — `F370 4730N04000W/F330 45N020W/F390 BANAL/…` means the
   flight climbs/descends to the listed flight level at each waypoint. Each segment is then
   computed at its own altitude and the FL selector locks.
-- **Real track CSV** — the actual points (lat, lon, altitude, time) are used; track altitude
-  takes precedence and the FL selector locks. Gaps over 15 min are bridged by interpolating
-  while keeping real time; a gap over 60 min marks the leg as incomplete.
 
 ---
 
