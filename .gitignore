@@ -2,3 +2,5 @@ contexto.md
 docs/
 __pycache__/
 *.pyc
+.DS_Store
+leon2.html
