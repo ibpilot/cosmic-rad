@@ -1973,6 +1973,8 @@ var LANG = {
     clearBtn: "🗑 Limpiar",
     addFlightBtn: "+ Añadir vuelo",
     addReturnBtn: "↩ Añadir vuelta",
+    pairCollapseIn: "colapsando en",
+    pairCollapseCancel: "tocar para cancelar el colapso automático",
     sameAirportWarn: "⚠️ Origen y destino iguales",
     codeNotFound: "Código no encontrado",
     originLabel: "Origen",
@@ -2192,6 +2194,8 @@ var LANG = {
     clearBtn: "🗑 Clear",
     addFlightBtn: "+ Add flight",
     addReturnBtn: "↩ Add return",
+    pairCollapseIn: "collapsing in",
+    pairCollapseCancel: "tap to cancel the auto-collapse",
     sameAirportWarn: "⚠️ Origin and destination are the same",
     codeNotFound: "Code not found",
     originLabel: "Origin",
@@ -3069,15 +3073,27 @@ function FlightPair(_ref10) {
     _useStateP2 = _slicedToArray(_useStateP, 2),
     collapsed = _useStateP2[0],
     setCollapsed = _useStateP2[1];
+  // Cuenta atrás del colapso automático: el par recién creado muestra un
+  // chip junto a la flecha ▲ min ("colapsando en Ns") y se colapsa al llegar a 0.
+  var _useStateQ = useState(isNew ? 10 : null),
+    _useStateQ2 = _slicedToArray(_useStateQ, 2),
+    countdown = _useStateQ2[0],
+    setCountdown = _useStateQ2[1];
   useEffect(function () {
-    if (!isNew) return;
+    if (countdown == null || countdown <= 0) return;
     var id = setTimeout(function () {
-      setCollapsed(true);
-    }, 10000);
+      setCountdown(countdown - 1);
+    }, 1000);
     return function () {
       clearTimeout(id);
     };
-  }, []);
+  }, [countdown]);
+  useEffect(function () {
+    if (countdown === 0) {
+      setCollapsed(true);
+      setCountdown(null);
+    }
+  }, [countdown]);
 
   function pc(fl) {
     var fi = fl.flIdx == null ? 1 : fl.flIdx;
@@ -3101,6 +3117,7 @@ function FlightPair(_ref10) {
     return /*#__PURE__*/React.createElement("div", {
       onClick: function onClick() {
         setCollapsed(false);
+        setCountdown(null);
       },
       style: {
         background: "rgba(255,255,255,0.04)",
@@ -3170,6 +3187,7 @@ function FlightPair(_ref10) {
   }, /*#__PURE__*/React.createElement("div", {
     onClick: function onClick() {
       setCollapsed(true);
+      setCountdown(null);
     },
     style: {
       display: "flex",
@@ -3182,8 +3200,31 @@ function FlightPair(_ref10) {
       fontWeight: 700
     }
   }, /*#__PURE__*/React.createElement("span", null, ida.orig, " ⇄ ", ida.dest), /*#__PURE__*/React.createElement("span", {
+    style: {
+      display: "flex",
+      alignItems: "center",
+      gap: 6
+    }
+  }, countdown != null && countdown > 0 && /*#__PURE__*/React.createElement("span", {
+    onClick: function onClick(e) {
+      e.stopPropagation();
+      setCountdown(null);
+    },
+    title: t.pairCollapseCancel,
+    style: {
+      background: "rgba(245,178,66,0.12)",
+      border: "1px solid rgba(245,178,66,0.3)",
+      borderRadius: 6,
+      padding: "2px 7px",
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: "#f0b95c",
+      cursor: "pointer",
+      whiteSpace: "nowrap"
+    }
+  }, "\u23F3 ", t.pairCollapseIn, " ", countdown, "s"), /*#__PURE__*/React.createElement("span", {
     style: { fontSize: 11 }
-  }, "▲ min")), /*#__PURE__*/React.createElement(FlightRow, {
+  }, "\u25B2 min"))), /*#__PURE__*/React.createElement(FlightRow, {
     key: ida.id,
     flight: ida,
     hpMV: hpMV,
