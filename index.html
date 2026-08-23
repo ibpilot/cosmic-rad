@@ -1675,6 +1675,138 @@ function calcFlight(orig, dest, flIdx, hpMV) {
   };
 }
 
+// ── Track real de vuelo (precisión máxima, opcional) ─────────────────────────
+// parseFlightCsv(text): parsea un CSV de track (FR24, OpenSky o similar).
+// Devuelve { track|null, mode:"time"|"waypoints", error|null }.
+//   track: [[tMin, lat, lon, altKm], ...]  (tMin = minutos desde el inicio; null sin hora)
+// Columnas detectadas por nombre difuso; altitud pies/metros/km por magnitud;
+// adelgazado a ~1 punto cada 120 s; horas: ISO, "YYYY-MM-DD HH:MM:SS", "HH:MM:SS" o epoch.
+function parseFlightCsv(text) {
+  if (!text || !text.trim()) return { track: null, mode: null, error: "el archivo está vacío" };
+  try {
+    var lines = text.split(/\r?\n/);
+    var hdrIdx = -1, cols = null;
+    for (var i = 0; i < Math.min(lines.length, 30); i++) {
+      var c = lines[i].split(",").map(function (s) { return s.replace(/^"|"$/g, "").trim().toLowerCase(); });
+      var hasLat = c.some(function (x) { return x.indexOf("lat") >= 0; });
+      var hasLon = c.some(function (x) { return x.indexOf("lon") >= 0 || x.indexOf("lng") >= 0; });
+      if (hasLat && hasLon) { hdrIdx = i; cols = c; break; }
+    }
+    if (hdrIdx < 0) return { track: null, mode: null, error: "no encontré columnas de lat/lon en la cabecera" };
+    var find = function (keys) {
+      for (var k = 0; k < cols.length; k++) for (var j = 0; j < keys.length; j++) if (cols[k].indexOf(keys[j]) >= 0) return k;
+      return -1;
+    };
+    var iLat = find(["lat"]), iLon = find(["lon", "lng", "long"]);
+    var iAlt = find(["alt"]), iTime = find(["utc", "time", "timestamp", "date"]);
+    if (iLat < 0 || iLon < 0) return { track: null, mode: null, error: "no encontré columnas de latitud/longitud" };
+    var altVals = [];
+    var raw = [];
+    for (var r = hdrIdx + 1; r < lines.length; r++) {
+      var parts = lines[r].split(",");
+      if (parts.length < 2) continue;
+      var lat = parseFloat(parts[iLat].replace(/"/g, "")), lon = parseFloat(parts[iLon].replace(/"/g, ""));
+      if (isNaN(lat) || isNaN(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180) continue;
+      var altRaw = iAlt >= 0 ? parseFloat((parts[iAlt] || "").replace(/"/g, "")) : NaN;
+      raw.push({ lat: lat, lon: lon, altRaw: altRaw, tRaw: iTime >= 0 ? parts[iTime].replace(/"/g, "").trim() : null });
+      if (!isNaN(altRaw) && altRaw > 0) altVals.push(altRaw);
+    }
+    if (raw.length < 2) return { track: null, mode: null, error: "menos de 2 puntos válidos en el archivo" };
+    // unidad de altitud por magnitud (pies / metros / km): el máximo distingue
+    // pies (crucero 30-45k ft) de metros (crucero 7-14 km)
+    var maxAlt = 0;
+    for (var ai2 = 0; ai2 < altVals.length; ai2++) if (altVals[ai2] > maxAlt) maxAlt = altVals[ai2];
+    var altFactor = 1;
+    if (!isNaN(maxAlt) && maxAlt > 20000) altFactor = 1 / 3280.84; // pies
+    else if (!isNaN(maxAlt) && maxAlt > 100) altFactor = 1 / 1000; // metros
+    // tiempo: epoch/ISO → segundos desde el inicio; "HH:MM:SS" → segundos de día
+    var hasTime = raw.some(function (p) { return p.tRaw != null && p.tRaw !== ""; });
+    var secs = null;
+    if (hasTime) {
+      secs = raw.map(function (p) {
+        if (p.tRaw == null) return null;
+        var t = p.tRaw;
+        if (/^\d{9,}$/.test(t)) return parseInt(t, 10);
+        if (/^\d{1,2}:\d{2}(:\d{2})?$/.test(t)) {
+          var hm = t.split(":").map(Number);
+          return hm[0] * 3600 + hm[1] * 60 + (hm[2] || 0);
+        }
+        var d = Date.parse(t.replace(" ", "T"));
+        return isNaN(d) ? null : d / 1000;
+      });
+      var firstT = null;
+      for (var q = 0; q < secs.length; q++) if (secs[q] != null) { firstT = secs[q]; break; }
+      if (firstT == null) hasTime = false;
+    }
+    // construir puntos + adelgazado (>=120 s) en modo tiempo; completo en modo waypoints
+    var pts = [];
+    for (var s = 0; s < raw.length; s++) {
+      var p = raw[s];
+      var altKm = isNaN(p.altRaw) ? 10.668 : p.altRaw * altFactor;
+      pts.push({ t: hasTime && secs[s] != null ? (secs[s] - firstT) / 60 : null, lat: p.lat, lon: p.lon, altKm: altKm });
+    }
+    var thin = [pts[0]];
+    for (var u = 1; u < pts.length; u++) {
+      if (!hasTime || pts[u].t == null || pts[u].t - thin[thin.length - 1].t >= 2) thin.push(pts[u]);
+    }
+    if (thin[thin.length - 1] !== pts[pts.length - 1]) thin.push(pts[pts.length - 1]);
+    var track = thin.map(function (p) { return [p.t, Math.round(p.lat * 1e4) / 1e4, Math.round(p.lon * 1e4) / 1e4, Math.round(p.altKm * 100) / 100]; });
+    return { track: track, mode: hasTime ? "time" : "waypoints", error: null };
+  } catch (e) {
+    return { track: null, mode: null, error: "no pude leer el CSV: " + e.message };
+  }
+}
+// calcTrack(track, hpMV): dosis integrada sobre el track real.
+// Σ doseRate(lat, alt, HP) × Δt; huecos >15 min se cubren con sub-puntos
+// interpolados (gran círculo aprox.) conservando el tiempo real; hueco >60 min
+// marca incomplete. Sin hora → dist/830 por tramo.
+function calcTrack(track, hpMV) {
+  if (!track || track.length < 2) return null;
+  var hasTime = track[0][0] != null;
+  var doseUsv = 0, distKm = 0, timeH = 0, incomplete = false;
+  var segDose = function (lat, lon, alt, dtH) {
+    var rate = doseRateGrid(Math.abs(lat), alt, hpMV);
+    if (rate == null) rate = getDoseRate(Math.abs(lat));
+    return rate * dtH;
+  };
+  for (var i = 1; i < track.length; i++) {
+    var a = track[i - 1], b = track[i];
+    var seg = gcDistance(a[1], a[2], b[1], b[2]);
+    var dtH;
+    if (hasTime) {
+      dtH = (b[0] - a[0]) / 60;
+      if (dtH < 0) dtH = 0;
+      if (dtH > 0.25) {
+        // hueco (>15 min): sub-puntos interpolados para no perder el tiempo real
+        if (dtH > 1) incomplete = true;
+        var n = Math.ceil(dtH / 0.25);
+        var dtSub = dtH / n;
+        for (var k = 1; k <= n; k++) {
+          var fk = k / n;
+          doseUsv += segDose(a[1] + (b[1] - a[1]) * fk, a[2] + (b[2] - a[2]) * fk, a[3] + (b[3] - a[3]) * fk, dtSub);
+        }
+        distKm += seg;
+        timeH += dtH;
+        continue;
+      }
+    } else {
+      dtH = seg / 830;
+    }
+    var mlat = (a[1] + b[1]) / 2, malt = (a[3] + b[3]) / 2;
+    doseUsv += segDose(mlat, a[2], malt, dtH);
+    distKm += seg;
+    timeH += dtH;
+  }
+  return { distKm: Math.round(distKm), timeH: timeH, doseUsv: doseUsv, effLat: null, rateUsvh: timeH > 0 ? doseUsv / timeH : 0, nPts: track.length, incomplete: incomplete };
+}
+// flightCalc(f, hpMV): usa el track real si existe (≥2 pts), si no el gran círculo.
+function flightCalc(f, hpMV) {
+  if (f && Array.isArray(f.track) && f.track.length >= 2) return calcTrack(f.track, hpMV);
+  var fi = f && f.flIdx != null ? f.flIdx : 1;
+  if (!FL_OPTIONS[fi]) fi = 1;
+  return calcFlight(f.orig, f.dest, fi, hpMV);
+}
+
 // ── Formatters ────────────────────────────────────────────────────────────────
 function fmtDose(usv) {
   if (usv >= 1000) return "".concat((usv / 1000).toFixed(2), " mSv");
@@ -1706,6 +1838,15 @@ var LANG = {
     solarMidSub: "HP ~650",
     solarMax: "Máximo ☀️",
     solarMaxSub: "HP ~1050",
+    trackBtn: "Importar ruta (CSV)",
+    trackBadge: "track real",
+    trackIncomplete: "incompleto",
+    trackModalTitle: "Ruta real del vuelo",
+    trackModalDesc: "Sube el track real (export CSV de Flightradar24, OpenSky u otro) y la dosis se calculará con el camino, el tiempo y la altitud reales. Se integra sobre la rejilla CARI-7A; huecos de cobertura se rellenan con gran círculo.",
+    trackModalFile: "Elegir fichero CSV",
+    trackModalPlaceholder: "o pega aquí el contenido del CSV…\n\nColumnas esperadas: lat, lon, altitud (pies/m/km), hora (opcional).",
+    trackModalImport: "Importar ruta",
+    trackModalErr: "no pude importar el track",
     careerToggle: "Mostrar dosis de tu vida aeronáutica",
     careerYears: "Años de carrera",
     tabPlanner: "📋 Planificador mensual",
@@ -1914,6 +2055,15 @@ var LANG = {
     solarMidSub: "HP ~650",
     solarMax: "Maximum ☀️",
     solarMaxSub: "HP ~1050",
+    trackBtn: "Import route (CSV)",
+    trackBadge: "real track",
+    trackIncomplete: "incomplete",
+    trackModalTitle: "Real flight route",
+    trackModalDesc: "Upload the real track (CSV export from Flightradar24, OpenSky or similar) and the dose will use the real path, time and altitude. Integrated over the CARI-7A grid; coverage gaps are filled with great-circle segments.",
+    trackModalFile: "Choose CSV file",
+    trackModalPlaceholder: "or paste the CSV here…\n\nExpected columns: lat, lon, altitude (ft/m/km), time (optional).",
+    trackModalImport: "Import route",
+    trackModalErr: "could not import the track",
     careerToggle: "Show aeronautical career dose",
     careerYears: "Career years",
     tabPlanner: "📋 Monthly planner",
@@ -2577,6 +2727,7 @@ function FlightRow(_ref9) {
     _onChange = _ref9.onChange,
     onRemove = _ref9.onRemove,
     onAddReturn = _ref9.onAddReturn,
+    onTrack = _ref9.onTrack,
     t = _ref9.t;
   var id = flight.id,
     orig = flight.orig,
@@ -2584,9 +2735,10 @@ function FlightRow(_ref9) {
     legs = flight.legs,
     _flight$flIdx = flight.flIdx,
     flIdx = _flight$flIdx === void 0 ? 1 : _flight$flIdx;
+  var hasTrack = Array.isArray(flight.track) && flight.track.length >= 2;
   var valid = orig && dest && orig !== dest && activeDB[orig] && activeDB[dest];
   if (!FL_OPTIONS[flIdx]) flIdx = 1; // guard against out-of-range index from imported/corrupted data
-  var calc = valid ? calcFlight(orig, dest, flIdx, hpMV) : null;
+  var calc = (valid || hasTrack) ? flightCalc(flight, hpMV) : null;
   var totalUsv = calc ? calc.doseUsv * legs : 0;
   return /*#__PURE__*/React.createElement("div", {
     style: {
@@ -2669,6 +2821,7 @@ function FlightRow(_ref9) {
     return /*#__PURE__*/React.createElement("button", {
       key: i,
       onClick: function onClick() {
+        if (hasTrack) return; // con track real la altitud manda
         return _onChange(id, "flIdx", i);
       },
       style: {
@@ -2676,16 +2829,56 @@ function FlightRow(_ref9) {
         padding: "4px 2px",
         border: "none",
         borderRadius: 5,
-        cursor: "pointer",
+        cursor: hasTrack ? "not-allowed" : "pointer",
         fontSize: 10,
         fontWeight: 700,
         background: on ? "rgba(59,158,222,0.2)" : "rgba(255,255,255,0.05)",
         color: on ? "#3b9ede" : "#4a6a80",
+        opacity: hasTrack ? 0.35 : 1,
         borderBottom: on ? "2px solid #3b9ede" : "2px solid transparent",
         transition: "all 0.15s"
       }
     }, fl.label);
-  })), valid && calc ? /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      marginTop: 4,
+      marginBottom: 2,
+      alignItems: "center",
+      justifyContent: "space-between"
+    }
+  }, hasTrack ? /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 10.5,
+      fontWeight: 700,
+      color: "#40c080",
+      display: "flex",
+      alignItems: "center",
+      gap: 4,
+      flexWrap: "wrap"
+    }
+  }, "\uD83D\uDCF0 ", t.trackBadge, " · ", calc ? calc.nPts : flight.track.length, " pts · ", calc ? fmtTime(calc.timeH) : "", calc && calc.incomplete ? " · ⚠ " + t.trackIncomplete : "") : /*#__PURE__*/React.createElement("button", {
+    onClick: function onClick() {
+      return onTrack(id);
+    },
+    style: {
+      background: "rgba(40,160,100,0.1)",
+      border: "1px dashed rgba(40,160,100,0.35)",
+      borderRadius: 6,
+      color: "#40c080",
+      cursor: "pointer",
+      fontSize: 10.5,
+      fontWeight: 700,
+      padding: "4px 10px",
+      alignSelf: "flex-start"
+    }
+  }, "\uD83D\uDCF0 ", t.trackBtn), hasTrack ? /*#__PURE__*/React.createElement("button", {
+    onClick: function onClick() {
+      return _onChange(id, "track", null);
+    },
+    style: btnSmall
+  }, "\uD83D\uDDD1\uFE0F") : null, valid && calc ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 5,
@@ -2731,7 +2924,7 @@ function FlightRow(_ref9) {
       fontSize: 11,
       color: "#e09020"
     }
-  }, t.sameAirportWarn) : null);
+  }, t.sameAirportWarn) : null));
 }
 
 // ── FlightPair (par ida/vuelta colapsable) ─────────────────────────────────────
@@ -2742,6 +2935,7 @@ function FlightPair(_ref10) {
     onChange = _ref10.onChange,
     onRemove = _ref10.onRemove,
     onAddReturn = _ref10.onAddReturn,
+    onTrack = _ref10.onTrack,
     isNew = _ref10.isNew,
     t = _ref10.t;
   var _useStateP = useState(!isNew),
@@ -2763,7 +2957,8 @@ function FlightPair(_ref10) {
     if (!FL_OPTIONS[fi]) fi = 1;
     var legs = fl.legs || 1;
     var valid = fl.orig && fl.dest && fl.orig !== fl.dest && activeDB[fl.orig] && activeDB[fl.dest];
-    var c = valid ? calcFlight(fl.orig, fl.dest, fi, hpMV) : null;
+    var hasT = Array.isArray(fl.track) && fl.track.length >= 2;
+    var c = (valid || hasT) ? flightCalc(fl, hpMV) : null;
     return {
       fi: fi,
       dose: c ? c.doseUsv * legs : 0,
@@ -2868,7 +3063,8 @@ function FlightPair(_ref10) {
     t: t,
     onChange: onChange,
     onRemove: onRemove,
-    onAddReturn: onAddReturn
+    onAddReturn: onAddReturn,
+    onTrack: onTrack
   }), /*#__PURE__*/React.createElement(FlightRow, {
     key: vuelta.id,
     flight: vuelta,
@@ -2876,7 +3072,8 @@ function FlightPair(_ref10) {
     t: t,
     onChange: onChange,
     onRemove: onRemove,
-    onAddReturn: onAddReturn
+    onAddReturn: onAddReturn,
+    onTrack: onTrack
   }));
 }
 
@@ -3075,13 +3272,15 @@ function App() {
         dest = _ref0.dest,
         legs = _ref0.legs,
         flIdx = _ref0.flIdx,
-        pairId = _ref0.pairId;
+        pairId = _ref0.pairId,
+        track = _ref0.track;
       return {
         orig: orig,
         dest: dest,
         legs: legs,
         flIdx: flIdx !== undefined ? flIdx : 1,
-        pairId: pairId
+        pairId: pairId,
+        track: track
       };
     });
     saveAllMonths(all);
@@ -3099,12 +3298,14 @@ function App() {
       var orig = _ref1.orig,
         dest = _ref1.dest,
         legs = _ref1.legs,
-        flIdx = _ref1.flIdx;
+        flIdx = _ref1.flIdx,
+        track = _ref1.track;
       return {
         orig: orig,
         dest: dest,
         legs: legs,
-        flIdx: flIdx !== undefined ? flIdx : 1
+        flIdx: flIdx !== undefined ? flIdx : 1,
+        track: track
       };
     });
     saveAllMonths(all);
@@ -3181,6 +3382,14 @@ function App() {
       });
     });
   }, []);
+  // Track real: id del vuelo cuyo modal de import está abierto
+  var _useStateTrack = useState(null),
+    _useStateTrack2 = _slicedToArray(_useStateTrack, 2),
+    trackModalFor = _useStateTrack2[0],
+    setTrackModalFor = _useStateTrack2[1];
+  var onTrack = useCallback(function (id) {
+    return setTrackModalFor(id);
+  }, []);
 
   // Load full airport DB on mount
   useEffect(function () {
@@ -3192,14 +3401,10 @@ function App() {
     return f.orig && f.dest && f.orig !== f.dest && activeDB[f.orig] && activeDB[f.dest];
   });
   var monthlyUsv = validFlights.reduce(function (s, f) {
-    var _f$flIdx;
-    var fi = (_f$flIdx = f.flIdx) !== null && _f$flIdx !== void 0 ? _f$flIdx : 1;
-    return s + calcFlight(f.orig, f.dest, fi, hpMV).doseUsv * f.legs;
+    return s + flightCalc(f, hpMV).doseUsv * f.legs;
   }, 0);
   var monthlyHours = validFlights.reduce(function (s, f) {
-    var _f$flIdx2;
-    var fi = (_f$flIdx2 = f.flIdx) !== null && _f$flIdx2 !== void 0 ? _f$flIdx2 : 1;
-    return s + calcFlight(f.orig, f.dest, fi, hpMV).timeH * f.legs;
+    return s + flightCalc(f, hpMV).timeH * f.legs;
   }, 0);
   // Dynamic annual estimate: average dose across all recorded months of current year × 12
   var currentYear = currentMonth.split("-")[0];
@@ -3210,9 +3415,8 @@ function App() {
     if (!key.startsWith(currentYear) || key === currentMonth) return;
     if (!Array.isArray(mf) || mf.length === 0) return;
     var dose = mf.reduce(function(s, f) {
-      var fi = f.flIdx != null ? f.flIdx : 1;
       if (!activeDB[f.orig] || !activeDB[f.dest] || f.orig === f.dest) return s;
-      return s + calcFlight(f.orig, f.dest, fi, hpMV).doseUsv * (f.legs || 1);
+      return s + flightCalc(f, hpMV).doseUsv * (f.legs || 1);
     }, 0);
     if (dose > 0) { pastMonthsTotal += dose; pastMonthsCount++; computedMonthKeys.push(key); }
   });
@@ -3680,6 +3884,7 @@ function App() {
             onChange: updateFlight,
             onRemove: removeFlight,
             onAddReturn: addReturnFlight,
+            onTrack: onTrack,
             isNew: newPairIdsRef.current.has(f.pairId)
           }));
           return;
@@ -3693,7 +3898,8 @@ function App() {
         t: t,
         onChange: updateFlight,
         onRemove: removeFlight,
-        onAddReturn: addReturnFlight
+        onAddReturn: addReturnFlight,
+        onTrack: onTrack
       }));
     });
     return els;
@@ -3961,7 +4167,7 @@ function App() {
   }))), /*#__PURE__*/React.createElement("tbody", null, validFlights.map(function (f) {
     var _f$flIdx2;
     var fi = (_f$flIdx2 = f.flIdx) !== null && _f$flIdx2 !== void 0 ? _f$flIdx2 : 1;
-    var c = calcFlight(f.orig, f.dest, fi, hpMV);
+    var c = flightCalc(f, hpMV);
     return /*#__PURE__*/React.createElement("tr", {
       key: f.id,
       style: {
@@ -4363,7 +4569,16 @@ function App() {
     style: {
       color: "#1e3a50"
     }
-  }, "v", APP_VERSION))), showInfo && /*#__PURE__*/React.createElement(InfoModal, {
+  }, "v", APP_VERSION))), trackModalFor != null && /*#__PURE__*/React.createElement(TrackModal, {
+    t: t,
+    onClose: function onClose() {
+      return setTrackModalFor(null);
+    },
+    onApply: function onApply(track) {
+      updateFlight(trackModalFor, "track", track);
+      setTrackModalFor(null);
+    }
+  }), showInfo && /*#__PURE__*/React.createElement(InfoModal, {
     t: t,
     onClose: function onClose() {
       return setShowInfo(false);
@@ -4635,21 +4850,22 @@ function buildPdfHtml(_ref13) {
   var rows = validFlights.map(function (f) {
     var _f$flIdx3, _activeDB$f$orig, _activeDB$f$dest, _f$flIdx4;
     var fi = (_f$flIdx3 = f.flIdx) !== null && _f$flIdx3 !== void 0 ? _f$flIdx3 : 1;
-    var c = calcFlight(f.orig, f.dest, fi, hpMV);
+    var hasTrackPdf = Array.isArray(f.track) && f.track.length >= 2;
+    var c = flightCalc(f, hpMV);
     var total = c.doseUsv * f.legs;
-    return "\n      <tr>\n        <td>".concat(esc(f.orig), " \u2192 ").concat(esc(f.dest), "</td>\n        <td>").concat(esc(((_activeDB$f$orig = activeDB[f.orig]) === null || _activeDB$f$orig === void 0 ? void 0 : _activeDB$f$orig.name) || ""), " \u2192 ").concat(esc(((_activeDB$f$dest = activeDB[f.dest]) === null || _activeDB$f$dest === void 0 ? void 0 : _activeDB$f$dest.name) || ""), "</td>\n        <td class=\"num\">").concat(FL_OPTIONS[(_f$flIdx4 = f.flIdx) !== null && _f$flIdx4 !== void 0 ? _f$flIdx4 : 1].label, "</td>\n        <td class=\"num\">").concat((c.distKm / 1000).toFixed(1), " km</td>\n        <td class=\"num\">").concat(Math.floor(c.timeH), "h ").concat(Math.round(c.timeH % 1 * 60), "m</td>\n        <td class=\"num\">").concat(fmtDose(c.doseUsv), "</td>\n        <td class=\"num\">\xD7 ").concat(f.legs, "</td>\n        <td class=\"num bold\">").concat(fmtDose(total), "</td>\n      </tr>");
+    return "\n      <tr>\n        <td>".concat(esc(f.orig), " \u2192 ").concat(esc(f.dest), "</td>\n        <td>").concat(esc(((_activeDB$f$orig = activeDB[f.orig]) === null || _activeDB$f$orig === void 0 ? void 0 : _activeDB$f$orig.name) || ""), " \u2192 ").concat(esc(((_activeDB$f$dest = activeDB[f.dest]) === null || _activeDB$f$dest === void 0 ? void 0 : _activeDB$f$dest.name) || ""), "</td>\n        <td class=\"num\">").concat(hasTrackPdf ? "track" : FL_OPTIONS[(_f$flIdx4 = f.flIdx) !== null && _f$flIdx4 !== void 0 ? _f$flIdx4 : 1].label, "</td>\n        <td class=\"num\">").concat((c.distKm / 1000).toFixed(1), " km</td>\n        <td class=\"num\">").concat(Math.floor(c.timeH), "h ").concat(Math.round(c.timeH % 1 * 60), "m</td>\n        <td class=\"num\">").concat(fmtDose(c.doseUsv), "</td>\n        <td class=\"num\">\xD7 ").concat(f.legs, "</td>\n        <td class=\"num bold\">").concat(fmtDose(total), "</td>\n      </tr>");
   }).join("");
   var refs = [[isEn ? "Dental X-ray" : "Rx dental", "5 µSv", (monthlyUsv / 5).toFixed(1)], [isEn ? "Chest X-ray" : "Rx tórax", "20 µSv", (monthlyUsv / 20).toFixed(1)], [isEn ? "Mammography" : "Mamografía", "400 µSv", (monthlyUsv / 400).toFixed(2)], [isEn ? "Chest CT" : "TAC tórax", isEn ? "7,000 µSv" : "7.000 µSv", (monthlyUsv / 7000).toFixed(3)], [isEn ? "Natural background/year" : "Fondo natural/año", isEn ? "2,400 µSv" : "2.400 µSv", (annualUsv / 2400).toFixed(2)], [isEn ? "Crew limit/year" : "Límite tripul./año", isEn ? "20,000 µSv" : "20.000 µSv", (annualUsv / 20000 * 100).toFixed(1) + "%"]];
   var html = "<!DOCTYPE html>\n<html lang=\"".concat(isEn ? "en" : "es", "\">\n<head>\n<meta charset=\"UTF-8\"/>\n<title>").concat(t.pdfTitle, " \xB7 ").concat(pdfMonthName, "</title>\n<style>\n  @page { margin: 18mm 16mm; }\n  * { box-sizing:border-box; margin:0; padding:0; }\n  body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;\n    font-size:11px; color:#1a2a35; background:#fff; }\n  .header { display:flex; justify-content:space-between; align-items:flex-start;\n    border-bottom:2.5px solid #1a6fa8; padding-bottom:10px; margin-bottom:18px; }\n  .title { font-size:20px; font-weight:800; color:#1a6fa8; letter-spacing:-0.5px; }\n  .subtitle { font-size:11px; color:#5a7a8a; margin-top:3px; }\n  .meta { text-align:right; font-size:10px; color:#6a8a9a; line-height:1.8; }\n  .section { margin-bottom:18px; }\n  .section-title { font-size:10px; font-weight:700; text-transform:uppercase;\n    letter-spacing:0.8px; color:#5a7a8a; margin-bottom:8px;\n    padding-bottom:4px; border-bottom:1px solid #e0eef5; }\n  .summary-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px; }\n  .stat-box { background:#f0f6fa; border:1px solid #d0e4f0; border-radius:8px;\n    padding:10px 12px; text-align:center; }\n  .stat-label { font-size:9px; color:#6a8a9a; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:4px; }\n  .stat-value { font-size:16px; font-weight:800; color:#1a6fa8; }\n  .stat-sub { font-size:9px; color:#8aacbc; margin-top:2px; }\n  table { width:100%; border-collapse:collapse; font-size:10px; }\n  th { background:#1a6fa8; color:#fff; padding:6px 8px; text-align:left;\n    font-weight:600; font-size:9.5px; letter-spacing:0.3px; }\n  th.num, td.num { text-align:right; }\n  td { padding:5px 8px; border-bottom:1px solid #edf3f7; color:#2a3a45; }\n  tr:last-child td { border-bottom:none; }\n  tr:nth-child(even) td { background:#f8fbfd; }\n  td.bold { font-weight:700; color:#1a6fa8; }\n  .total-row td { background:#e8f2fa !important; font-weight:700;\n    border-top:2px solid #1a6fa8; color:#1a2a35; }\n  .refs-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }\n  .ref-box { background:#f8fbfd; border:1px solid #e0eef5; border-radius:6px; padding:8px 10px; }\n  .ref-name { font-size:9px; color:#6a8a9a; margin-bottom:2px; }\n  .ref-dose { font-size:10px; color:#4a6a7a; margin-bottom:3px; }\n  .ref-eq { font-size:12px; font-weight:700; color:#1a6fa8; }\n  .params { display:flex; gap:16px; font-size:10px; color:#5a7a8a; }\n  .param { background:#f0f6fa; border-radius:5px; padding:4px 10px; }\n  .footer { margin-top:20px; padding-top:10px; border-top:1px solid #e0eef5;\n    font-size:9px; color:#9ab0bc; line-height:1.6; }\n  .highlight { background:#e8f4ff; border:1px solid #b0d4ee; border-radius:6px;\n    padding:10px 14px; display:flex; justify-content:space-between; align-items:center; }\n  .hl-label { font-size:10px; color:#3a6a8a; font-weight:600; }\n  .hl-value { font-size:22px; font-weight:800; color:#1a6fa8; }\n  .hl-sub { font-size:9px; color:#6a9ab0; margin-top:1px; }\n  ").concat(showCareer ? ".career { background:#f5f0fc; border:1px solid #d0b8f0; border-radius:8px;\n    padding:12px 14px; margin-top:14px; }\n  .career-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:8px; }\n  .career-stat { text-align:center; }\n  .career-label { font-size:9px; color:#7a5aaa; text-transform:uppercase; letter-spacing:0.5px; }\n  .career-value { font-size:14px; font-weight:800; color:#6030a0; margin-top:2px; }" : "", "\n</style>\n</head>\n<body>\n\n<div class=\"header\">\n  <div>\n    <div class=\"title\">").concat(t.pdfTitle, "</div>\n    <div class=\"subtitle\">").concat(t.pdfSubtitle, " \xB7 ").concat(pdfMonthName, "</div>\n  </div>\n  <div class=\"meta\">\n    ").concat(t.pdfGenerated, " ").concat(dateStr, "<br/>\n    ").concat(t.pdfFlightLevel, "<br/>\n    ").concat(t.pdfSolarCycle, " ").concat(solarLabel, "<br/>\n    v").concat(APP_VERSION, "\n  </div>\n</div>\n\n<div class=\"section\">\n  <div class=\"section-title\">").concat(t.pdfMonthlySummary, "</div>\n  <div style=\"display:flex;gap:12px;align-items:stretch;margin-bottom:14px;\">\n    <div class=\"highlight\" style=\"flex:1;\">\n      <div>\n        <div class=\"hl-label\">").concat(t.pdfMonthlySummary, "</div>\n        <div class=\"hl-value\">").concat(fmtDose(monthlyUsv), "</div>\n        <div class=\"hl-sub\">").concat(isEn ? "Annual projection" : "Proyección anual", ": ").concat(fmtDose(annualUsv), "</div>\n      </div>\n    </div>\n    <div class=\"highlight\" style=\"flex:1;\">\n      <div>\n        <div class=\"hl-label\">").concat(t.pdfIcrcUsage, "</div>\n        <div class=\"hl-value\" style=\"color:").concat(annualUsv / 20000 > 0.8 ? "#c03020" : annualUsv / 20000 > 0.5 ? "#b06010" : "#1a6fa8", "\">\n          ").concat((annualUsv / 20000 * 100).toFixed(1), "%\n        </div>\n        <div class=\"hl-sub\">").concat(t.pdfOf, "</div>\n      </div>\n    </div>\n  </div>\n  <div class=\"params\">\n    <span class=\"param\">\u2708 ").concat(validFlights.reduce(function (s, f) {
     return s + f.legs;
   }, 0), " ").concat(t.pdfSectors, "</span>\n    <span class=\"param\">\uD83D\uDCCF ").concat((validFlights.reduce(function (s, f) {
     var _f$flIdx5;
-    var c = calcFlight(f.orig, f.dest, (_f$flIdx5 = f.flIdx) !== null && _f$flIdx5 !== void 0 ? _f$flIdx5 : 1, hpMV);
+    var c = flightCalc(f, hpMV);
     return s + c.distKm * f.legs;
   }, 0) / 1000).toFixed(0), " ").concat(t.pdfKmTotal, "</span>\n    <span class=\"param\">\u23F1 ").concat(function () {
     var h = validFlights.reduce(function (s, f) {
       var _f$flIdx6;
-      var c = calcFlight(f.orig, f.dest, (_f$flIdx6 = f.flIdx) !== null && _f$flIdx6 !== void 0 ? _f$flIdx6 : 1, hpMV);
+      var c = flightCalc(f, hpMV);
       return s + c.timeH * f.legs;
     }, 0);
     return "".concat(Math.floor(h), "h ").concat(Math.round(h % 1 * 60), "m");
@@ -4705,6 +4921,177 @@ function PdfPreviewOverlay(_ref17) {
   }));
 }
 
+// ── TrackModal: importar ruta real (CSV) para un vuelo ──────────────────────
+function TrackModal(_refTrack) {
+  var t = _refTrack.t,
+    onClose = _refTrack.onClose,
+    onApply = _refTrack.onApply;
+  var _useStateT1 = useState(""),
+    _useStateT2 = _slicedToArray(_useStateT1, 2),
+    text = _useStateT2[0],
+    setText = _useStateT2[1];
+  var _useStateT3 = useState(null),
+    _useStateT4 = _slicedToArray(_useStateT3, 2),
+    err = _useStateT4[0],
+    setErr = _useStateT4[1];
+  var onFile = function onFile(e) {
+    var file = e.target.files && e.target.files[0];
+    if (!file) return;
+    var reader = new FileReader();
+    reader.onload = function () {
+      setText(String(reader.result || ""));
+    };
+    reader.readAsText(file);
+  };
+  var onImport = function onImport() {
+    var res = parseFlightCsv(text);
+    if (res.error || !res.track) {
+      setErr(res.error || t.trackModalErr);
+      return;
+    }
+    onApply(res.track);
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "modal-wrap",
+    style: {
+      position: "fixed",
+      inset: 0,
+      zIndex: 1000,
+      background: "rgba(0,0,0,0.7)",
+      display: "flex",
+      alignItems: "flex-end",
+      justifyContent: "center",
+      backdropFilter: "blur(4px)",
+      padding: 0
+    },
+    onClick: function onClick(e) {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "modal-sheet",
+    style: {
+      width: "100%",
+      maxWidth: 500,
+      background: "linear-gradient(180deg,#0d1e2e,#091622)",
+      border: "1px solid rgba(255,255,255,0.1)",
+      borderRadius: "18px 18px 0 0",
+      maxHeight: "88vh",
+      overflowY: "auto",
+      WebkitOverflowScrolling: "touch",
+      padding: "0 16px 24px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "center",
+      padding: "12px 0 4px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      background: "rgba(255,255,255,0.2)"
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: "8px 0 10px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 800,
+      color: "#e8f4fc"
+    }
+  }, "\uD83D\uDCF0 ", t.trackModalTitle), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: "rgba(255,255,255,0.07)",
+      border: "1px solid rgba(255,255,255,0.12)",
+      borderRadius: 8,
+      color: "#6a8fa8",
+      cursor: "pointer",
+      fontSize: 16,
+      padding: "4px 10px",
+      fontWeight: 700
+    }
+  }, "\u2715")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11.5,
+      color: "#8aacbc",
+      lineHeight: 1.6,
+      marginBottom: 12
+    }
+  }, t.trackModalDesc), /*#__PURE__*/React.createElement("label", {
+    style: {
+      display: "block",
+      marginBottom: 10,
+      textAlign: "center",
+      background: "rgba(59,158,222,0.1)",
+      border: "1px dashed rgba(59,158,222,0.4)",
+      borderRadius: 10,
+      padding: "12px",
+      cursor: "pointer",
+      color: "#3b9ede",
+      fontWeight: 700,
+      fontSize: 12.5
+    }
+  }, "\uD83D\uDCC1 ", t.trackModalFile, /*#__PURE__*/React.createElement("input", {
+    type: "file",
+    accept: ".csv,text/csv",
+    style: { display: "none" },
+    onChange: onFile
+  })), /*#__PURE__*/React.createElement("textarea", {
+    value: text,
+    onChange: function onChange(e) {
+      return setText(e.target.value);
+    },
+    placeholder: t.trackModalPlaceholder,
+    style: {
+      width: "100%",
+      minHeight: 110,
+      background: "rgba(255,255,255,0.05)",
+      border: "1px solid rgba(255,255,255,0.15)",
+      borderRadius: 10,
+      color: "#d0e8f4",
+      fontSize: 11,
+      fontFamily: "monospace",
+      padding: "10px",
+      outline: "none",
+      resize: "vertical",
+      boxSizing: "border-box"
+    }
+  }), err && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      fontSize: 11.5,
+      color: "#e06060",
+      background: "rgba(200,60,60,0.12)",
+      border: "1px solid rgba(200,60,60,0.3)",
+      borderRadius: 8,
+      padding: "8px 10px",
+      fontWeight: 600
+    }
+  }, "⚠ ", err), /*#__PURE__*/React.createElement("button", {
+    onClick: onImport,
+    disabled: !text.trim(),
+    style: {
+      width: "100%",
+      marginTop: 14,
+      padding: "12px",
+      background: !text.trim() ? "rgba(255,255,255,0.06)" : "linear-gradient(135deg,#1a5a40,#1e7a55)",
+      border: "none",
+      borderRadius: 10,
+      color: !text.trim() ? "#4a6a80" : "#fff",
+      fontWeight: 700,
+      fontSize: 13,
+      cursor: !text.trim() ? "not-allowed" : "pointer"
+    }
+  }, t.trackModalImport)));
+}
 // ── InfoModal ─────────────────────────────────────────────────────────────────
 // ── InfoModal ─────────────────────────────────────────────────────────────────
 function InfoModal(_ref16) {

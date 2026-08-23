@@ -19,6 +19,7 @@ A tool for pilots and cabin crew to estimate cosmic radiation exposure per fligh
 - **Auto-save** — flights saved automatically per month; restored on next visit
 - **Full airport database** — loads 7,600+ airports from OpenFlights on startup (IATA + ICAO codes, name search). Falls back to ~160 curated airports if offline
 - **PDF export** — professional report with sector breakdown, dose equivalences, ICRP usage, and career summary
+- **Real track (optional, maximum precision)** — upload the actual flown route (CSV from Flightradar24/OpenSky) per flight; the dose is then integrated over the real path, time and altitude (CARI-7A grid). `tools/download_opensky_track.py` downloads real tracks free from OpenSky (live flights)
 - **PWA-ready** — install to home screen on iOS, Android, or desktop for offline use
 - **Single file** — no framework, no build step, no backend. One `.html` file
 
