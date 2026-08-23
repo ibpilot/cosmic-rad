@@ -1807,6 +1807,87 @@ function flightCalc(f, hpMV) {
   return calcFlight(f.orig, f.dest, fi, hpMV);
 }
 
+// ── Base de datos de fixes/waypoints (rutas de plan de vuelo FPL) ────────────
+// fixes.json: { NOMBRE: [latE4, lonE4, latE4, lonE4, ...] } con todas las variantes
+// globales de cada fix (hay nombres ambiguos: BDR=Bridgeport|Milas, etc.). Se
+// descarga bajo demanda (raw.githubusercontent, CSP ya lo permite) y se cachea.
+var FIXES = null;
+var _fixesLoading = false;
+var _fixesCbs = [];
+function ensureFixes(cb) {
+  if (FIXES) { if (cb) cb(); return; }
+  if (cb) _fixesCbs.push(cb);
+  if (_fixesLoading) return;
+  _fixesLoading = true;
+  fetch("https://raw.githubusercontent.com/ibpilot/cosmic-rad/main/fixes.json?v=1")
+    .then(function (r) { return r.json(); })
+    .then(function (d) {
+      FIXES = d;
+      _fixesLoading = false;
+      _fixesCbs.forEach(function (c) { try { c(); } catch (e) {} });
+      _fixesCbs = [];
+    })
+    .catch(function () {
+      _fixesLoading = false;
+      _fixesCbs.forEach(function (c) { try { c(); } catch (e) {} });
+      _fixesCbs = [];
+    });
+}
+// parseRouteString(text, origIata, destIata): parsea una ruta de plan de vuelo
+// (formato FPL/ICAO) como: KJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY...
+// Soporta waypoints (3-5 letras), coordenadas 4630N05000W / 45N020W, airways
+// (Q475, N141E…) y SID/STAR/runways (se ignoran). Los fixes se resuelven por
+// proximidad al punto anterior (sembrado con el aeropuerto origen) para
+// desambiguar nombres globales. Devuelve {track, mode:"waypoints", resolved, unresolved}.
+function parseRouteString(text, origIata, destIata) {
+  var tokens = text.replace(/\.\./g, ".").split(".").map(function (s) { return s.trim().toUpperCase(); }).filter(Boolean);
+  if (tokens.length < 2) return { track: null, error: "la ruta parece vacía o incompleta" };
+  var coordRe = /^(\d{2})(\d{2})?([NS])(\d{3})(\d{2})?([EW])$/;
+  var airwayRe = /^[A-Z]{1,2}\d{1,3}[A-Z]?$/;      // Q475, N141E, M191, T600, J80…
+  var procRe = /^[A-Z]{3,}\d+[A-Z]*$/;             // JFK5, CASPE2W, LEBL24R, KJFK31L…
+  var orig = origIata && activeDB[origIata] ? activeDB[origIata] : null;
+  var cur = orig ? [orig.lat, orig.lon] : null;
+  var pts = [], unresolved = [], F = FIXES || {};
+  tokens.forEach(function (tok) {
+    var m = coordRe.exec(tok);
+    if (m) {
+      var lat = parseInt(m[1], 10) + (m[2] ? parseInt(m[2], 10) / 60 : 0);
+      var lon = parseInt(m[4], 10) + (m[5] ? parseInt(m[5], 10) / 60 : 0);
+      if (m[3] === "S") lat = -lat;
+      if (m[6] === "W") lon = -lon;
+      pts.push([null, Math.round(lat * 1e4) / 1e4, Math.round(lon * 1e4) / 1e4, 10.668]);
+      cur = [lat, lon];
+      return;
+    }
+    if (airwayRe.test(tok) || procRe.test(tok) || !/^[A-Z]{2,5}$/.test(tok)) return; // separadores/procedimientos
+    var arr = F[tok];
+    if (Array.isArray(arr) && arr.length >= 2) {
+      var best = null, bestD = Infinity;
+      for (var i = 0; i + 1 < arr.length; i += 2) {
+        var la = arr[i] / 1e4, lo = arr[i + 1] / 1e4;
+        var d2 = cur ? (la - cur[0]) * (la - cur[0]) + (lo - cur[1]) * (lo - cur[1]) : 0;
+        if (d2 < bestD) { bestD = d2; best = [la, lo]; }
+      }
+      if (best) {
+        pts.push([null, Math.round(best[0] * 1e4) / 1e4, Math.round(best[1] * 1e4) / 1e4, 10.668]);
+        cur = best;
+        return;
+      }
+    }
+    unresolved.push(tok);
+  });
+  // cerrar en el destino si falta (la ruta termina en runway/STAR)
+  var dest = destIata && activeDB[destIata] ? activeDB[destIata] : null;
+  if (dest && pts.length > 0) {
+    var lastP = pts[pts.length - 1];
+    if (Math.abs(lastP[1] - dest.lat) + Math.abs(lastP[2] - dest.lon) > 0.5) {
+      pts.push([null, Math.round(dest.lat * 1e4) / 1e4, Math.round(dest.lon * 1e4) / 1e4, 10.668]);
+    }
+  }
+  if (pts.length < 2) return { track: null, error: "no pude resolver suficientes puntos (sin resolver: " + unresolved.slice(0, 5).join(", ") + ")" };
+  return { track: pts, mode: "waypoints", resolved: pts.length, unresolved: unresolved, error: null };
+}
+
 // ── Formatters ────────────────────────────────────────────────────────────────
 function fmtDose(usv) {
   if (usv >= 1000) return "".concat((usv / 1000).toFixed(2), " mSv");
@@ -1842,10 +1923,11 @@ var LANG = {
     trackBadge: "track real",
     trackIncomplete: "incompleto",
     trackModalTitle: "Ruta real del vuelo",
-    trackModalDesc: "Sube el track real (export CSV de Flightradar24, OpenSky u otro) y la dosis se calculará con el camino, el tiempo y la altitud reales. Se integra sobre la rejilla CARI-7A; huecos de cobertura se rellenan con gran círculo.",
+    trackModalDesc: "Pega la ruta del plan de vuelo (formato FPL: KJFK31L.JFK5.BDR..MAD..HFD…) o sube un CSV de track real. La ruta FPL se resuelve con la base de fixes (descarga única bajo demanda) y se calcula la dosis sobre el camino real; los fixes sin resolver se ignoran.",
     trackModalFile: "Elegir fichero CSV",
-    trackModalPlaceholder: "o pega aquí el contenido del CSV…\n\nColumnas esperadas: lat, lon, altitud (pies/m/km), hora (opcional).",
+    trackModalPlaceholder: "Pega aquí la ruta del plan de vuelo (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R\n\n— o un CSV de track real (lat, lon, altitud, hora) —",
     trackModalImport: "Importar ruta",
+    trackRoutePartial: "Ruta importada; fixes sin resolver (ignorados):",
     trackModalErr: "no pude importar el track",
     careerToggle: "Mostrar dosis de tu vida aeronáutica",
     careerYears: "Años de carrera",
@@ -2059,10 +2141,11 @@ var LANG = {
     trackBadge: "real track",
     trackIncomplete: "incomplete",
     trackModalTitle: "Real flight route",
-    trackModalDesc: "Upload the real track (CSV export from Flightradar24, OpenSky or similar) and the dose will use the real path, time and altitude. Integrated over the CARI-7A grid; coverage gaps are filled with great-circle segments.",
+    trackModalDesc: "Paste the flight-plan route (FPL format: KJFK31L.JFK5.BDR..MAD..HFD…) or upload a real-track CSV. The FPL route is resolved with the fix database (one-time on-demand download) and the dose is calculated over the real path; unresolved fixes are skipped.",
     trackModalFile: "Choose CSV file",
-    trackModalPlaceholder: "or paste the CSV here…\n\nExpected columns: lat, lon, altitude (ft/m/km), time (optional).",
+    trackModalPlaceholder: "Paste the flight-plan route here (FPL)\nKJFK31L.JFK5.BDR..MAD..HFD..SCUPP.Q475.TUSKY..4630N05000W..BANAL..CASPE.CASPE2W.LEBL24R\n\n— or a real-track CSV (lat, lon, altitude, time) —",
     trackModalImport: "Import route",
+    trackRoutePartial: "Route imported; unresolved fixes (skipped):",
     trackModalErr: "could not import the track",
     careerToggle: "Show aeronautical career dose",
     careerYears: "Career years",
@@ -4571,6 +4654,8 @@ function App() {
     }
   }, "v", APP_VERSION))), trackModalFor != null && /*#__PURE__*/React.createElement(TrackModal, {
     t: t,
+    orig: (flights.find(function (f) { return f.id === trackModalFor; }) || {}).orig,
+    dest: (flights.find(function (f) { return f.id === trackModalFor; }) || {}).dest,
     onClose: function onClose() {
       return setTrackModalFor(null);
     },
@@ -4925,7 +5010,9 @@ function PdfPreviewOverlay(_ref17) {
 function TrackModal(_refTrack) {
   var t = _refTrack.t,
     onClose = _refTrack.onClose,
-    onApply = _refTrack.onApply;
+    onApply = _refTrack.onApply,
+    orig = _refTrack.orig,
+    dest = _refTrack.dest;
   var _useStateT1 = useState(""),
     _useStateT2 = _slicedToArray(_useStateT1, 2),
     text = _useStateT2[0],
@@ -4934,6 +5021,10 @@ function TrackModal(_refTrack) {
     _useStateT4 = _slicedToArray(_useStateT3, 2),
     err = _useStateT4[0],
     setErr = _useStateT4[1];
+  var _useStateT5 = useState(""),
+    _useStateT6 = _slicedToArray(_useStateT5, 2),
+    info = _useStateT6[0],
+    setInfo = _useStateT6[1];
   var onFile = function onFile(e) {
     var file = e.target.files && e.target.files[0];
     if (!file) return;
@@ -4944,12 +5035,25 @@ function TrackModal(_refTrack) {
     reader.readAsText(file);
   };
   var onImport = function onImport() {
-    var res = parseFlightCsv(text);
-    if (res.error || !res.track) {
-      setErr(res.error || t.trackModalErr);
+    var txt = text.trim();
+    setErr(null);
+    setInfo("");
+    if (txt.indexOf(",") >= 0) {
+      // CSV (track real con puntos)
+      var res = parseFlightCsv(txt);
+      if (res.error || !res.track) { setErr(res.error || t.trackModalErr); return; }
+      onApply(res.track);
       return;
     }
-    onApply(res.track);
+    // Ruta de plan de vuelo (FPL): requiere la base de fixes
+    ensureFixes(function () {
+      var r2 = parseRouteString(txt, orig, dest);
+      if (r2.error || !r2.track) { setErr(r2.error || t.trackModalErr); return; }
+      if (r2.unresolved && r2.unresolved.length > 0) {
+        setInfo(t.trackRoutePartial + " " + r2.unresolved.join(", "));
+      }
+      onApply(r2.track);
+    });
   };
   return /*#__PURE__*/React.createElement("div", {
     className: "modal-wrap",
@@ -5075,7 +5179,18 @@ function TrackModal(_refTrack) {
       padding: "8px 10px",
       fontWeight: 600
     }
-  }, "⚠ ", err), /*#__PURE__*/React.createElement("button", {
+  }, "⚠ ", err), info && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 10,
+      fontSize: 11.5,
+      color: "#e0a040",
+      background: "rgba(224,160,64,0.1)",
+      border: "1px solid rgba(224,160,64,0.3)",
+      borderRadius: 8,
+      padding: "8px 10px",
+      fontWeight: 600
+    }
+  }, info), /*#__PURE__*/React.createElement("button", {
     onClick: onImport,
     disabled: !text.trim(),
     style: {
