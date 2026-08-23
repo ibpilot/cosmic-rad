@@ -23,9 +23,9 @@ from cari7_make_input import write_loc, write_default_inp, patch_cari_ini
 from cari7_parse_ans import parse_ans
 
 
-def run(cmd, cwd):
+def run(cmd, cwd, env=None):
     print(">", " ".join(cmd))
-    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
     if r.stdout:
         print(r.stdout[-3000:])
     if r.stderr:
@@ -35,18 +35,23 @@ def run(cmd, cwd):
         sys.exit(1)
 
 
-def selftest(cari, binary, os_name):
+def selftest(cari, binary, os_name, wine=None):
     """Corre el EXAMPLES.LOC distribuido y compara contra EXAMPLES.ANS."""
     binpath = os.path.join(cari, binary)
     if not os.path.exists(binpath):
         sys.exit("no existe el binario %s" % binpath)
-    if os_name == "unix":
+    if os_name == "unix" and not wine:
         os.chmod(binpath, 0o755)
     shutil.copy(os.path.join(cari, "Examples", "EXAMPLES.LOC"), os.path.join(cari, "SELFTEST.LOC"))
     with open(os.path.join(cari, "DEFAULT.INP"), "w") as f:
         f.write("0000/00/00\n 0 \n 0 \n 2 \nSELFTEST.LOC\n")
     patch_cari_ini(os.path.join(cari, "CARI.INI"), cari, os_name)
-    run([binpath], cwd=cari)
+    env = None
+    prefix = []
+    if wine:
+        prefix = [wine]
+        env = dict(os.environ, WINEDEBUG="-all", WINEPREFIX=os.path.expanduser("~/.wine-cari7a"))
+    run(prefix + [binpath], cwd=cari, env=env)
 
     def key(lat, alt, unit, date, qty):
         return (abs(float(lat)), float(alt), unit, date, qty)
@@ -85,16 +90,26 @@ def main():
     ap.add_argument("--cari-dir", required=True, help="directorio de la distribución CARI-7A")
     ap.add_argument("--binary", required=True, help="nombre del binario dentro de cari-dir")
     ap.add_argument("--out", help="CSV de salida (requerido sin --selftest-only)")
+    ap.add_argument("--chunk", type=int, default=0,
+                    help="partir el .LOC en lotes de N puntos (0 = un solo fichero)")
     ap.add_argument("--selftest-only", action="store_true")
     ap.add_argument("--os", default="unix", choices=["unix", "win"])
+    ap.add_argument("--wine", help="ruta al binario de wine/wineloader (ejecuta el .exe bajo Wine)")
     args = ap.parse_args()
 
     cari = os.path.abspath(args.cari_dir)
     if args.selftest_only:
-        selftest(cari, args.binary, args.os)
+        selftest(cari, args.binary, args.os, args.wine)
         return
     if args.hp is None or not args.out:
         ap.error("--hp y --out son requeridos salvo con --selftest-only")
+
+    env = None
+    cmd_prefix = []
+    if args.wine:
+        cmd_prefix = [args.wine]
+        env = dict(os.environ, WINEDEBUG="-all",
+                   WINEPREFIX=os.path.expanduser("~/.wine-cari7a"))
 
     ini_src = os.path.join(cari, "CARI.INI")
     if not os.path.exists(ini_src):
@@ -102,19 +117,21 @@ def main():
     binpath = os.path.join(cari, args.binary)
     if not os.path.exists(binpath):
         sys.exit("no existe el binario %s" % binpath)
-    if args.os == "unix":
+    if args.os == "unix" and not args.wine:
         os.chmod(binpath, 0o755)
 
-    write_loc(args.hp, cari)
-    write_default_inp(args.hp, cari)
+    from cari7_make_input import LAT_VALUES, ALT_VALUES
+    loc_files = write_loc(args.hp, cari, chunk=args.chunk)
     patch_cari_ini(ini_src, cari, args.os)
-    run([binpath], cwd=cari)
-
-    ans = os.path.join(cari, "grid_hp%d.ans" % args.hp)
-    if not os.path.exists(ans):
-        sys.exit("no se generó %s (¿CARI falló?)" % ans)
-    rows = parse_ans(ans, args.hp)
-    expected = len(__import__("cari7_make_input").LAT_VALUES) * len(__import__("cari7_make_input").ALT_VALUES)
+    expected = len(LAT_VALUES) * len(ALT_VALUES)
+    rows = []
+    for loc in loc_files:
+        write_default_inp(args.hp, cari, loc_name=os.path.basename(loc))
+        run(cmd_prefix + [binpath], cwd=cari, env=env)
+        ans = os.path.splitext(loc)[0] + ".ans"
+        if not os.path.exists(ans):
+            sys.exit("no se generó %s (¿CARI falló?)" % ans)
+        rows.extend(parse_ans(ans, args.hp))
     if len(rows) != expected:
         sys.stderr.write("AVISO: %d puntos esperados, %d parseados\n" % (expected, len(rows)))
     with open(args.out, "w", newline="") as f:

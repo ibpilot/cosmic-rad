@@ -37,25 +37,37 @@ def loc_line(lat, alt, date):
     return line
 
 
-def write_loc(hp, work):
+def write_loc(hp, work, chunk=0):
+    """Escribe el .LOC para un nivel de HP. Si chunk>0, parte la rejilla en
+    ficheros grid_hp{hp}_p{k}.loc de `chunk` puntos cada uno (util si el
+    tiempo por punto es alto y un fichero de 1001 líneas tardaría demasiado)."""
     date = HP_DATES[hp]
-    path = os.path.join(work, "grid_hp%d.loc" % hp)
-    with open(path, "w") as f:
-        f.write("C, Cosmic Radiation Flight Calculator - grid de dosis (lat x alt) para HP=%d MV\n" % hp)
-        f.write("C, Fecha: %s (HP real ~%d MV, fuente MV-DATES.L99), lon=%g E, tally D2 (ICRP-103 eff. dose)\n"
-                % (date, hp, LON))
-        f.write("START-------------------------------------------------\n")
-        for lat in LAT_VALUES:
-            for alt in ALT_VALUES:
+    points = [(lat, alt) for lat in LAT_VALUES for alt in ALT_VALUES]
+    if chunk <= 0:
+        chunks = [points]
+    else:
+        chunks = [points[i:i + chunk] for i in range(0, len(points), chunk)]
+    paths = []
+    for k, pts in enumerate(chunks):
+        name = "grid_hp%d.loc" % hp if len(chunks) == 1 else "grid_hp%d_p%d.loc" % (hp, k)
+        path = os.path.join(work, name)
+        with open(path, "w") as f:
+            f.write("C, Cosmic Radiation Flight Calculator - grid de dosis (lat x alt) para HP=%d MV\n" % hp)
+            f.write("C, Fecha: %s (HP real ~%d MV, fuente MV-DATES.L99), lon=%g E, tally D2 (ICRP-103 eff. dose)\n"
+                    % (date, hp, LON))
+            f.write("START-------------------------------------------------\n")
+            for lat, alt in pts:
                 f.write(loc_line(lat, alt, date) + "\n")
-        f.write("STOP--------------------------------------------------------\n")
-    return path
+            f.write("STOP--------------------------------------------------------\n")
+        paths.append(path)
+    return paths
 
 
-def write_default_inp(hp, work):
+def write_default_inp(hp, work, loc_name="grid_hp%d.loc"):
     path = os.path.join(work, "DEFAULT.INP")
+    name = loc_name % hp if "%d" in loc_name else loc_name
     with open(path, "w") as f:
-        f.write("0000/00/00\n 0 \n 0 \n 2 \ngrid_hp%d.loc\n" % hp)
+        f.write("0000/00/00\n 0 \n 0 \n 2 \n%s\n" % name)
         f.write("! generado por tools/cari7_make_input.py (las 4 primeras líneas se ignoran para .LOC)\n")
     return path
 
@@ -65,7 +77,9 @@ def patch_cari_ini(cari_ini_src, work, os_name):
     with open(cari_ini_src, "r", errors="replace") as f:
         txt = f.read()
     txt = txt.replace("MENUS     = YES", "MENUS     = NO!")
-    txt = txt.replace("OS        = WIN", "OS        = " + ("UNIX" if os_name == "unix" else "WIN"))
+    target = "UNIX" if os_name == "unix" else "WIN"
+    txt = txt.replace("OS        = UNIX", "OS        = " + target)
+    txt = txt.replace("OS        = WIN", "OS        = " + target)
     path = os.path.join(work, "CARI.INI")
     with open(path, "w") as f:
         f.write(txt)
