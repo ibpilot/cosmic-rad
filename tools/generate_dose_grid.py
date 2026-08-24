@@ -60,14 +60,71 @@ def build_grid(rows, axes):
     return lat_axis, alt_axis, hp_axis, b64, len(floats) * 4
 
 
+RC_SCALE = 0.01  # GV por unidad del Int16
+
+
+def build_rc_map(rcmap):
+    """{(lat,lon): Rc} -> (lats, lons, base64 Int16LE) en orden lat-major.
+    Rc se cuantiza a 0.01 GV: el maximo global (17.64 GV) da 1764, asi que
+    cabe de sobra en Int16 y el error de cuantizacion es despreciable frente
+    al paso del eje de la rejilla (0.25 GV)."""
+    lats = sorted(set(k[0] for k in rcmap))
+    lons = sorted(set(k[1] for k in rcmap))
+    vals = []
+    faltan = []
+    for la in lats:
+        for lo in lons:
+            if (la, lo) not in rcmap:
+                faltan.append((la, lo))
+                vals.append(0)
+                continue
+            vals.append(int(round(rcmap[(la, lo)] / RC_SCALE)))
+    if faltan:
+        sys.stderr.write(
+            "ERROR: al mapa de rigidez le faltan %d celdas (primeras 10: %s)\n"
+            % (len(faltan), faltan[:10])
+        )
+        sys.exit(2)
+    packed = struct.pack("<%dh" % len(vals), *vals)
+    return lats, lons, base64.b64encode(packed).decode("ascii")
+
+
+def write_rc_map_js(cutoff_path, out_path):
+    from cari7_cutoffs import load_cutoff_map
+    rcmap = load_cutoff_map(cutoff_path)
+    lats, lons, b64 = build_rc_map(rcmap)
+    lines = [
+        "// Generado por tools/generate_dose_grid.py --rc-map — NO editar a mano.",
+        "// Fuente: %s (%d celdas, %.1f KB Int16LE)." % (
+            cutoff_path, len(lats) * len(lons), len(lats) * len(lons) * 2 / 1024),
+        "var RC_MAP = {",
+        "  lat0: %d, lat1: %d," % (lats[0], lats[-1]),
+        "  lon0: %d, lon1: %d," % (lons[0], lons[-1]),
+        "  scale: %s," % RC_SCALE,
+        "  data: \"%s\"" % b64,
+        "};",
+    ]
+    with open(out_path, "w") as f:
+        f.write("\n".join(lines) + "\n")
+    print("Escrito %s (%d celdas, base64 %.1f KB)"
+          % (out_path, len(lats) * len(lons), len(b64) / 1024))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--input", required=True, help="CSV con lat,alt_km,hp_mv,rate_usvh")
-    ap.add_argument("--axes", required=True,
-                    help="Ejemplo: 0:90:1,8.0:13.0:0.5,300:1200:100 (lat, alt km, HP MV)")
+    ap.add_argument("--input", help="CSV con rc_gv,alt_km,hp_mv,rate_usvh")
+    ap.add_argument("--axes",
+                    help="Ejemplo: 0:18:0.25,8.0:13.0:0.5,300:1200:100 (Rc GV, alt km, HP MV)")
+    ap.add_argument("--rc-map", help="fichero CUTOFFS/*.1X1; emite el bloque RC_MAP")
     ap.add_argument("--out", required=True, help="Fichero JS de salida")
     ap.add_argument("--validate", help="CSV de referencia (misma columna rate_usvh)")
     args = ap.parse_args()
+
+    if args.rc_map:
+        write_rc_map_js(args.rc_map, args.out)
+        return
+    if not args.input or not args.axes:
+        ap.error("--input y --axes son obligatorios salvo con --rc-map")
 
     def read_csv(path):
         rows = []
