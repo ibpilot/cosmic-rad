@@ -8,6 +8,11 @@ name: CARI-7A dose grid
 #  - schedule (día 1 de cada mes): solo refresca HP_MONTHS desde MV-DATES.L99.
 #
 # El binario Linux de CARI-7A se descarga de la página oficial de la FAA.
+# S2 (suministro): el zip se verifica contra un SHA-256 conocido ANTES de
+# ejecutarlo. Si la FAA actualiza el zip, hay que renovar FAA_CARI7A_SHA256
+# (el pipeline falla cerrado con el mensaje claro de sha256sum). MV-DATES no
+# lleva checksum: cambia cada mes por diseño, y update_hp_months.py solo
+# extrae números con regex (no puede inyectar código).
 
 on:
   workflow_dispatch:
@@ -23,8 +28,9 @@ on:
   schedule:
     - cron: '23 3 1 * *'   # día 1 de cada mes, 03:23 UTC
 
+# Mínimo privilegio (S2): solo los jobs que commitean a main piden write.
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: dose-grid
@@ -32,6 +38,8 @@ concurrency:
 
 env:
   FAA_CARI7A_ZIP: https://www.faa.gov/sites/faa.gov/files/data_research/research/med_humanfacs/aeromedical/cari_7Aexe.zip
+  # SHA-256 del zip oficial de la FAA (verificado el 2026-08-24, 21.534.996 bytes).
+  FAA_CARI7A_SHA256: accf41177a2082ca1c526a8c757df48972ce4411ef2329c6ce22a48edfe3f613
   FAA_MVDATES_ZIP: https://www.faa.gov/sites/faa.gov/files/data_research/research/med_humanfacs/aeromedical/MV-DATES.zip
   CARI_BIN: "cari7a_4.2.0(intel_linux)"
 
@@ -41,11 +49,13 @@ jobs:
     # referencia oficial (Examples/EXAMPLES.LOC -> EXAMPLES.ANS, tol 5%).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
       - name: Instalar runtime Fortran
         run: sudo apt-get update && sudo apt-get install -y libgfortran5
       - name: Descargar CARI-7A (FAA)
         run: curl -sL -o cari7a.zip "$FAA_CARI7A_ZIP" && unzip -q cari7a.zip
+      - name: Verificar SHA-256 del zip CARI-7A (suministro)
+        run: echo "$FAA_CARI7A_SHA256  cari7a.zip" | sha256sum -c -
       - name: Selftest de fidelidad
         run: python3 tools/cari7_generate.py --selftest-only --cari-dir CARI_7A_DVD --binary "$CARI_BIN"
 
@@ -59,15 +69,17 @@ jobs:
       matrix:
         hp: [300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
       - name: Instalar runtime Fortran
         run: sudo apt-get update && sudo apt-get install -y libgfortran5
       - name: Descargar CARI-7A (FAA)
         run: curl -sL -o cari7a.zip "$FAA_CARI7A_ZIP" && unzip -q cari7a.zip
+      - name: Verificar SHA-256 del zip CARI-7A (suministro)
+        run: echo "$FAA_CARI7A_SHA256  cari7a.zip" | sha256sum -c -
       - name: Generar + ejecutar CARI-7A (HP ${{ matrix.hp }} MV)
         run: python3 tools/cari7_generate.py --hp ${{ matrix.hp }} --cari-dir CARI_7A_DVD
              --cutoffs CARI_7A_DVD/CUTOFFS --binary "$CARI_BIN" --out rates_hp${{ matrix.hp }}.csv
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (pin S2)
         with:
           name: rates-hp-${{ matrix.hp }}
           path: rates_hp${{ matrix.hp }}.csv
@@ -75,14 +87,19 @@ jobs:
   assemble:
     needs: grid
     if: always() && needs.grid.result == 'success' && !cancelled()
+    # Único job que commitea el resultado del grid: necesita write a main.
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4 (pin S2)
         with:
           path: rates
       - name: Descargar CARI-7A (FAA)
         run: curl -sL -o cari7a.zip "$FAA_CARI7A_ZIP" && unzip -q cari7a.zip
+      - name: Verificar SHA-256 del zip CARI-7A (suministro)
+        run: echo "$FAA_CARI7A_SHA256  cari7a.zip" | sha256sum -c -
       - name: Fusionar CSVs
         run: |
           python3 - <<'PY'
@@ -156,9 +173,12 @@ jobs:
       (github.event_name == 'schedule'
         || (github.event_name == 'workflow_dispatch' && github.event.inputs.update_hp_only == 'true'))
       && (needs.assemble.result == 'skipped' || needs.assemble.result == 'success')
+    # Commitea el refresco de HP_MONTHS: necesita write a main.
+    permissions:
+      contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
       - name: Descargar MV-DATES (FAA)
         run: curl -sL -o mv.zip "$FAA_MVDATES_ZIP" && unzip -q mv.zip
       - name: Actualizar HP_MONTHS en index.html

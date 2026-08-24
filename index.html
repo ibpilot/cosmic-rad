@@ -2,7 +2,14 @@
 <html lang="es">
 <head>
 <meta charset="UTF-8"/>
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com; manifest-src 'self' data:; base-uri 'none'; object-src 'none'; form-action 'none'"/>
+<!--
+  CSP (S3): GitHub Pages no permite cabeceras personalizadas, así que
+  frame-ancestors (anti-clickjacking) no se puede expresar aquí — requeriría
+  un CDN/header delante. El resto de la política aplica: sin workers
+  (worker-src 'none'), sin object/embed, sin forms, base-uri fija y red solo
+  con raw.githubusercontent.com.
+-->
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com; manifest-src 'self' data:; base-uri 'none'; object-src 'none'; form-action 'none'; worker-src 'none'; upgrade-insecure-requests"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent"/>
@@ -1475,6 +1482,13 @@ function _loadOpenFlights() {
           }
           return _context.a(3, 9);
         case 8:
+          // S1: validación de integridad del dataset de terceros (OpenFlights).
+          // Coordenadas imposibles o nombres absurdos = fichero manipulado/roto:
+          // se descarta la fila. Si todo el fichero es inválido, extended queda
+          // igual a la lista local curada y el fallback es silencioso.
+          if (!(lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 && name.length <= 200)) {
+            return _context.a(3, 9);
+          }
           // Don't overwrite our curated local entries
           if (!extended[iata]) {
             extended[iata] = {
@@ -1934,6 +1948,41 @@ function flightCalc(f, hpMV) {
 var FIXES = null;
 var _fixesLoading = false;
 var _fixesCbs = [];
+// S1: saneamiento del dataset de fixes (red de seguridad si la rama main se
+// viera comprometida o el JSON se corrompiera). Devuelve el mapa limpio o null
+// (fail closed). Se descartan fixes con coordenadas imposibles (~250 en el
+// dataset real tenían valores de 2e9–1.2e10) y estructuras raras.
+function sanitizeFixes(d) {
+  var clean = null, dropped = 0;
+  if (d && typeof d === "object" && !Array.isArray(d)) {
+    var keys = Object.keys(d);
+    if (keys.length <= 500000) {
+      clean = {};
+      for (var i = 0; i < keys.length; i++) {
+        var k = keys[i], arr = d[k];
+        if (typeof k !== "string" || k.length < 1 || k.length > 12 || !Array.isArray(arr) ||
+            arr.length < 2 || arr.length > 2000 || arr.length % 2 !== 0) {
+          dropped++;
+          continue;
+        }
+        var good = true;
+        for (var j = 0; j < arr.length; j++) {
+          var v = arr[j];
+          if (typeof v !== "number" || !isFinite(v)) { good = false; break; }
+          if (j % 2 === 0) { if (v < -900000 || v > 900000) { good = false; break; } }
+          else if (v < -1800000 || v > 1800000) { good = false; break; }
+        }
+        if (good) clean[k] = arr; else dropped++;
+      }
+      if (Object.keys(clean).length === 0) clean = null;
+    }
+  }
+  if (dropped > 0) {
+    try { console.warn("[cosmic-rad] fixes.json: " + dropped + " entradas inválidas descartadas"); } catch (e) {}
+  }
+  return clean;
+}
+
 function ensureFixes(cb) {
   if (FIXES) { if (cb) cb(null); return; }
   if (cb) _fixesCbs.push(cb);
@@ -1942,7 +1991,7 @@ function ensureFixes(cb) {
   fetch("https://raw.githubusercontent.com/ibpilot/cosmic-rad/main/fixes.json?v=" + APP_VERSION)
     .then(function (r) { return r.json(); })
     .then(function (d) {
-      FIXES = d;
+      FIXES = sanitizeFixes(d);
       _fixesLoading = false;
       _fixesCbs.forEach(function (c) { try { c(null); } catch (e) {} });
       _fixesCbs = [];
@@ -2159,12 +2208,16 @@ var mkId = function mkId() {
 // manipulado o antiguo puede traer `legs`/`flIdx` ausentes o fuera de rango, y
 // eso propagaba "NaN µSv" por toda la app y reventaba el export a PDF.
 function hydrateFlight(f) {
-  var legs = Math.max(1, Math.round(Number(f.legs)) || 1);
+  var legs = Math.min(9999, Math.max(1, Math.round(Number(f.legs)) || 1));
   var flIdx = Number(f.flIdx);
   return _objectSpread(_objectSpread({}, f), {}, {
     id: mkId(),
     legs: legs,
-    flIdx: FL_OPTIONS[flIdx] ? flIdx : 1
+    flIdx: FL_OPTIONS[flIdx] ? flIdx : 1,
+    // S4: un backup manipulado puede traer tracks de millones de puntos o
+    // steps sin límite (congelan la UI/CPU); se recortan a topes razonables.
+    track: Array.isArray(f.track) && f.track.length > 5000 ? f.track.slice(0, 5000) : f.track,
+    steps: Array.isArray(f.steps) && f.steps.length > 100 ? f.steps.slice(0, 100) : f.steps
   });
 }
 
@@ -2176,7 +2229,19 @@ function parseBackup(text) {
     var parsed = JSON.parse(text);
     var months = parsed && parsed.version === 1 ? parsed.months : parsed;
     if (typeof months !== "object" || Array.isArray(months)) return null;
-    return months; // months === null cae aquí y ya es el valor de rechazo
+    // S4: solo se aceptan claves de mes YYYY-MM con listas de vuelos; claves
+    // raras ("__proto__", ruido, ficheros de otra app) se descartan. Un backup
+    // con TODAS las claves inválidas se rechaza entero.
+    var clean = {};
+    var keyRe = /^\d{4}-\d{2}$/;
+    for (var k in months) {
+      if (Object.prototype.hasOwnProperty.call(months, k) && keyRe.test(k) && Array.isArray(months[k])) {
+        clean[k] = months[k];
+      }
+    }
+    var total = Object.keys(months).length;
+    if (total > 0 && Object.keys(clean).length === 0) return null;
+    return clean;
   } catch (e) {
     return null;
   }

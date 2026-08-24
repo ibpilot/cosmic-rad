@@ -108,6 +108,21 @@ For official occupational radiation surveillance, consult your company's Occupat
 
 ---
 
+## Privacy
+
+All data stays in your browser: schedules, routes and doses are stored only in
+`localStorage` on the device you use, and nothing is uploaded to any server.
+Two caveats:
+
+- **Shared origin on GitHub Pages.** GitHub serves every project of an account
+  under the same origin (`user.github.io`), so any script running on *another*
+  project of the same account could read this app's `localStorage`. Don't enter
+  flight data on shared or public devices.
+- **Data is device-local.** Clearing the browser's site data removes your
+  schedules — use the backup export/import buttons to keep a copy.
+
+---
+
 ## Limitations
 
 - The dose grid is indexed by absolute latitude with a representative longitude (Europe); routes in other longitudes are approximated
