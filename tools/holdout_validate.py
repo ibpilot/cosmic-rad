@@ -11,12 +11,13 @@ sabemos si dosis = f(Rc, alt, HP) reproduce al programa en puntos arbitrarios.
 """
 import argparse, json, random, re, subprocess, sys, tempfile, os
 
-# Fechas de HP_DATES: son las mismas que usa el pipeline, asi que el HP de cada
-# punto es exactamente uno de los nodos del eje y no se mezcla el error de
-# interpolar en HP con el que queremos medir. Cubren epocas distintas a proposito
-# (1958-2007), que es justo lo que el diseno afirma que da igual.
-FECHAS = ["2007/06/00", "1994/11/00", "1963/03/00", "1992/11/00", "1980/05/00",
-          "2003/09/00", "1969/06/00", "1958/09/00", "1960/01/00", "1990/07/00"]
+# Fechas DENTRO de la ventana de la epoca IGRF2010, que es el mapa que la app
+# embebe. Comparar contra fechas de 1958-1969 mide el desajuste de epoca (CARI
+# usa entonces el mapa de 1965), no el error del modelo: medido, el error pasa
+# de 0.30% con epocas casadas a 13.7% con 50 anios de diferencia.
+# Limitacion conocida: los ciclos solares recientes son debiles, asi que esta
+# ventana solo cubre HP ~300-730. Los HP altos del eje no se validan aqui.
+FECHAS = ["2007/06/00", "2006/07/00", "2014/08/00", "2013/08/00", "2014/12/00"]
 
 
 def emit_loc(path, n, seed):
@@ -68,7 +69,7 @@ def app_rates(index_path, points):
     """Evalua doseRateGrid de index.html sobre los puntos, via node."""
     js = r"""
 const fs=require("fs"),vm=require("vm");
-const html=fs.readFileSync(process.argv[1],"utf8");
+const html=fs.readFileSync(process.argv[2],"utf8");
 const scripts=[...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m=>m[1]);
 let app=scripts[scripts.length-1].replace(/ReactDOM\.createRoot\([\s\S]*$/,"");
 const ctx={console,atob,Math,JSON,Date,isFinite,parseInt,parseFloat,String,Number,Array,
@@ -78,7 +79,7 @@ const ctx={console,atob,Math,JSON,Date,isFinite,parseInt,parseFloat,String,Numbe
  React:{createElement:()=>({}),Fragment:"F"},useState:()=>[null,()=>{}],
  useEffect:()=>{},useRef:()=>({current:null}),useCallback:f=>f};
 ctx.window=ctx;ctx.globalThis=ctx;vm.createContext(ctx);vm.runInContext(app,ctx);
-const pts=JSON.parse(fs.readFileSync(process.argv[2],"utf8"));
+const pts=JSON.parse(fs.readFileSync(process.argv[3],"utf8"));
 console.log(JSON.stringify(pts.map(p=>ctx.doseRateGrid(p[0],p[1],p[2],p[3]))));
 """
     fd, jsp = tempfile.mkstemp(suffix=".js"); os.close(fd)
