@@ -140,7 +140,7 @@ def main():
         sys.stderr.write("AVISO: %d puntos escritos, %d parseados\n" % (n_written, len(rows)))
     with open(args.out, "w", newline="") as f:
         w = csv.writer(f)
-        w.writerow(["lat", "alt_km", "hp_mv", "rate_usvh"])
+        w.writerow(["rc_gv", "alt_km", "hp_mv", "rate_usvh"])
         w.writerows(rows)
     print("OK %d puntos -> %s" % (len(rows), args.out))
 

@@ -3,7 +3,7 @@
 tasas de dosis generadas fuera de línea (CARI-7A / toolkit Surrey / API).
 
 Formato de entrada (CSV, una fila por punto):
-    lat,alt_km,hp_mv,rate_usvh
+    rc_gv,alt_km,hp_mv,rate_usvh
     0,8.0,300,1.50
     ...
 
@@ -32,32 +32,61 @@ def parse_axis(spec):
     return vals
 
 
+def resample_to_axis(rows, rc_axis, alt_axis, hp_axis):
+    """(rc, alt, hp, rate) irregulares -> lista de floats en orden rc-major.
+
+    Por cada rebanada (alt, hp) se ordenan las muestras por Rc y se interpola
+    linealmente sobre el eje. Por encima de la ultima muestra se mantiene el
+    ultimo valor: el eje llega a 18 GV y el globo solo a 17.64, y extrapolar
+    daria dosis irreales."""
+    slices = {}
+    for rc, alt, hp, rate in rows:
+        slices.setdefault((round(alt, 6), round(hp, 6)), []).append((rc, rate))
+    out = []
+    for ai, alt in enumerate(alt_axis):
+        for hi, hp in enumerate(hp_axis):
+            pts = sorted(slices.get((round(alt, 6), round(hp, 6)), []))
+            if len(pts) < 2:
+                sys.stderr.write(
+                    "ERROR: la rebanada alt=%s hp=%s tiene %d muestras (minimo 2)\n"
+                    % (alt, hp, len(pts))
+                )
+                sys.exit(2)
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            for rc in rc_axis:
+                if rc <= xs[0]:
+                    out.append(ys[0])
+                    continue
+                if rc >= xs[-1]:
+                    out.append(ys[-1])
+                    continue
+                k = 0
+                while k + 1 < len(xs) and xs[k + 1] < rc:
+                    k += 1
+                dx = xs[k + 1] - xs[k]
+                out.append(ys[k] if dx == 0 else ys[k] + (ys[k + 1] - ys[k]) * (rc - xs[k]) / dx)
+    # Reordenar de (alt, hp, rc) a rc-major -> alt -> hp.
+    n_rc, n_alt, n_hp = len(rc_axis), len(alt_axis), len(hp_axis)
+    ordered = [0.0] * (n_rc * n_alt * n_hp)
+    idx = 0
+    for ai in range(n_alt):
+        for hi in range(n_hp):
+            for ri in range(n_rc):
+                ordered[(ri * n_alt + ai) * n_hp + hi] = out[idx]
+                idx += 1
+    return ordered
+
+
 def build_grid(rows, axes):
-    lat_axis, alt_axis, hp_axis = (parse_axis(a) for a in axes.split(","))
-    n_lat, n_alt, n_hp = len(lat_axis), len(alt_axis), len(hp_axis)
-    grid = {}
-    for lat, alt, hp, rate in rows:
-        grid[(round(lat, 6), round(alt, 6), round(hp, 6))] = rate
-    missing = []
-    floats = []
-    for li, lat in enumerate(lat_axis):
-        for ai, alt in enumerate(alt_axis):
-            for hi, hp in enumerate(hp_axis):
-                key = (lat, alt, hp)
-                if key not in grid:
-                    missing.append(key)
-                    floats.append(0.0)
-                else:
-                    floats.append(float(grid[key]))
-    if missing:
-        sys.stderr.write(
-            "ERROR: %d puntos faltan en la rejilla (primeros 10: %s)\n"
-            % (len(missing), missing[:10])
-        )
-        sys.exit(2)
+    """(rc, alt, hp, rate) irregulares + spec de ejes -> (ejes, base64, bytes).
+    A diferencia de la version por latitud, aqui las muestras NO caen en los
+    nodos del eje: se remuestrean."""
+    rc_axis, alt_axis, hp_axis = (parse_axis(a) for a in axes.split(","))
+    floats = resample_to_axis(rows, rc_axis, alt_axis, hp_axis)
     packed = struct.pack("<%df" % len(floats), *floats)
     b64 = base64.b64encode(packed).decode("ascii")
-    return lat_axis, alt_axis, hp_axis, b64, len(floats) * 4
+    return rc_axis, alt_axis, hp_axis, b64, len(floats) * 4
 
 
 RC_SCALE = 0.01  # GV por unidad del Int16
@@ -130,24 +159,26 @@ def main():
         rows = []
         with open(path, newline="") as f:
             for r in csv.reader(f):
-                if not r or r[0].startswith("#") or r[0].strip().lower() == "lat":
+                if not r or r[0].startswith("#") or r[0].strip().lower() == "rc_gv":
                     continue
                 rows.append((float(r[0]), float(r[1]), float(r[2]), float(r[3])))
         return rows
 
     rows = read_csv(args.input)
-    lat_axis, alt_axis, hp_axis, b64, nbytes = build_grid(rows, args.axes)
-    lat_js = "[" + ",".join(str(int(x)) if x == int(x) else str(x) for x in lat_axis) + "]"
+    rc_axis, alt_axis, hp_axis, b64, nbytes = build_grid(rows, args.axes)
+    rc_js = "[" + ",".join(str(x) for x in rc_axis) + "]"
     alt_js = "[" + ",".join(str(x) for x in alt_axis) + "]"
     hp_js = "[" + ",".join(str(int(x)) for x in hp_axis) + "]"
     lines = [
-        "// Generado por tools/generate_dose_grid.py — NO editar a mano.",
-        "// Fuente de datos: %s (%d puntos, %.1f KB Float32LE)." % (args.input, len(rows), nbytes / 1024),
+        "// Generado por tools/generate_dose_grid.py - NO editar a mano.",
+        "// Fuente: %s (%d muestras -> %d nodos, %.1f KB Float32LE)." % (
+            args.input, len(rows), len(rc_axis) * len(alt_axis) * len(hp_axis), nbytes / 1024),
         "var DOSE_GRID = {",
-        "  lat: %s," % lat_js,
+        "  rc: %s," % rc_js,
         "  alt: %s," % alt_js,
         "  hp: %s," % hp_js,
-        "  data: \"%s\"" % b64,
+        "  data: \"%s\"," % b64,
+        "  epoch: \"IGRF2010\", version: 2",
         "};",
     ]
     out = "\n".join(lines) + "\n"
@@ -161,21 +192,21 @@ def main():
         # decodificar la rejilla generada para interpolar-comparar
         raw = base64.b64decode(b64)
         floats = list(struct.unpack("<%df" % (len(raw) // 4), raw))
-        n_lat, n_alt, n_hp = len(lat_axis), len(alt_axis), len(hp_axis)
+        n_rc, n_alt, n_hp = len(rc_axis), len(alt_axis), len(hp_axis)
         idx = {}
-        for li, lat in enumerate(lat_axis):
+        for ri, rc in enumerate(rc_axis):
             for ai, alt in enumerate(alt_axis):
                 for hi, hp in enumerate(hp_axis):
-                    idx[(lat, alt, hp)] = floats[(li * n_alt + ai) * n_hp + hi]
+                    idx[(rc, alt, hp)] = floats[(ri * n_alt + ai) * n_hp + hi]
         worst, worst_pt = 0.0, None
-        for lat, alt, hp, ref in refs:
-            if (lat, alt, hp) not in idx:
-                print("  ref fuera de rejilla, ignorada:", lat, alt, hp)
+        for rc, alt, hp, ref in refs:
+            if (rc, alt, hp) not in idx:
+                print("  ref fuera de rejilla, ignorada:", rc, alt, hp)
                 continue
-            err = abs(idx[(lat, alt, hp)] - ref)
+            err = abs(idx[(rc, alt, hp)] - ref)
             if err > worst:
-                worst, worst_pt = err, (lat, alt, hp)
-        print("Validación: %d puntos de referencia, error máximo %.4f µSv/h en %s"
+                worst, worst_pt = err, (rc, alt, hp)
+        print("Validación: %d puntos de referencia, error máximo %.4f µSv/h en Rc=%s"
               % (len(refs), worst, worst_pt))
 
 
