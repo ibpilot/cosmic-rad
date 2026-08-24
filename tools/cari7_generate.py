@@ -89,6 +89,8 @@ def main():
     ap.add_argument("--hp", type=int, help="nivel de HP (300..1200); opcional con --selftest-only")
     ap.add_argument("--cari-dir", required=True, help="directorio de la distribución CARI-7A")
     ap.add_argument("--binary", required=True, help="nombre del binario dentro de cari-dir")
+    ap.add_argument("--cutoffs", required=True,
+                    help="directorio CUTOFFS/ de la distribucion de CARI-7A")
     ap.add_argument("--out", help="CSV de salida (requerido sin --selftest-only)")
     ap.add_argument("--chunk", type=int, default=0,
                     help="partir el .LOC en lotes de N puntos (0 = un solo fichero)")
@@ -120,10 +122,8 @@ def main():
     if args.os == "unix" and not args.wine:
         os.chmod(binpath, 0o755)
 
-    from cari7_make_input import LAT_VALUES, ALT_VALUES
-    loc_files = write_loc(args.hp, cari, chunk=args.chunk)
+    loc_files = write_loc(args.hp, cari, args.cutoffs, chunk=args.chunk)
     patch_cari_ini(ini_src, cari, args.os)
-    expected = len(LAT_VALUES) * len(ALT_VALUES)
     rows = []
     for loc in loc_files:
         write_default_inp(args.hp, cari, loc_name=os.path.basename(loc))
@@ -132,8 +132,12 @@ def main():
         if not os.path.exists(ans):
             sys.exit("no se generó %s (¿CARI falló?)" % ans)
         rows.extend(parse_ans(ans, args.hp))
-    if len(rows) != expected:
-        sys.stderr.write("AVISO: %d puntos esperados, %d parseados\n" % (expected, len(rows)))
+    n_written = 0
+    for loc in loc_files:
+        with open(loc) as f:
+            n_written += sum(1 for line in f if line.startswith(("N,", "S,")))
+    if len(rows) != n_written:
+        sys.stderr.write("AVISO: %d puntos escritos, %d parseados\n" % (n_written, len(rows)))
     with open(args.out, "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["lat", "alt_km", "hp_mv", "rate_usvh"])

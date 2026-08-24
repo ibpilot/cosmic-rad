@@ -1,10 +1,12 @@
 #!/usr/bin/env python3
 """Genera los inputs para ejecutar CARI-7A en modo batch (menú-less) y analizar
-una rejilla de localizaciones (lat × alt) para un nivel de potencial
-heliocéntrico (HP) dado.
+una rejilla de localizaciones por rigidez de corte vertical (Rc) para un nivel
+de potencial heliocéntrico (HP) dado.
 
 Rejilla (constantes compartidas con cari7_generate.py):
-    lat 0..90 paso 1° (91), alt 8.0..13.0 km paso 0.5 (11), lon 0°E (representativo)
+    Rc eje 0..18 GV paso 0.25 (73 nodos), alt 8.0..13.0 km paso 0.5 (11).
+    Los puntos (lat, lon) se eligen por rigidez objetivo usando el mapa de la
+    epoca que CARI-7A usara para la fecha del HP.
     HP eje: [300,400,...,1200] MV, cada uno con una fecha real de MV-DATES.L99
     cuyo HP coincide con el objetivo (±6 MV).
 
@@ -14,50 +16,69 @@ Salidas en el directorio de trabajo (workdir):
     CARI.INI            copia del stock con MENUS=NO! (modo batch)
 
 Uso:
-    python3 tools/cari7_make_input.py --hp 300 --cari-ini CARI.INI --work .
+    python3 tools/cari7_make_input.py --hp 300 --cutoffs CARI_7A_DVD/CUTOFFS \
+        --cari-ini CARI_7A_DVD/CARI.INI --work .
 """
 import argparse, os
 
 # ---- constantes de la rejilla (no cambiar sin regenerar) ----
-LAT_VALUES = [float(i) for i in range(0, 91)]          # 0..90 paso 1
-ALT_VALUES = [8.0 + 0.5 * i for i in range(11)]        # 8.0..13.0 paso 0.5
+# Eje de rigidez de la rejilla: 0..18 GV paso 0.25 (73 nodos). El paso sale de
+# medir el error de interpolacion con CARI-7A: 0.50 GV da 0.40 % maximo, 0.25
+# lo deja despreciable. Uniforme para conservar la aritmetica de indices de
+# doseRateGrid.
+RC_TARGETS = [round(0.25 * i, 2) for i in range(73)]
+ALT_VALUES = [8.0 + 0.5 * i for i in range(11)]   # sin cambios
 HP_DATES = {                                            # objetivo HP -> fecha MV-DATES.L99
     300: "2007/06/00", 400: "1994/11/00", 500: "1963/03/00",
     600: "1992/11/00", 700: "1980/05/00", 800: "2003/09/00",
     900: "1969/06/00", 1000: "1958/09/00", 1100: "1960/01/00", 1200: "1990/07/00",
 }
-LON = 0.00  # meridiano representativo (Europa). Limitación documentada: |lat|-sólo.
 
 
-def loc_line(lat, alt, date):
-    # Formato estilo EXAMPLES.LOC, <= 66 caracteres.
-    line = "N, {lat:7.4f}, E, {lon:6.2f}, K, {alt:6.2f} , {date}, H0, D2, P0, C4, S0".format(
-        lat=lat, lon=LON, alt=alt, date=date)
+def rc_sample_targets(n=150):
+    """Objetivos de Rc para el barrido. Sobremuestrea el eje: los puntos reales
+    del mapa no caen exactamente en los nodos, asi que se corre de mas y luego
+    se remuestrea. Incluye siempre los nodos del eje y llega al maximo global
+    (17.64 GV en IGRF2010)."""
+    hi = 17.64
+    extra = [round(hi * i / (n - 1), 4) for i in range(n)]
+    vals = sorted(set([t for t in RC_TARGETS if t <= hi] + extra))
+    return vals
+
+
+def loc_line(lat, lon, alt, date):
+    """Formato estilo EXAMPLES.LOC, <= 66 caracteres.
+    H0 = media diaria (es la HORA del dia, no el potencial heliocentrico).
+    D2 = dosis efectiva ICRP-103."""
+    ns = "N" if lat >= 0 else "S"
+    line = "{ns}, {lat:7.4f}, E, {lon:6.2f}, K, {alt:6.2f} , {date}, H0, D2, P0, C4, S0".format(
+        ns=ns, lat=abs(lat), lon=lon, alt=alt, date=date)
     assert len(line) <= 66, "línea LOC de %d chars: %s" % (len(line), line)
     return line
 
 
-def write_loc(hp, work, chunk=0):
-    """Escribe el .LOC para un nivel de HP. Si chunk>0, parte la rejilla en
-    ficheros grid_hp{hp}_p{k}.loc de `chunk` puntos cada uno (util si el
-    tiempo por punto es alto y un fichero de 1001 líneas tardaría demasiado)."""
+def write_loc(hp, work, cutoffs_dir, chunk=0):
+    """Escribe el .LOC de un nivel de HP. Los puntos se eligen por rigidez
+    objetivo usando el mapa de la epoca que CARI-7A usara para esa fecha: si se
+    eligieran con otro mapa, las Rc reales caerian lejos de los objetivos."""
+    import os as _os
+    from cari7_cutoffs import load_cutoff_map, epoch_file_for_year, points_for_rc_targets
     date = HP_DATES[hp]
-    points = [(lat, alt) for lat in LAT_VALUES for alt in ALT_VALUES]
-    if chunk <= 0:
-        chunks = [points]
-    else:
-        chunks = [points[i:i + chunk] for i in range(0, len(points), chunk)]
+    epoch = epoch_file_for_year(int(date[:4]))
+    rcmap = load_cutoff_map(_os.path.join(cutoffs_dir, epoch))
+    picks = points_for_rc_targets(rcmap, rc_sample_targets(), tol=0.13)
+    points = [(la, lo, alt) for (la, lo, _rc) in picks for alt in ALT_VALUES]
+    chunks = [points] if chunk <= 0 else [points[i:i + chunk] for i in range(0, len(points), chunk)]
     paths = []
     for k, pts in enumerate(chunks):
         name = "grid_hp%d.loc" % hp if len(chunks) == 1 else "grid_hp%d_p%d.loc" % (hp, k)
-        path = os.path.join(work, name)
+        path = _os.path.join(work, name)
         with open(path, "w") as f:
-            f.write("C, Cosmic Radiation Flight Calculator - grid de dosis (lat x alt) para HP=%d MV\n" % hp)
-            f.write("C, Fecha: %s (HP real ~%d MV, fuente MV-DATES.L99), lon=%g E, tally D2 (ICRP-103 eff. dose)\n"
-                    % (date, hp, LON))
+            f.write("C, barrido de rigidez CARI-7A HP=%d MV\n" % hp)
+            f.write("C, %s, epoca %s, D2 (ICRP-103)\n" % (date, epoch))
             f.write("START-------------------------------------------------\n")
-            for lat, alt in pts:
-                f.write(loc_line(lat, alt, date) + "\n")
+            for la, lo, alt in pts:
+                f.write(loc_line(la, lo, alt, date) + "\n")
             f.write("STOP--------------------------------------------------------\n")
         paths.append(path)
     return paths
@@ -89,15 +110,16 @@ def patch_cari_ini(cari_ini_src, work, os_name):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--hp", required=True, type=int, choices=sorted(HP_DATES))
+    ap.add_argument("--cutoffs", required=True,
+                    help="directorio CUTOFFS/ de la distribucion de CARI-7A")
     ap.add_argument("--cari-ini", required=True, help="CARI.INI stock de la distribución")
     ap.add_argument("--work", default=".", help="directorio de trabajo (debe contener el binario y los datos)")
     ap.add_argument("--os", default="unix", choices=["unix", "win"])
     args = ap.parse_args()
-    loc = write_loc(args.hp, args.work)
+    loc = write_loc(args.hp, args.work, args.cutoffs)
     dinp = write_default_inp(args.hp, args.work)
     ini = patch_cari_ini(args.cari_ini, args.work, args.os)
     print("escritos:", loc, "|", dinp, "|", ini)
-    print("puntos en %s: %d" % (loc, len(LAT_VALUES) * len(ALT_VALUES)))
 
 
 if __name__ == "__main__":
