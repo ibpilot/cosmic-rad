@@ -396,7 +396,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.8";
+var APP_VERSION = "1.9";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -1680,30 +1680,34 @@ function rcAt(lat, lon) {
   var b = g(i0 + 1, j0) + (g(i0 + 1, j1) - g(i0 + 1, j0)) * fLon;
   return a + (b - a) * fLat;
 }
-// Interpolación trilineal (bilineal lat/alt + lineal HP) sobre la rejilla.
-// Devuelve null si no hay tabla (el llamador usa el fallback EURADOS).
-function doseRateGrid(lat, altKm, hpMV) {
+// Interpolación trilineal (bilineal rigidez/altitud + lineal HP) sobre la rejilla.
+// La posición entra por la rigidez de corte: dos puntos con la misma Rc dan la
+// misma dosis, verificado contra CARI-7A. Devuelve null si no hay tabla (el
+// llamador usa el fallback EURADOS).
+function doseRateGrid(lat, lon, altKm, hpMV) {
   ensureDoseGrid();
-  if (!_doseF32 || !DOSE_GRID || !DOSE_GRID.lat || !DOSE_GRID.alt || !DOSE_GRID.hp) return null;
+  if (!_doseF32 || !DOSE_GRID || !DOSE_GRID.rc || !DOSE_GRID.alt || !DOSE_GRID.hp) return null;
+  var rcv = rcAt(lat, lon);
+  if (rcv == null || !isFinite(rcv)) return null;
   var cl = function (x, lo, hi) { return Math.max(lo, Math.min(hi, x)); };
-  var la = DOSE_GRID.lat, al = DOSE_GRID.alt, hp = DOSE_GRID.hp;
-  var nLat = la.length, nAlt = al.length, nHp = hp.length;
-  if (nLat < 2 || nAlt < 2 || nHp < 2) return null;
-  var latC = cl(Math.abs(lat), la[0], la[nLat - 1]);
+  var rcA = DOSE_GRID.rc, al = DOSE_GRID.alt, hp = DOSE_GRID.hp;
+  var nRc = rcA.length, nAlt = al.length, nHp = hp.length;
+  if (nRc < 2 || nAlt < 2 || nHp < 2) return null;
+  var rcC = cl(rcv, rcA[0], rcA[nRc - 1]);
   var altC = cl(altKm, al[0], al[nAlt - 1]);
   var hpC = cl(hpMV, hp[0], hp[nHp - 1]);
-  var li = cl(Math.floor((latC - la[0]) / (la[1] - la[0])), 0, nLat - 2);
+  var ri = cl(Math.floor((rcC - rcA[0]) / (rcA[1] - rcA[0])), 0, nRc - 2);
   var ai = cl(Math.floor((altC - al[0]) / (al[1] - al[0])), 0, nAlt - 2);
   var hi = cl(Math.floor((hpC - hp[0]) / (hp[1] - hp[0])), 0, nHp - 2);
-  var fl = (latC - la[li]) / (la[1] - la[0]);
+  var fr = (rcC - rcA[ri]) / (rcA[1] - rcA[0]);
   var fa = (altC - al[ai]) / (al[1] - al[0]);
   var fh = (hpC - hp[hi]) / (hp[1] - hp[0]);
-  var g = function (L, A, H) { return _doseF32[(L * nAlt + A) * nHp + H]; };
+  var g = function (R, A, H) { return _doseF32[(R * nAlt + A) * nHp + H]; };
   var lerp = function (a, b, t) { return a + (b - a) * t; };
-  var c000 = g(li, ai, hi), c100 = g(li + 1, ai, hi), c010 = g(li, ai + 1, hi), c110 = g(li + 1, ai + 1, hi);
-  var c001 = g(li, ai, hi + 1), c101 = g(li + 1, ai, hi + 1), c011 = g(li, ai + 1, hi + 1), c111 = g(li + 1, ai + 1, hi + 1);
-  var x00 = lerp(c000, c100, fl), x10 = lerp(c010, c110, fl);
-  var x01 = lerp(c001, c101, fl), x11 = lerp(c011, c111, fl);
+  var c000 = g(ri, ai, hi), c100 = g(ri + 1, ai, hi), c010 = g(ri, ai + 1, hi), c110 = g(ri + 1, ai + 1, hi);
+  var c001 = g(ri, ai, hi + 1), c101 = g(ri + 1, ai, hi + 1), c011 = g(ri, ai + 1, hi + 1), c111 = g(ri + 1, ai + 1, hi + 1);
+  var x00 = lerp(c000, c100, fr), x10 = lerp(c010, c110, fr);
+  var x01 = lerp(c001, c101, fr), x11 = lerp(c011, c111, fr);
   var y0 = lerp(x00, x10, fa), y1 = lerp(x01, x11, fa);
   return lerp(y0, y1, fh);
 }
@@ -1721,6 +1725,33 @@ function solarFactorForHp(hpMV) {
   }
   return pts[2][1];
 }
+// greatCirclePoints: n puntos equiespaciados sobre la ortodrómica, por
+// interpolación esférica. La heurística anterior ("latitud efectiva") promediaba
+// tres latitudes y no veía la longitud, que es justo lo que ahora manda.
+function greatCirclePoints(lat1, lon1, lat2, lon2, n) {
+  var r = function (d) { return d * Math.PI / 180; };
+  var deg = function (x) { return x * 180 / Math.PI; };
+  var v1 = [Math.cos(r(lat1)) * Math.cos(r(lon1)), Math.cos(r(lat1)) * Math.sin(r(lon1)), Math.sin(r(lat1))];
+  var v2 = [Math.cos(r(lat2)) * Math.cos(r(lon2)), Math.cos(r(lat2)) * Math.sin(r(lon2)), Math.sin(r(lat2))];
+  var dot = Math.max(-1, Math.min(1, v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]));
+  var ang = Math.acos(dot);
+  var out = [];
+  for (var k = 0; k < n; k++) {
+    // Punto medio de cada tramo: regla del punto medio, más exacta que muestrear
+    // los extremos con el mismo número de puntos.
+    var t = (k + 0.5) / n;
+    var v;
+    if (ang < 1e-9) {
+      v = v1;
+    } else {
+      var s1 = Math.sin((1 - t) * ang) / Math.sin(ang);
+      var s2 = Math.sin(t * ang) / Math.sin(ang);
+      v = [v1[0] * s1 + v2[0] * s2, v1[1] * s1 + v2[1] * s2, v1[2] * s1 + v2[2] * s2];
+    }
+    out.push([deg(Math.asin(Math.max(-1, Math.min(1, v[2])))), deg(Math.atan2(v[1], v[0]))]);
+  }
+  return out;
+}
 function calcFlight(orig, dest, flIdx, hpMV) {
   var A = activeDB[orig],
     B = activeDB[dest];
@@ -1729,9 +1760,25 @@ function calcFlight(orig, dest, flIdx, hpMV) {
   if (!FL_OPTIONS[fi]) fi = 1;
   var distKm = gcDistance(A.lat, A.lon, B.lat, B.lon);
   var timeH = distKm / 830;
+  // Se integra sobre la ortodrómica igual que un track FPL: la dosis depende de
+  // la rigidez de corte punto a punto, y esa varía con la longitud tanto como
+  // con la latitud (a 50°N va de 0,87 GV sobre Canadá a 4,66 sobre Kamchatka).
+  var NS = 32;
+  var pts = greatCirclePoints(A.lat, A.lon, B.lat, B.lon, NS);
+  var altKm = FL_OPTIONS[fi].altKm;
+  var sum = 0, nOk = 0;
+  for (var si = 0; si < pts.length; si++) {
+    var rr = doseRateGrid(pts[si][0], pts[si][1], altKm, hpMV);
+    if (rr != null && isFinite(rr)) { sum += rr; nOk++; }
+  }
   var effLat = effectiveLatitude(A.lat, A.lon, B.lat, B.lon);
-  var rateUsvh = doseRateGrid(effLat, FL_OPTIONS[fi].altKm, hpMV);
-  if (rateUsvh == null) rateUsvh = getDoseRate(effLat) * FL_OPTIONS[fi].factor * solarFactorForHp(hpMV);
+  var rateUsvh;
+  if (nOk === pts.length) {
+    rateUsvh = sum / nOk;
+  } else {
+    // Sin rejilla completa: fallback EURADOS con la heurística de siempre.
+    rateUsvh = getDoseRate(effLat) * FL_OPTIONS[fi].factor * solarFactorForHp(hpMV);
+  }
   var doseUsv = rateUsvh * timeH;
   return {
     distKm: Math.round(distKm),
@@ -1766,7 +1813,7 @@ function calcTrack(track, hpMV, altKm) {
   var DEF_ALT_KM = 10.668;
   var okAlt = function (x) { return isFinite(x) ? x : DEF_ALT_KM; };
   var segDose = function (lat, lon, alt, dtH) {
-    var rate = doseRateGrid(Math.abs(lat), alt, hpMV);
+    var rate = doseRateGrid(lat, lon, alt, hpMV);
     if (rate == null || !isFinite(rate)) rate = getDoseRate(Math.abs(lat));
     return rate * dtH;
   };
@@ -2103,6 +2150,7 @@ var LANG = {
     calcInfoNoRouteBody: "Se traza el camino ortodrómico (círculo máximo) entre origen y destino y se divide en tramos. Para cada tramo se suma la tasa de dosis (µSv/h) según latitud, altitud y ciclo solar (HP), multiplicada por el tiempo de vuelo del tramo. La tasa sale de la tabla real CARI-7A embebida (91 lat × 11 alt × 10 HP), con la altitud del FL elegido.",
     calcInfoRoute: "Con ruta · FPL o steps de nivel",
     calcInfoRouteBody: "La dosis se calcula sobre el camino real, tramo a tramo, con la misma tabla de tasas. Los waypoints de la ruta FPL se resuelven contra la base de fixes (descarga única bajo demanda). La altitud de cada tramo es la del FL elegido, o la de los steps de nivel del plan si los has pegado (se aplican por tramo y el selector de FL se bloquea).",
+    calcInfoRcBody: "La dosis de cada punto sale de la rigidez de corte geomagnética vertical de ese punto, con el mapa de 1°×1° que distribuye CARI-7A (época IGRF2010). Por eso la longitud importa tanto como la latitud: a 50°N la rigidez va de 0,87 GV sobre Canadá a 4,66 GV sobre Kamchatka, y la dosis cambia en consecuencia. El mapa es de 2010 y el campo geomagnético deriva un 2-3 % por década, así que en 2026 hay unos pocos por ciento de incertidumbre añadida por ese motivo.",
     calcInfoFootnote: "Estimación orientativa basada en CARI-7A (FAA), no dosimetría certificada.",
     careerToggle: "Mostrar dosis de tu vida aeronáutica",
     careerYears: "Años de carrera",
@@ -2339,6 +2387,7 @@ var LANG = {
     calcInfoNoRouteBody: "The great-circle (orthodromic) path between origin and destination is drawn and split into segments. For each segment, the dose rate (µSv/h) for that latitude, altitude and solar cycle (HP) is multiplied by the segment's flight time. The rate comes from the embedded real CARI-7A table (91 lat × 11 alt × 10 HP), at the altitude of the selected FL.",
     calcInfoRoute: "With route · FPL or level steps",
     calcInfoRouteBody: "The dose is computed along the real path, segment by segment, with the same rate table. FPL waypoints are resolved against the global fix database (one-time on-demand download). Each segment uses the altitude of the selected FL, or the plan's level steps if you pasted them (applied per segment; the FL selector locks).",
+    calcInfoRcBody: "Each point's dose comes from that point's vertical geomagnetic cutoff rigidity, using the 1°×1° map shipped with CARI-7A (IGRF2010 epoch). That is why longitude matters as much as latitude: at 50°N the rigidity ranges from 0.87 GV over Canada to 4.66 GV over Kamchatka, and the dose follows. The map is from 2010 and the geomagnetic field drifts 2-3 % per decade, so in 2026 that adds a few percent of uncertainty.",
     calcInfoFootnote: "Orientation estimate based on CARI-7A (FAA), not certified dosimetry.",
     careerToggle: "Show aeronautical career dose",
     careerYears: "Career years",
@@ -4705,9 +4754,9 @@ function App() {
   }, t.flVisualTitle), FL_OPTIONS.map(function (fl, i) {
     var baseRef = 3.5;
     var fl390Factor = FL_OPTIONS[2].factor; // FL390 = reference
-    var flRate = doseRateGrid(40, fl.altKm, hpMV);
+    var flRate = doseRateGrid(40, 0, fl.altKm, hpMV);
     var rate = flRate != null ? flRate.toFixed(2) : (baseRef * fl.factor * solarFactor).toFixed(2);
-    var maxRate = flRate != null ? doseRateGrid(40, FL_OPTIONS[FL_OPTIONS.length - 1].altKm, hpMV) : baseRef * FL_OPTIONS[FL_OPTIONS.length - 1].factor * solarFactor;
+    var maxRate = flRate != null ? doseRateGrid(40, 0, FL_OPTIONS[FL_OPTIONS.length - 1].altKm, hpMV) : baseRef * FL_OPTIONS[FL_OPTIONS.length - 1].factor * solarFactor;
     var pct = rate / maxRate * 100;
     var isRef = i === 2; // FL390 is reference
     var diffVsFL390 = ((fl.factor / fl390Factor - 1) * 100).toFixed(0);
@@ -5652,6 +5701,13 @@ function CalcInfoModal(_refCalcInfo) {
       }
     }, s.body));
   })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12,
+      color: "#90b8cc",
+      lineHeight: 1.7,
+      padding: "2px 16px 0"
+    }
+  }, t.calcInfoRcBody), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 9.5,
       color: "#2a4050",
