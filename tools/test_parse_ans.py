@@ -12,6 +12,7 @@ ANS = """     LAT,       LON,     ALTITUDE,    DATE,    HR, VCR(GV), PARTICLE,  
   42.00000, 157.00000,     9.0000,K,2010/01/00,   0,  8.01,TOTAL     , 3.0537E+00, 2.1299E-01,    microSv/hr, ICRP Pub. 103 EFFECTIVE DOSE 
   34.00000, 145.00000,   36000.00,F,2010/01/00,   0, 11.99,TOTAL     , 2.1488E+00, 1.4407E-01,    microSv/hr, ICRP Pub. 103 EFFECTIVE DOSE 
   10.00000,  10.00000,    11.0000,K,2010/01/00,   0,  5.00,TOTAL     , 1.0000E+00, 1.0000E-01,    microSv/hr, ICRU H*(10) AMBIENT DOSE EQUIVALENT 
+  20.00000,  20.00000,    11.0000,K,2010/01/00,   0,  6.00,TOTAL     , 2.0000E+00, 2.0000E-01,    microSv/hr, ICRP Pub. 60 EFFECTIVE DOSE 
 """
 
 
@@ -43,7 +44,12 @@ class TestParseAns(unittest.TestCase):
         self.assertEqual(len(self.rows), 3)
 
     def test_ignora_tallies_que_no_son_icrp103(self):
+        # Filtrar por "EFFECTIVE DOSE" a secas colaria la fila de ICRP-60 y
+        # duplicaria puntos con otra magnitud fisica.
         self.assertTrue(all(abs(r[3] - 1.0) > 1e-9 for r in self.rows))
+        self.assertTrue(all(abs(r[3] - 2.0) > 1e-9 for r in self.rows),
+                        "se colo la fila de ICRP Pub. 60")
+        self.assertTrue(all(abs(r[0] - 6.00) > 1e-9 for r in self.rows))
 
 
 if __name__ == "__main__":
