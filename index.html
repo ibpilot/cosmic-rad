@@ -396,7 +396,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.7";
+var APP_VERSION = "1.8";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -1369,6 +1369,9 @@ var AIRPORTS = _defineProperty(_defineProperty(_defineProperty(_defineProperty(_
 // Starts with LOCAL_AIRPORTS (fallback), then merges OpenFlights data if online.
 // activeDB and icaoMap are module-level refs updated after fetch.
 var activeDB = _objectSpread({}, AIRPORTS);
+// Se incrementa al sustituir activeDB por la base completa (OpenFlights): los
+// campos de aeropuerto lo usan como dependencia para resincronizarse.
+var DB_VERSION = 0;
 var icaoMap = {};
 Object.entries(activeDB).forEach(function (_ref) {
   var _ref2 = _slicedToArray(_ref, 2),
@@ -1483,6 +1486,7 @@ function _loadOpenFlights() {
         case 13:
           activeDB = extended;
           icaoMap = newIcao;
+          DB_VERSION++;
           onDone(added);
           _context.n = 15;
           break;
@@ -1544,6 +1548,9 @@ function gcDistance(lat1, lon1, lat2, lon2) {
       return d * Math.PI / 180;
     };
   var a = Math.pow(Math.sin(r(lat2 - lat1) / 2), 2) + Math.cos(r(lat1)) * Math.cos(r(lat2)) * Math.pow(Math.sin(r(lon2 - lon1) / 2), 2);
+  // Clamp: en pares casi antipodales el redondeo deja a>1 y sqrt(1-a) da NaN,
+  // que se propaga a distancia, tiempo y dosis del vuelo entero.
+  a = Math.min(1, Math.max(0, a));
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 function effectiveLatitude(lat1, lon1, lat2, lon2) {
@@ -1682,17 +1689,31 @@ function calcFlight(orig, dest, flIdx, hpMV) {
 // (compatibilidad con tracks guardados anteriormente).
 function calcTrack(track, hpMV, altKm) {
   if (!track || track.length < 2) return null;
+  // Coordenadas no finitas (backup manipulado, track corrupto) envenenaban
+  // gcDistance → dtH → dosis, y salía "NaN µSv" en toda la app. Se descartan
+  // los puntos inservibles antes de integrar; sin dos puntos válidos no hay track.
+  var dropped = 0;
+  track = track.filter(function (p) {
+    var okp = Array.isArray(p) && isFinite(p[1]) && isFinite(p[2]);
+    if (!okp) dropped++;
+    return okp;
+  });
+  if (track.length < 2) return null;
   var hasTime = track[0][0] != null;
   var doseUsv = 0, distKm = 0, timeH = 0, incomplete = false;
+  // Altitud por defecto FL350 para puntos sin altitud: un a[3] undefined daba
+  // NaN dentro de doseRateGrid, y la guarda `rate == null` no captura NaN.
+  var DEF_ALT_KM = 10.668;
+  var okAlt = function (x) { return isFinite(x) ? x : DEF_ALT_KM; };
   var segDose = function (lat, lon, alt, dtH) {
     var rate = doseRateGrid(Math.abs(lat), alt, hpMV);
-    if (rate == null) rate = getDoseRate(Math.abs(lat));
+    if (rate == null || !isFinite(rate)) rate = getDoseRate(Math.abs(lat));
     return rate * dtH;
   };
   for (var i = 1; i < track.length; i++) {
     var a = track[i - 1], b = track[i];
-    var aAlt = hasTime || altKm == null ? a[3] : altKm;
-    var bAlt = hasTime || altKm == null ? b[3] : altKm;
+    var aAlt = okAlt(hasTime || altKm == null ? a[3] : altKm);
+    var bAlt = okAlt(hasTime || altKm == null ? b[3] : altKm);
     var seg = gcDistance(a[1], a[2], b[1], b[2]);
     var dtH;
     if (hasTime) {
@@ -1714,8 +1735,8 @@ function calcTrack(track, hpMV, altKm) {
     } else {
       dtH = seg / 830;
     }
-    var mlat = (a[1] + b[1]) / 2, malt = (aAlt + bAlt) / 2;
-    doseUsv += segDose(mlat, a[2], malt, dtH);
+    var mlat = (a[1] + b[1]) / 2, mlon = (a[2] + b[2]) / 2, malt = (aAlt + bAlt) / 2;
+    doseUsv += segDose(mlat, mlon, malt, dtH);
     distKm += seg;
     timeH += dtH;
   }
@@ -1751,7 +1772,7 @@ function ensureFixes(cb) {
   if (cb) _fixesCbs.push(cb);
   if (_fixesLoading) return;
   _fixesLoading = true;
-  fetch("https://raw.githubusercontent.com/ibpilot/cosmic-rad/main/fixes.json?v=1")
+  fetch("https://raw.githubusercontent.com/ibpilot/cosmic-rad/main/fixes.json?v=" + APP_VERSION)
     .then(function (r) { return r.json(); })
     .then(function (d) {
       FIXES = d;
@@ -1793,7 +1814,9 @@ function routeAirportsFromTokens(tokens) {
 // Se detectan en las líneas que contienen "Fxxx"; los waypoints intermedios van
 // antes de cada /Fxxx. Devuelve null si no hay steps.
 function parseSteps(text) {
-  var stepLines = text.split(/\r?\n/).filter(function (l) { return /\bF\d{2,3}\b/.test(l); });
+  // La ruta se normaliza a mayúsculas pero los steps se parseaban del texto
+  // crudo: "f370 4730n04000w/f330" devolvía null y el plan perdía los niveles.
+  var stepLines = String(text || "").toUpperCase().split(/\r?\n/).filter(function (l) { return /\bF\d{2,3}\b/.test(l); });
   if (!stepLines.length) return null;
   // tokens separados por espacios o "/", sin puntos (los tokens con "." son la
   // ruta pegada en la misma línea y no pertenecen a los steps)
@@ -1821,17 +1844,28 @@ function parseRouteString(text, origIata, destIata, stepsText) {
   var routeDestIata = resolveCode(rAp.destIcao || "");
   var orig = routeOrigIata && activeDB[routeOrigIata] ? activeDB[routeOrigIata] : (origIata && activeDB[origIata] ? activeDB[origIata] : null);
   var cur = orig ? [orig.lat, orig.lon] : null;
-  var pts = [], unresolved = [], F = FIXES || {};
+  var pts = [], unresolved = [], stepsUnmatched = [], F = FIXES || {};
   var tokIdx = {};
-  tokens.forEach(function (tk, ti) { tokIdx[tk] = ti; });
+  // Primera aparición gana: con un fix repetido en la ruta, quedarse con la
+  // última hacía que su step de nivel se aplicase más tarde de lo que dice el plan.
+  tokens.forEach(function (tk, ti) { if (tokIdx[tk] === undefined) tokIdx[tk] = ti; });
   // steps de FL del plan: campo separado si se pasó, si no auto-detección en la ruta
   var steps = parseSteps(stepsText && stepsText.trim() ? stepsText : text);
   var ptTok = [];
   tokens.forEach(function (tok, ti) {
     var m = coordRe.exec(tok);
     if (m) {
-      var lat = parseInt(m[1], 10) + (m[2] ? parseInt(m[2], 10) / 60 : 0);
-      var lon = parseInt(m[4], 10) + (m[5] ? parseInt(m[5], 10) / 60 : 0);
+      var latD = parseInt(m[1], 10), latM = m[2] ? parseInt(m[2], 10) : 0;
+      var lonD = parseInt(m[4], 10), lonM = m[5] ? parseInt(m[5], 10) : 0;
+      // La regex acepta grados/minutos fuera de rango (9999N19999W): sin
+      // validar, entraban al track como latitudes imposibles y falseaban la dosis.
+      if (latD > 90 || lonD > 180 || latM > 59 || lonM > 59 ||
+          (latD === 90 && latM > 0) || (lonD === 180 && lonM > 0)) {
+        unresolved.push(tok);
+        return;
+      }
+      var lat = latD + latM / 60;
+      var lon = lonD + lonM / 60;
       if (m[3] === "S") lat = -lat;
       if (m[6] === "W") lon = -lon;
       pts.push([null, Math.round(lat * 1e4) / 1e4, Math.round(lon * 1e4) / 1e4, 10.668]);
@@ -1855,8 +1889,23 @@ function parseRouteString(text, origIata, destIata, stepsText) {
         return;
       }
     }
+    // Un aeropuerto escrito sin runway ("..KJFK") no está en la base de fixes
+    // y caía en la lista de "fixes sin resolver" como un falso aviso.
+    if (tok.length === 4 && resolveCode(tok)) return;
     unresolved.push(tok);
   });
+  // abrir en el origen si falta, simétrico al cierre en destino: el aeropuerto
+  // de salida solo sembraba la desambiguación por proximidad y nunca entraba en
+  // el track, así que el tramo hasta el primer fix (la SID) quedaba fuera de
+  // distancia, tiempo y dosis. Cuando el plan omite la SID y el primer fix con
+  // nombre ya está en ruta, ese tramo llega a ser de miles de km.
+  if (orig && pts.length > 0) {
+    var firstP = pts[0];
+    if (Math.abs(firstP[1] - orig.lat) + Math.abs(firstP[2] - orig.lon) > 0.5) {
+      pts.unshift([null, Math.round(orig.lat * 1e4) / 1e4, Math.round(orig.lon * 1e4) / 1e4, 10.668]);
+      ptTok.unshift(-1); // anterior a cualquier token: hereda el FL de salida
+    }
+  }
   // cerrar en el destino si falta (la ruta termina en runway/STAR)
   var dest = routeDestIata && activeDB[routeDestIata] ? activeDB[routeDestIata] : (destIata && activeDB[destIata] ? activeDB[destIata] : null);
   if (dest && pts.length > 0) {
@@ -1869,22 +1918,33 @@ function parseRouteString(text, origIata, destIata, stepsText) {
   // Aplicar steps de FL: cada punto hereda el FL del último step cuyo waypoint
   // ya se ha pasado en la ruta (el waypoint del step se localiza por su token).
   if (steps && steps.length) {
-    var flNow = steps[0].fl;
+    // Si el primer step lleva waypoint, ese nivel empieza en ese punto: antes
+    // se aplicaba desde el punto 0 y el ascenso quedaba ya en nivel de crucero.
+    var fl0 = steps[0].wp != null ? null : steps[0].fl;
     var stepTok = [];
-    for (var si = 1; si < steps.length; si++) {
+    for (var si = steps[0].wp != null ? 0 : 1; si < steps.length; si++) {
       var sti = steps[si].wp != null ? tokIdx[steps[si].wp] : -1;
-      if (sti != null) stepTok.push({ tok: sti, fl: steps[si].fl });
+      // Un waypoint del step que no aparece en la ruta se descartaba en
+      // silencio y el nivel se quedaba en el anterior: ahora se avisa.
+      if (sti == null) { stepsUnmatched.push(steps[si].wp + "/F" + steps[si].fl); continue; }
+      stepTok.push({ tok: sti, fl: steps[si].fl });
     }
+    // Orden de ruta, no orden de escritura: sin ordenar, un step escrito fuera
+    // de orden pisaba a los anteriores y el nivel saltaba hacia atrás.
+    stepTok.sort(function (x, y) { return x.tok - y.tok; });
     for (var pi = 0; pi < pts.length; pi++) {
+      var flNow = fl0;
       for (var q = 0; q < stepTok.length; q++) {
         if (stepTok[q].tok <= ptTok[pi]) flNow = stepTok[q].fl;
       }
+      // Sin nivel conocido todavía: se deja la altitud por defecto del punto.
+      if (flNow == null) continue;
       // FL → altitud (km): FL310=9.449, FL350=10.668 → factor 0.03048
       pts[pi][3] = Math.round(flNow * 0.03048 * 100) / 100;
     }
   }
   if (pts.length < 2) return { track: null, error: "no pude resolver suficientes puntos (sin resolver: " + unresolved.slice(0, 5).join(", ") + ")" };
-  return { track: pts, mode: "waypoints", resolved: pts.length, unresolved: unresolved, error: null, routeOrig: routeOrigIata, routeDest: routeDestIata, steps: steps };
+  return { track: pts, mode: "waypoints", resolved: pts.length, unresolved: unresolved, stepsUnmatched: stepsUnmatched, error: null, routeOrig: routeOrigIata, routeDest: routeDestIata, steps: steps };
 }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
@@ -1893,12 +1953,56 @@ function fmtDose(usv) {
   return "".concat(usv.toFixed(1), " \xB5Sv");
 }
 function fmtTime(h) {
-  return "".concat(Math.floor(h), "h ").concat(Math.round(h % 1 * 60), "m");
+  // Redondear los minutos podía dar 60 ("1h 60m"): se redondea el total.
+  var mins = Math.round(h * 60);
+  return "".concat(Math.floor(mins / 60), "h ").concat(mins % 60, "m");
 }
 var _id = 1;
 var mkId = function mkId() {
   return _id++;
 };
+
+// Normaliza un vuelo al cargarlo de localStorage o de un backup: un fichero
+// manipulado o antiguo puede traer `legs`/`flIdx` ausentes o fuera de rango, y
+// eso propagaba "NaN µSv" por toda la app y reventaba el export a PDF.
+function hydrateFlight(f) {
+  var legs = Math.max(1, Math.round(Number(f.legs)) || 1);
+  var flIdx = Number(f.flIdx);
+  return _objectSpread(_objectSpread({}, f), {}, {
+    id: mkId(),
+    legs: legs,
+    flIdx: FL_OPTIONS[flIdx] ? flIdx : 1
+  });
+}
+
+// Valida el JSON de un backup y devuelve el mapa de meses, o null si no sirve.
+// Un array pasaba el `typeof === "object"` y entraba como si fuese válido,
+// dejando el planner vacío sin ningún aviso.
+function parseBackup(text) {
+  try {
+    var parsed = JSON.parse(text);
+    var months = parsed && parsed.version === 1 ? parsed.months : parsed;
+    if (typeof months !== "object" || Array.isArray(months)) return null;
+    return months; // months === null cae aquí y ya es el valor de rechazo
+  } catch (e) {
+    return null;
+  }
+}
+
+// Whitelist de serialización de un vuelo. Autosave y goToMonth DEBEN usar esta
+// misma función: cuando eran dos listas separadas, goToMonth olvidó `pairId` y
+// los pares ida/vuelta se desagrupaban al navegar de mes. Campo nuevo → aquí.
+function serializeFlight(f) {
+  return {
+    orig: f.orig,
+    dest: f.dest,
+    legs: f.legs || 1,
+    flIdx: f.flIdx !== undefined ? f.flIdx : 1,
+    pairId: f.pairId,
+    track: f.track,
+    steps: f.steps
+  };
+}
 
 // ── Translations ──────────────────────────────────────────────────────────────
 var LANG = {
@@ -1927,6 +2031,7 @@ var LANG = {
     trackModalImport: "Importar ruta",
     trackRoutePartial: "Ruta importada; fixes sin resolver (ignorados):",
     trackStepsDetected: "Steps de FL detectados:",
+    trackStepsUnmatched: "⚠ Steps con waypoint que no está en la ruta (nivel no aplicado):",
     trackStepsLabel: "Steps de nivel (opcional)",
     trackStepsPlaceholder: "F370 4730N04000W/F330 45N020W/F390 BANAL/F410…",
     trackFixesFail: "No pude descargar la base de fixes (¿sin conexión?). Sin ella no puedo resolver los waypoints de la ruta FPL. Reintenta más tarde.",
@@ -1950,6 +2055,10 @@ var LANG = {
     monthsSaved: "meses guardados",
     flightsLabel: "Vuelos",
     savedBadge: "✓ guardado",
+    saveErrBadge: "⚠️ no guardado (sin espacio)",
+    thousandKm: "mil km",
+    pctOfLimit: "% del límite",
+    yearsWord: "años",
     clearBtn: "🗑 Limpiar",
     addFlightBtn: "+ Añadir vuelo",
     addReturnBtn: "↩ Añadir vuelta",
@@ -2158,6 +2267,7 @@ var LANG = {
     trackModalImport: "Import route",
     trackRoutePartial: "Route imported; unresolved fixes (skipped):",
     trackStepsDetected: "FL steps detected:",
+    trackStepsUnmatched: "⚠ Steps whose waypoint is not in the route (level not applied):",
     trackStepsLabel: "Level steps (optional)",
     trackStepsPlaceholder: "F370 4730N04000W/F330 45N020W/F390 BANAL/F410…",
     trackFixesFail: "Could not download the fix database (offline?). Without it I can't resolve FPL waypoints. Try again later.",
@@ -2181,6 +2291,10 @@ var LANG = {
     monthsSaved: "months saved",
     flightsLabel: "Flights",
     savedBadge: "✓ saved",
+    saveErrBadge: "⚠️ not saved (storage full)",
+    thousandKm: "k km",
+    pctOfLimit: "% of limit",
+    yearsWord: "years",
     clearBtn: "🗑 Clear",
     addFlightBtn: "+ Add flight",
     addReturnBtn: "↩ Add return",
@@ -2489,6 +2603,7 @@ function AirportInput(_ref3) {
     suggestions = _useState10[0],
     setSuggestions = _useState10[1];
   var inputRef = useRef(null);
+  var blurTimerRef = useRef(null);
   // Sincroniza el campo si el valor cambia EXTERNAMENTE (p.ej. al importar una
   // ruta FPL que rellena origen y destino), pero nunca mientras el usuario está
   // escribiendo: si no, al borrar el ICAO de "JFK · KJFK" el texto sobrante "JFK"
@@ -2498,7 +2613,10 @@ function AirportInput(_ref3) {
       setText("".concat(value, " \xB7 ").concat(activeDB[value].icao));
       setResolvedKey(value);
     }
-  }, [value, focused]);
+    // DB_VERSION: un aeropuerto que solo existe en OpenFlights dejaba el campo
+    // vacío hasta el primer focus/blur porque el efecto no se reevaluaba al
+    // cargar la base completa.
+  }, [value, focused, DB_VERSION]);
   function confirmItem(iata) {
     var ap = activeDB[iata];
     setText("".concat(iata, " \xB7 ").concat(ap.icao));
@@ -2547,7 +2665,11 @@ function AirportInput(_ref3) {
     }
   }
   function handleBlur() {
-    setTimeout(function () {
+    // Sin cancelar el temporizador anterior, re-focusar antes de los 160 ms
+    // dejaba una carrera que vaciaba o truncaba el texto ya escrito.
+    if (blurTimerRef.current) clearTimeout(blurTimerRef.current);
+    blurTimerRef.current = setTimeout(function () {
+      blurTimerRef.current = null;
       setFocused(false);
       setSuggestions([]);
       // If nothing resolved, restore last good value or clear
@@ -2576,6 +2698,7 @@ function AirportInput(_ref3) {
     value: text,
     onChange: handleChange,
     onFocus: function onFocus() {
+      if (blurTimerRef.current) { clearTimeout(blurTimerRef.current); blurTimerRef.current = null; }
       setFocused(true);
       if (text && !resolvedKey) setSuggestions(searchAirports(text));
     },
@@ -3047,7 +3170,7 @@ function FlightRow(_ref9) {
     }
   }, /*#__PURE__*/React.createElement(Chip, {
     icon: "\uD83D\uDCCF",
-    label: "".concat((calc.distKm / 1000).toFixed(1), " mil km")
+    label: "".concat((calc.distKm / 1000).toFixed(1), " ", t.thousandKm)
   }), /*#__PURE__*/React.createElement(Chip, {
     icon: "\u23F1",
     label: fmtTime(calc.timeH)
@@ -3101,6 +3224,7 @@ function FlightPair(_ref10) {
     onAddReturn = _ref10.onAddReturn,
     onTrack = _ref10.onTrack,
     isNew = _ref10.isNew,
+    onSettled = _ref10.onSettled,
     t = _ref10.t;
   var _useStateP = useState(!isNew),
     _useStateP2 = _slicedToArray(_useStateP, 2),
@@ -3125,6 +3249,9 @@ function FlightPair(_ref10) {
     if (countdown === 0) {
       setCollapsed(true);
       setCountdown(null);
+      // Sin borrar el pid, un par viejo re-montado (restaurar copia, volver de
+      // mes) volvía a contar 10 s y se expandía/colapsaba solo.
+      if (onSettled) onSettled();
     }
   }, [countdown]);
 
@@ -3313,6 +3440,10 @@ function App() {
     _useState16 = _slicedToArray(_useState15, 2),
     showPregnant = _useState16[0],
     setShowPregnant = _useState16[1];
+  var _useStateSE = useState(false),
+    _useStateSE2 = _slicedToArray(_useStateSE, 2),
+    saveErr = _useStateSE2[0],
+    setSaveErr = _useStateSE2[1];
   var _useStatePdf = useState(null),
     _useStatePdf2 = _slicedToArray(_useStatePdf, 2),
     pdfReportHtml = _useStatePdf2[0],
@@ -3398,7 +3529,10 @@ function App() {
   function saveAllMonths(all) {
     try {
       localStorage.setItem("cr_months", JSON.stringify(all));
-    } catch (e) {}
+      return true;
+    } catch (e) {
+      return false;
+    }
   }
   function downloadBackup() {
     var all = loadAllMonths();
@@ -3413,11 +3547,11 @@ function App() {
   }
   function restoreBackup(file, onDone) {
     var reader = new FileReader();
+    reader.onerror = function() { onDone(false); };
     reader.onload = function(e) {
+      var months = parseBackup(e.target.result);
+      if (months === null) { onDone(false); return; }
       try {
-        var parsed = JSON.parse(e.target.result);
-        var months = parsed.version === 1 ? parsed.months : parsed;
-        if (typeof months !== "object" || months === null) throw new Error("invalid");
         saveAllMonths(months);
         setFlights(loadMonthFlights(currentMonth) || []);
         onDone(true);
@@ -3430,11 +3564,7 @@ function App() {
   function loadMonthFlights(key) {
     var all = loadAllMonths();
     var saved = all[key];
-    if (saved && Array.isArray(saved) && saved.length > 0) return saved.map(function (f) {
-      return _objectSpread(_objectSpread({}, f), {}, {
-        id: mkId()
-      });
-    });
+    if (saved && Array.isArray(saved) && saved.length > 0) return saved.map(hydrateFlight);
     return [];
   }
   var _useState31 = useState(function () {
@@ -3452,11 +3582,7 @@ function App() {
         var legacy = localStorage.getItem("cr_flights");
         if (legacy) {
           var parsed = JSON.parse(legacy);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed.map(function (f) {
-            return _objectSpread(_objectSpread({}, f), {}, {
-              id: mkId()
-            });
-          });
+          if (Array.isArray(parsed) && parsed.length > 0) return parsed.map(hydrateFlight);
         }
       } catch (e) {}
       return [];
@@ -3468,51 +3594,22 @@ function App() {
   // Autosave whenever flights change
   useEffect(function () {
     var all = loadAllMonths();
-    all[currentMonth] = flights.map(function (_ref0) {
-      var orig = _ref0.orig,
-        dest = _ref0.dest,
-        legs = _ref0.legs,
-        flIdx = _ref0.flIdx,
-        pairId = _ref0.pairId,
-        track = _ref0.track,
-        steps = _ref0.steps;
-      return {
-        orig: orig,
-        dest: dest,
-        legs: legs,
-        flIdx: flIdx !== undefined ? flIdx : 1,
-        pairId: pairId,
-        track: track,
-        steps: steps
-      };
-    });
-    saveAllMonths(all);
+    all[currentMonth] = flights.map(serializeFlight);
+    // El badge decía "✓ guardado" aunque localStorage rechazase la escritura
+    // por cuota: ahora solo se marca guardado si la escritura fue bien.
+    var ok = saveAllMonths(all);
     try {
       localStorage.setItem("cr_current_month", currentMonth);
     } catch (e) {}
-    setSavedAt(Date.now());
+    setSaveErr(!ok);
+    setSavedAt(ok ? Date.now() : null);
   }, [flights, currentMonth]);
 
   // Load flights when month changes
   function goToMonth(key) {
     // Save current first (autosave handles it via useEffect, but do it synchronously too)
     var all = loadAllMonths();
-    all[currentMonth] = flights.map(function (_ref1) {
-      var orig = _ref1.orig,
-        dest = _ref1.dest,
-        legs = _ref1.legs,
-        flIdx = _ref1.flIdx,
-        track = _ref1.track,
-        steps = _ref1.steps;
-      return {
-        orig: orig,
-        dest: dest,
-        legs: legs,
-        flIdx: flIdx !== undefined ? flIdx : 1,
-        track: track,
-        steps: steps
-      };
-    });
+    all[currentMonth] = flights.map(serializeFlight);
     saveAllMonths(all);
     setCurrentMonth(key);
     setFlights(loadMonthFlights(key));
@@ -4012,7 +4109,16 @@ function App() {
       borderRadius: 99,
       padding: "1px 7px"
     }
-  }, t.savedBadge)), /*#__PURE__*/React.createElement("div", {
+  }, t.savedBadge), saveErr && /*#__PURE__*/React.createElement("span", {
+    style: {
+      fontSize: 9.5,
+      color: "#d08a3a",
+      background: "rgba(200,120,40,0.1)",
+      border: "1px solid rgba(200,120,40,0.25)",
+      borderRadius: 99,
+      padding: "1px 7px"
+    }
+  }, t.saveErrBadge)), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6
@@ -4090,7 +4196,10 @@ function App() {
             onRemove: removeFlight,
             onAddReturn: addReturnFlight,
             onTrack: onTrack,
-            isNew: newPairIdsRef.current.has(f.pairId)
+            isNew: newPairIdsRef.current.has(f.pairId),
+            onSettled: function () {
+              newPairIdsRef.current.delete(f.pairId);
+            }
           }));
           return;
         }
@@ -4300,7 +4409,7 @@ function App() {
       color: "#7a6030",
       marginTop: 1
     }
-  }, (monthlyUsv / 1000 * 100).toFixed(0), "% del l\xEDmite"))), /*#__PURE__*/React.createElement("div", {
+  }, (monthlyUsv / 1000 * 100).toFixed(0), t.pctOfLimit))), /*#__PURE__*/React.createElement("div", {
     style: {
       marginBottom: 8
     }
@@ -4664,13 +4773,13 @@ function App() {
     }
   }, /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: LABEL
-  }, "Origen"), /*#__PURE__*/React.createElement(AirportInput, {
+  }, t.originLabel), /*#__PURE__*/React.createElement(AirportInput, {
     value: sOrig,
     onChange: setSOrig,
     placeholder: t.originPlaceholder
   })), /*#__PURE__*/React.createElement("div", null, /*#__PURE__*/React.createElement("div", {
     style: LABEL
-  }, "Destino"), /*#__PURE__*/React.createElement(AirportInput, {
+  }, t.destLabel), /*#__PURE__*/React.createElement(AirportInput, {
     value: sDest,
     onChange: setSDest,
     placeholder: t.destPlaceholder
@@ -4711,7 +4820,7 @@ function App() {
     style: _objectSpread({}, CARD)
   }, [{
     l: t.singleDistance,
-    v: "".concat((singleCalc.distKm / 1000).toFixed(1), " mil km")
+    v: "".concat((singleCalc.distKm / 1000).toFixed(1), " ", t.thousandKm)
   }, {
     l: t.singleDuration,
     v: fmtTime(singleCalc.timeH)
@@ -4750,13 +4859,13 @@ function App() {
     })
   }, /*#__PURE__*/React.createElement("div", {
     style: LABEL
-  }, "Dosis acumulada \xB7 ", careerYears, " a\xF1os"), /*#__PURE__*/React.createElement("div", {
+  }, t.careerTitle, " \xB7 ", careerYears, " ", t.yearsWord), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11,
       color: "#c090e8",
       lineHeight: 1.9
     }
-  }, /*#__PURE__*/React.createElement("div", null, "Por vuelo: ", /*#__PURE__*/React.createElement("strong", null, fmtDose(singleCalc.doseUsv))), /*#__PURE__*/React.createElement("div", null, "1 vuelo/mes \xD7 ", careerYears, " a\xF1os = ", /*#__PURE__*/React.createElement("strong", null, fmtDose(singleCalc.doseUsv * 12 * careerYears))), /*#__PURE__*/React.createElement("div", null, "4 vuelos/mes \xD7 ", careerYears, " a\xF1os = ", /*#__PURE__*/React.createElement("strong", null, fmtDose(singleCalc.doseUsv * 48 * careerYears)))), /*#__PURE__*/React.createElement("div", {
+  }, /*#__PURE__*/React.createElement("div", null, t.careerSinglePer, " ", /*#__PURE__*/React.createElement("strong", null, fmtDose(singleCalc.doseUsv))), /*#__PURE__*/React.createElement("div", null, "1 ", t.careerSingle1mo, " ", careerYears, " ", t.careerSingleYears, " ", /*#__PURE__*/React.createElement("strong", null, fmtDose(singleCalc.doseUsv * 12 * careerYears))), /*#__PURE__*/React.createElement("div", null, "4 ", t.careerSingle4mo, " ", careerYears, " ", t.careerSingleYears, " ", /*#__PURE__*/React.createElement("strong", null, fmtDose(singleCalc.doseUsv * 48 * careerYears)))), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 10,
       color: "#7a50a0",
@@ -4801,7 +4910,10 @@ function App() {
       return setShowOnboarding(false);
     },
     onNever: function onNever() {
-      localStorage.setItem("cr_onboarded", "1");
+      // Sin try/catch, Safari en privado (cuota 0) reventaba el modal entero.
+      try {
+        localStorage.setItem("cr_onboarded", "1");
+      } catch (e) {}
       setShowOnboarding(false);
     }
   }), pdfReportHtml && /*#__PURE__*/React.createElement(PdfPreviewOverlay, {
@@ -4836,10 +4948,12 @@ function OnboardingModal(_ref12) {
     isIOS = _detectPlatform.isIOS,
     isAndroid = _detectPlatform.isAndroid,
     isStandalone = _detectPlatform.isStandalone;
-  if (isStandalone) {
-    onNever();
-    return null;
-  }
+  // onNever() se llamaba durante el render (setState en render de otro
+  // componente): en standalone se descarta desde un efecto.
+  useEffect(function () {
+    if (isStandalone) onNever();
+  }, [isStandalone]);
+  if (isStandalone) return null;
   var es = LANG.es;
   var en = LANG.en;
   var stepsES = isIOS ? es.onboardStepsIos : isAndroid ? es.onboardStepsAndroid : es.onboardStepsDesktop;
@@ -5065,11 +5179,13 @@ function buildPdfHtml(_ref13) {
     var hasTrackPdf = Array.isArray(f.track) && f.track.length >= 2 && Array.isArray(f.track[0]) && f.track[0][0] != null;
     var c = flightCalc(f, hpMV);
     var total = c.doseUsv * f.legs;
-    return "\n      <tr>\n        <td>".concat(esc(f.orig), " \u2192 ").concat(esc(f.dest), "</td>\n        <td>").concat(esc(((_activeDB$f$orig = activeDB[f.orig]) === null || _activeDB$f$orig === void 0 ? void 0 : _activeDB$f$orig.name) || ""), " \u2192 ").concat(esc(((_activeDB$f$dest = activeDB[f.dest]) === null || _activeDB$f$dest === void 0 ? void 0 : _activeDB$f$dest.name) || ""), "</td>\n        <td class=\"num\">").concat(hasTrackPdf ? "track" : (Array.isArray(f.steps) && f.steps.length ? "F" + f.steps[0].fl + "\u2192F" + f.steps[f.steps.length - 1].fl : FL_OPTIONS[(_f$flIdx4 = f.flIdx) !== null && _f$flIdx4 !== void 0 ? _f$flIdx4 : 1].label), "</td>\n        <td class=\"num\">").concat((c.distKm / 1000).toFixed(1), " km</td>\n        <td class=\"num\">").concat(Math.floor(c.timeH), "h ").concat(Math.round(c.timeH % 1 * 60), "m</td>\n        <td class=\"num\">").concat(fmtDose(c.doseUsv), "</td>\n        <td class=\"num\">\xD7 ").concat(f.legs, "</td>\n        <td class=\"num bold\">").concat(fmtDose(total), "</td>\n      </tr>");
+    return "\n      <tr>\n        <td>".concat(esc(f.orig), " \u2192 ").concat(esc(f.dest), "</td>\n        <td>").concat(esc(((_activeDB$f$orig = activeDB[f.orig]) === null || _activeDB$f$orig === void 0 ? void 0 : _activeDB$f$orig.name) || ""), " \u2192 ").concat(esc(((_activeDB$f$dest = activeDB[f.dest]) === null || _activeDB$f$dest === void 0 ? void 0 : _activeDB$f$dest.name) || ""), "</td>\n        <td class=\"num\">").concat(esc(hasTrackPdf ? (isEn ? "track" : "ruta") : (Array.isArray(f.steps) && f.steps.length ? "F" + f.steps[0].fl + "\u2192F" + f.steps[f.steps.length - 1].fl : (FL_OPTIONS[fi] || FL_OPTIONS[1]).label)), "</td>\n        <td class=\"num\">").concat((c.distKm / 1000).toFixed(1), " km</td>\n        <td class=\"num\">").concat(Math.floor(c.timeH), "h ").concat(Math.round(c.timeH % 1 * 60), "m</td>\n        <td class=\"num\">").concat(fmtDose(c.doseUsv), "</td>\n        <td class=\"num\">\xD7 ").concat(esc(f.legs), "</td>\n        <td class=\"num bold\">").concat(fmtDose(total), "</td>\n      </tr>");
   }).join("");
   var refs = [[isEn ? "Dental X-ray" : "Rx dental", "5 µSv", (monthlyUsv / 5).toFixed(1)], [isEn ? "Chest X-ray" : "Rx tórax", "20 µSv", (monthlyUsv / 20).toFixed(1)], [isEn ? "Mammography" : "Mamografía", "400 µSv", (monthlyUsv / 400).toFixed(2)], [isEn ? "Chest CT" : "TAC tórax", isEn ? "7,000 µSv" : "7.000 µSv", (monthlyUsv / 7000).toFixed(3)], [isEn ? "Natural background/year" : "Fondo natural/año", isEn ? "2,400 µSv" : "2.400 µSv", (annualUsv / 2400).toFixed(2)], [isEn ? "Crew limit/year" : "Límite tripul./año", isEn ? "20,000 µSv" : "20.000 µSv", (annualUsv / 20000 * 100).toFixed(1) + "%"]];
   var html = "<!DOCTYPE html>\n<html lang=\"".concat(isEn ? "en" : "es", "\">\n<head>\n<meta charset=\"UTF-8\"/>\n<title>").concat(t.pdfTitle, " \xB7 ").concat(pdfMonthName, "</title>\n<style>\n  @page { margin: 18mm 16mm; }\n  * { box-sizing:border-box; margin:0; padding:0; }\n  body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;\n    font-size:11px; color:#1a2a35; background:#fff; }\n  .header { display:flex; justify-content:space-between; align-items:flex-start;\n    border-bottom:2.5px solid #1a6fa8; padding-bottom:10px; margin-bottom:18px; }\n  .title { font-size:20px; font-weight:800; color:#1a6fa8; letter-spacing:-0.5px; }\n  .subtitle { font-size:11px; color:#5a7a8a; margin-top:3px; }\n  .meta { text-align:right; font-size:10px; color:#6a8a9a; line-height:1.8; }\n  .section { margin-bottom:18px; }\n  .section-title { font-size:10px; font-weight:700; text-transform:uppercase;\n    letter-spacing:0.8px; color:#5a7a8a; margin-bottom:8px;\n    padding-bottom:4px; border-bottom:1px solid #e0eef5; }\n  .summary-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px; }\n  .stat-box { background:#f0f6fa; border:1px solid #d0e4f0; border-radius:8px;\n    padding:10px 12px; text-align:center; }\n  .stat-label { font-size:9px; color:#6a8a9a; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:4px; }\n  .stat-value { font-size:16px; font-weight:800; color:#1a6fa8; }\n  .stat-sub { font-size:9px; color:#8aacbc; margin-top:2px; }\n  table { width:100%; border-collapse:collapse; font-size:10px; }\n  th { background:#1a6fa8; color:#fff; padding:6px 8px; text-align:left;\n    font-weight:600; font-size:9.5px; letter-spacing:0.3px; }\n  th.num, td.num { text-align:right; }\n  td { padding:5px 8px; border-bottom:1px solid #edf3f7; color:#2a3a45; }\n  tr:last-child td { border-bottom:none; }\n  tr:nth-child(even) td { background:#f8fbfd; }\n  td.bold { font-weight:700; color:#1a6fa8; }\n  .total-row td { background:#e8f2fa !important; font-weight:700;\n    border-top:2px solid #1a6fa8; color:#1a2a35; }\n  .refs-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }\n  .ref-box { background:#f8fbfd; border:1px solid #e0eef5; border-radius:6px; padding:8px 10px; }\n  .ref-name { font-size:9px; color:#6a8a9a; margin-bottom:2px; }\n  .ref-dose { font-size:10px; color:#4a6a7a; margin-bottom:3px; }\n  .ref-eq { font-size:12px; font-weight:700; color:#1a6fa8; }\n  .params { display:flex; gap:16px; font-size:10px; color:#5a7a8a; }\n  .param { background:#f0f6fa; border-radius:5px; padding:4px 10px; }\n  .footer { margin-top:20px; padding-top:10px; border-top:1px solid #e0eef5;\n    font-size:9px; color:#9ab0bc; line-height:1.6; }\n  .highlight { background:#e8f4ff; border:1px solid #b0d4ee; border-radius:6px;\n    padding:10px 14px; display:flex; justify-content:space-between; align-items:center; }\n  .hl-label { font-size:10px; color:#3a6a8a; font-weight:600; }\n  .hl-value { font-size:22px; font-weight:800; color:#1a6fa8; }\n  .hl-sub { font-size:9px; color:#6a9ab0; margin-top:1px; }\n  ").concat(showCareer ? ".career { background:#f5f0fc; border:1px solid #d0b8f0; border-radius:8px;\n    padding:12px 14px; margin-top:14px; }\n  .career-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:8px; }\n  .career-stat { text-align:center; }\n  .career-label { font-size:9px; color:#7a5aaa; text-transform:uppercase; letter-spacing:0.5px; }\n  .career-value { font-size:14px; font-weight:800; color:#6030a0; margin-top:2px; }" : "", "\n</style>\n</head>\n<body>\n\n<div class=\"header\">\n  <div>\n    <div class=\"title\">").concat(t.pdfTitle, "</div>\n    <div class=\"subtitle\">").concat(t.pdfSubtitle, " \xB7 ").concat(pdfMonthName, "</div>\n  </div>\n  <div class=\"meta\">\n    ").concat(t.pdfGenerated, " ").concat(dateStr, "<br/>\n    ").concat(t.pdfFlightLevel, "<br/>\n    ").concat(t.pdfSolarCycle, " ").concat(solarLabel, "<br/>\n    v").concat(APP_VERSION, "\n  </div>\n</div>\n\n<div class=\"section\">\n  <div class=\"section-title\">").concat(t.pdfMonthlySummary, "</div>\n  <div style=\"display:flex;gap:12px;align-items:stretch;margin-bottom:14px;\">\n    <div class=\"highlight\" style=\"flex:1;\">\n      <div>\n        <div class=\"hl-label\">").concat(t.pdfMonthlySummary, "</div>\n        <div class=\"hl-value\">").concat(fmtDose(monthlyUsv), "</div>\n        <div class=\"hl-sub\">").concat(isEn ? "Annual projection" : "Proyección anual", ": ").concat(fmtDose(annualUsv), "</div>\n      </div>\n    </div>\n    <div class=\"highlight\" style=\"flex:1;\">\n      <div>\n        <div class=\"hl-label\">").concat(t.pdfIcrcUsage, "</div>\n        <div class=\"hl-value\" style=\"color:").concat(annualUsv / 20000 > 0.8 ? "#c03020" : annualUsv / 20000 > 0.5 ? "#b06010" : "#1a6fa8", "\">\n          ").concat((annualUsv / 20000 * 100).toFixed(1), "%\n        </div>\n        <div class=\"hl-sub\">").concat(t.pdfOf, "</div>\n      </div>\n    </div>\n  </div>\n  <div class=\"params\">\n    <span class=\"param\">\u2708 ").concat(validFlights.reduce(function (s, f) {
-    return s + f.legs;
+    // Number(): con un legs de texto esto era concatenación de strings, así que
+    // el contador de sectores escupía el valor crudo al HTML sin pasar por esc().
+    return s + (Number(f.legs) || 0);
   }, 0), " ").concat(t.pdfSectors, "</span>\n    <span class=\"param\">\uD83D\uDCCF ").concat((validFlights.reduce(function (s, f) {
     var _f$flIdx5;
     var c = flightCalc(f, hpMV);
@@ -5080,7 +5196,7 @@ function buildPdfHtml(_ref13) {
       var c = flightCalc(f, hpMV);
       return s + c.timeH * f.legs;
     }, 0);
-    return "".concat(Math.floor(h), "h ").concat(Math.round(h % 1 * 60), "m");
+    return fmtTime(h);
   }(), "</span>\n  </div>\n</div>\n\n<div class=\"section\">\n  <div class=\"section-title\">").concat(t.pdfBreakdown, "</div>\n  <table>\n    <thead>\n      <tr>\n        <th>").concat(t.pdfCode, "</th><th>").concat(t.pdfRoute, "</th><th class=\"num\">").concat(t.pdfFL, "</th><th class=\"num\">").concat(t.pdfDist, "</th>\n        <th class=\"num\">").concat(t.pdfTime, "</th><th class=\"num\">").concat(t.pdfDosePerLeg, "</th>\n        <th class=\"num\">").concat(t.pdfLegs, "</th><th class=\"num\">").concat(t.pdfTotal, "</th>\n      </tr>\n    </thead>\n    <tbody>\n      ").concat(rows, "\n      <tr class=\"total-row\">\n        <td colspan=\"7\">").concat(t.pdfTotalMonth, "</td>\n        <td class=\"num\">").concat(fmtDose(monthlyUsv), "</td>\n      </tr>\n    </tbody>\n  </table>\n</div>\n\n<div class=\"section\">\n  <div class=\"section-title\">").concat(t.pdfEquivalences, "</div>\n  <div class=\"refs-grid\">\n    ").concat(refs.map(function (_ref14) {
     var _ref15 = _slicedToArray(_ref14, 3),
       name = _ref15[0],
@@ -5129,6 +5245,10 @@ function PdfPreviewOverlay(_ref17) {
   }, isEn ? "🖨 Print / Save PDF" : "🖨 Imprimir / Guardar PDF")), /*#__PURE__*/React.createElement("iframe", {
     ref: iframeRef,
     srcDoc: html,
+    // Sin allow-scripts: el informe es HTML estático, así que nada que venga de
+    // un backup manipulado puede ejecutarse. allow-same-origin hace falta para
+    // alcanzar contentWindow.print() desde el botón de arriba.
+    sandbox: "allow-same-origin allow-modals",
     style: { flex: 1, border: "none", width: "100%", background: "#fff" }
   }));
 }
@@ -5172,6 +5292,9 @@ function TrackModal(_refTrack) {
       }
       if (r2.steps && r2.steps.length) {
         warns.push(t.trackStepsDetected + " " + r2.steps.map(function (s) { return s.wp ? s.wp + "/F" + s.fl : "F" + s.fl; }).join(" "));
+      }
+      if (r2.stepsUnmatched && r2.stepsUnmatched.length) {
+        warns.push(t.trackStepsUnmatched + " " + r2.stepsUnmatched.join(", "));
       }
       if (warns.length) setInfo(warns.join("\n"));
       // El FPL lleva origen/destino (KJFK31L…LEBL24R): poblar el vuelo.
