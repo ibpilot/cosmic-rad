@@ -1,0 +1,33 @@
+name: CI
+
+# Suite de regresión headless (Node puro, sin red ni browser) en cada push a
+# main y en cada PR. Si un cambio rompe la lógica de dosis, rutas, CSV o
+# backup, este job lo detecta antes de desplegar.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  regression:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
+      - name: Sintaxis de los scripts de index.html
+        run: |
+          node -e 'const fs=require("fs"),vm=require("vm");const h=fs.readFileSync("index.html","utf8");
+          let n=0;for(const s of h.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)){n++;
+          try{new vm.Script(s[1])}catch(e){console.log("FAIL "+n+": "+e.message);process.exit(1)}}
+          console.log("SYNTAX OK ("+n+")")'
+      - name: Suite de regresión (bugs)
+        run: node tools/tests/bugs_test.js
+      - name: Suite de la rejilla de dosis
+        run: node tools/tests/grid_test.js

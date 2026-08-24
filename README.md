@@ -147,6 +147,18 @@ React 18 and ReactDOM are inlined in the single file (no CDN). An internet conne
 is required on first load to fetch the full airport database from OpenFlights.
 Subsequent visits use the browser cache.
 
+### Testing
+
+The regression suites run headless in Node (no browser, no network, no deps):
+
+```bash
+node tools/tests/bugs_test.js   # regression suite (dose, routes, CSV, backup, ids)
+node tools/tests/grid_test.js   # dose-grid / cutoff-rigidity suite
+```
+
+Both run automatically on every push to `main` and on pull requests via
+`.github/workflows/ci.yml`.
+
 ### Dose grid generation (CARI-7A)
 
 The dose-rate grid is generated offline with the real CARI-7A binary (FAA) — see
