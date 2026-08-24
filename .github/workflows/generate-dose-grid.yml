@@ -17,7 +17,7 @@ on:
         type: boolean
         default: true
       update_hp_only:
-        description: 'Solo refrescar HP_MONTHS (rápido)'
+        description: 'Solo refrescar HP_MONTHS (rápido). Si se combina con regenerate_grid, el refresco se ejecuta DESPUÉS de commitear la rejilla (los jobs están serializados).'
         type: boolean
         default: false
   schedule:
@@ -146,7 +146,16 @@ jobs:
 
   hp-months:
     # Refresco mensual del potencial heliocéntrico (MV-DATES.L99 de la FAA).
-    if: github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && github.event.inputs.update_hp_only == 'true')
+    # needs: assemble — serializa la escritura de index.html. Si un dispatch
+    # pide grid+hp a la vez, hp-months espera a que assemble haya commiteado la
+    # rejilla; antes ambos jobs reescribían index.html en paralelo y uno pisaba
+    # silenciosamente el cambio del otro (o el push chocaba). Con assemble
+    # saltado (solo HP, o schedule) se ejecuta igualmente.
+    needs: assemble
+    if: |
+      (github.event_name == 'schedule'
+        || (github.event_name == 'workflow_dispatch' && github.event.inputs.update_hp_only == 'true'))
+      && (needs.assemble.result == 'skipped' || needs.assemble.result == 'success')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

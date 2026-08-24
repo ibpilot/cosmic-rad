@@ -1380,6 +1380,35 @@ Object.entries(activeDB).forEach(function (_ref) {
   if (d.icao) icaoMap[d.icao] = iata;
 });
 
+// parseCsvLine: parser CSV de una línea que respeta campos citados y comillas
+// escapadas ("" dentro de un campo citado). El parser anterior conmutaba inQ
+// con CUALQUIER comilla: un nombre con comilla escapada (p.ej. O'Hare "Intl")
+// desalineaba las columnas de toda la fila y las coordenadas acababan en el
+// campo equivocado (dosis de ese aeropuerto mal). También limpia el \r final
+// de archivos CRLF.
+function parseCsvLine(line) {
+  var cols = [], cur = "", inQ = false;
+  for (var i = 0; i < line.length; i++) {
+    var c = line[i];
+    if (inQ) {
+      if (c === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } // escape "" → "
+        else inQ = false;
+      } else cur += c;
+    } else if (c === '"') {
+      inQ = true;
+    } else if (c === ',') {
+      cols.push(cur);
+      cur = "";
+    } else cur += c;
+  }
+  cols.push(cur);
+  if (cols.length && cols[cols.length - 1].charAt(cols[cols.length - 1].length - 1) === "\r") {
+    cols[cols.length - 1] = cols[cols.length - 1].slice(0, -1);
+  }
+  return cols;
+}
+
 // Called once on app mount — tries to fetch OpenFlights (~7600 airports)
 // OpenFlights CSV columns: id,name,city,country,iata,icao,lat,lon,alt,tz,...
 function loadOpenFlights(_x) {
@@ -1422,28 +1451,16 @@ function _loadOpenFlights() {
             break;
           }
           line = _step.value;
-          // Parse CSV respecting quoted fields
-          cols = [];
-          cur = "", inQ = false;
-          for (i = 0; i < line.length; i++) {
-            c = line[i];
-            if (c === '"') {
-              inQ = !inQ;
-            } else if (c === ',' && !inQ) {
-              cols.push(cur);
-              cur = "";
-            } else cur += c;
-          }
-          cols.push(cur);
+          cols = parseCsvLine(line);
           if (!(cols.length < 8)) {
             _context.n = 6;
             break;
           }
           return _context.a(3, 9);
         case 6:
-          iata = cols[4].replace(/"/g, "").trim().toUpperCase();
-          icao = cols[5].replace(/"/g, "").trim().toUpperCase();
-          name = cols[1].replace(/"/g, "").trim();
+          iata = cols[4].trim().toUpperCase();
+          icao = cols[5].trim().toUpperCase();
+          name = cols[1].trim();
           lat = parseFloat(cols[6]);
           lon = parseFloat(cols[7]); // Skip entries without valid IATA or coordinates
           if (!(!iata || iata === "\\N" || iata.length !== 3)) {
@@ -1560,8 +1577,50 @@ function effectiveLatitude(lat1, lon1, lat2, lon2) {
     deg = function deg(x) {
       return x * 180 / Math.PI;
     };
-  var cosMax = Math.cos(r(lat1)) * Math.cos(r(lat2)) * Math.abs(Math.sin(r(lon2 - lon1)));
-  var peak = deg(Math.asin(Math.min(1, Math.sqrt(1 - cosMax * cosMax))));
+  // La heurística antigua tenía dos errores: (1) usaba |nz| del producto
+  // vectorial SIN normalizar (el normal unitario es nz/sinθ, y sinθ ≤ 1, así
+  // que el pico salía inflado en casi todas las rutas — solo acertaba cuando
+  // el ángulo central era exactamente 90°); (2) el vértice del CÍRCULO máximo
+  // completo no está en el arco que vuela el avión en rutas hacia el sur o
+  // casi meridianas (el vértice cae en el lado opuesto del mundo, p.ej.
+  // MAD→JNB daba pico 68.9°N en vez de 40.4°). Aquí se usa el normal
+  // normalizado y solo se toma el vértice (o su antípoda) si cae dentro del
+  // arco corto; si no, el pico es el de los extremos.
+  var la1 = r(lat1), lo1 = r(lon1), la2 = r(lat2), lo2 = r(lon2);
+  var v1 = [Math.cos(la1) * Math.cos(lo1), Math.cos(la1) * Math.sin(lo1), Math.sin(la1)];
+  var v2 = [Math.cos(la2) * Math.cos(lo2), Math.cos(la2) * Math.sin(lo2), Math.sin(la2)];
+  var nx = v1[1] * v2[2] - v1[2] * v2[1];
+  var ny = v1[2] * v2[0] - v1[0] * v2[2];
+  var nz = v1[0] * v2[1] - v1[1] * v2[0]; // n = v1 × v2 (|n| = sin θ)
+  var sinT = Math.sqrt(nx * nx + ny * ny + nz * nz);
+  var dot = Math.max(-1, Math.min(1, v1[0] * v2[0] + v1[1] * v2[1] + v1[2] * v2[2]));
+  var theta = Math.atan2(sinT, dot); // distancia angular del arco corto
+  var peak;
+  if (sinT < 1e-12) {
+    // Mismo punto o antipodales: no hay círculo máximo único.
+    peak = Math.max(Math.abs(lat1), Math.abs(lat2));
+  } else {
+    // Vértice = punto de máxima latitud del círculo máximo: V ∝ ẑ − (n̂·ẑ)n̂.
+    // (multiplicado por |n|² para evitar divisiones).
+    var vx = -nz * nx, vy = -nz * ny, vz = sinT * sinT - nz * nz;
+    var vn = Math.sqrt(vx * vx + vy * vy + vz * vz);
+    if (vn < 1e-12) {
+      // Círculo máximo = ecuador: toda la ruta a latitud ~0.
+      peak = Math.max(Math.abs(lat1), Math.abs(lat2));
+    } else {
+      vx /= vn; vy /= vn; vz /= vn;
+      // El arco corto contiene exactamente uno de {vértice, antivértice}; la
+      // antivértice está en el arco cuando la ruta cruza la latitud −φ_max.
+      var onArc = function (X) {
+        var d1 = Math.acos(Math.max(-1, Math.min(1, v1[0] * X[0] + v1[1] * X[1] + v1[2] * X[2])));
+        var d2 = Math.acos(Math.max(-1, Math.min(1, v2[0] * X[0] + v2[1] * X[1] + v2[2] * X[2])));
+        return d1 <= theta + 1e-9 && d2 <= theta + 1e-9;
+      };
+      peak = (onArc([vx, vy, vz]) || onArc([-vx, -vy, -vz]))
+        ? deg(Math.asin(Math.max(-1, Math.min(1, vz))))
+        : Math.max(Math.abs(lat1), Math.abs(lat2));
+    }
+  }
   return (Math.abs(lat1) + peak + Math.abs(lat2)) / 3;
 }
 // ── DOSE_GRID: rejilla de tasas de dosis precomputada (CARI-7A) ───────────────
@@ -1766,19 +1825,20 @@ function calcFlight(orig, dest, flIdx, hpMV) {
   var NS = 32;
   var pts = greatCirclePoints(A.lat, A.lon, B.lat, B.lon, NS);
   var altKm = FL_OPTIONS[fi].altKm;
-  var sum = 0, nOk = 0;
+  var sum = 0;
   for (var si = 0; si < pts.length; si++) {
     var rr = doseRateGrid(pts[si][0], pts[si][1], altKm, hpMV);
-    if (rr != null && isFinite(rr)) { sum += rr; nOk++; }
+    if (rr == null || !isFinite(rr)) {
+      // Punto fuera de rejilla (Rc/HP fuera de rango, rejilla ausente): se usa
+      // el modelo de bandas EURADOS SOLO para ese punto, igual que calcTrack.
+      // Antes era todo-o-nada: si UN punto de 32 fallaba, el vuelo entero caía
+      // al modelo de bandas y perdía la precisión de los otros 31.
+      rr = getDoseRate(pts[si][0]) * FL_OPTIONS[fi].factor * solarFactorForHp(hpMV);
+    }
+    sum += rr;
   }
   var effLat = effectiveLatitude(A.lat, A.lon, B.lat, B.lon);
-  var rateUsvh;
-  if (nOk === pts.length) {
-    rateUsvh = sum / nOk;
-  } else {
-    // Sin rejilla completa: fallback EURADOS con la heurística de siempre.
-    rateUsvh = getDoseRate(effLat) * FL_OPTIONS[fi].factor * solarFactorForHp(hpMV);
-  }
+  var rateUsvh = sum / pts.length;
   var doseUsv = rateUsvh * timeH;
   return {
     distKm: Math.round(distKm),
@@ -2064,7 +2124,33 @@ function fmtTime(h) {
   var mins = Math.round(h * 60);
   return "".concat(Math.floor(mins / 60), "h ").concat(mins % 60, "m");
 }
-var _id = 1;
+// Contador de ids sembrado con los ids/pairIds guardados: antes arrancaba en 1
+// en cada recarga, así que un pairId viejo (p.ej. 6) podía colisionar con un
+// mkId() nuevo (6) y dos parejas distintas se agrupaban cruzadas (ida con el
+// mate equivocado). Ahora los ids frescos siempre superan a todo lo guardado.
+// Se re-siembra también tras importar un backup (sus ids pueden ser mayores).
+function reseedIds() {
+  var mx = 0;
+  try {
+    var scan = function (list) {
+      if (!Array.isArray(list)) return;
+      for (var j = 0; j < list.length; j++) {
+        var f = list[j];
+        if (f && typeof f === "object") {
+          if (typeof f.id === "number" && isFinite(f.id) && f.id > mx) mx = f.id;
+          if (typeof f.pairId === "number" && isFinite(f.pairId) && f.pairId > mx) mx = f.pairId;
+        }
+      }
+    };
+    var months = JSON.parse(localStorage.getItem("cr_months") || "{}");
+    for (var k in months) {
+      if (Object.prototype.hasOwnProperty.call(months, k)) scan(months[k]);
+    }
+    scan(JSON.parse(localStorage.getItem("cr_flights") || "[]"));
+  } catch (e) {}
+  _id = mx + 1;
+}
+reseedIds();
 var mkId = function mkId() {
   return _id++;
 };
@@ -3678,6 +3764,10 @@ function App() {
       if (months === null) { onDone(false); return; }
       try {
         saveAllMonths(months);
+        // Re-siembra el contador con los ids/pairIds del backup importado: el
+        // backup puede traer ids mayores que los actuales y un mkId() posterior
+        // colisionaría con ellos (parejas agrupadas cruzadas).
+        reseedIds();
         setFlights(loadMonthFlights(currentMonth) || []);
         onDone(true);
       } catch (_) {
