@@ -169,8 +169,12 @@ jobs:
     # silenciosamente el cambio del otro (o el push chocaba). Con assemble
     # saltado (solo HP, o schedule) se ejecuta igualmente.
     needs: assemble
+    # !cancelled() es la status-check function: sin ella, un needs saltado
+    # propaga el skip y este job NI evalúa su if — el refresh mensual de
+    # HP_MONTHS (schedule, assemble siempre saltado) moriría. El guard de
+    # needs.assemble.result decide después: skipped/success → corre.
     if: |
-      (github.event_name == 'schedule'
+      !cancelled() && (github.event_name == 'schedule'
         || (github.event_name == 'workflow_dispatch' && github.event.inputs.update_hp_only == 'true'))
       && (needs.assemble.result == 'skipped' || needs.assemble.result == 'success')
     # Commitea el refresco de HP_MONTHS: necesita write a main.

@@ -2178,6 +2178,9 @@ function fmtTime(h) {
 // mkId() nuevo (6) y dos parejas distintas se agrupaban cruzadas (ida con el
 // mate equivocado). Ahora los ids frescos siempre superan a todo lo guardado.
 // Se re-siembra también tras importar un backup (sus ids pueden ser mayores).
+// var _id declarada aquí: sin declaración, `_id = mx + 1` sería una global
+// implícita (funciona en sloppy mode, pero rompería en strict/módulo).
+var _id = 1;
 function reseedIds() {
   var mx = 0;
   try {
