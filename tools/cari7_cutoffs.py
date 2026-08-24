@@ -21,8 +21,13 @@ EPOCHS = [
 
 
 def epoch_file_for_year(year):
-    """Fichero de epoca mas cercano al anio. Un anio posterior a 2010 cae en el
-    mapa mas nuevo disponible; CARI-7A no distribuye nada mas reciente."""
+    """Fichero de epoca mas cercano al anio.
+
+    OJO: CARI-7A no salta al mapa mas cercano, INTERPOLA entre epocas (medido:
+    en 50N/270E da 0.70 GV en 1958, 0.77 en 1985, 0.85 en 2006 y 0.87 de 2010
+    en adelante, donde se satura). Esta funcion solo sirve para ELEGIR los
+    puntos de muestreo; la rejilla se construye con el VCR real que CARI-7A
+    reporta, asi que la aproximacion no afecta al resultado."""
     return min(EPOCHS, key=lambda e: abs(e[0] - year))[1]
 
 

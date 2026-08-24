@@ -2107,7 +2107,8 @@ function serializeFlight(f) {
     flIdx: f.flIdx !== undefined ? f.flIdx : 1,
     pairId: f.pairId,
     track: f.track,
-    steps: f.steps
+    steps: f.steps,
+    collapsed: f.collapsed
   };
 }
 
@@ -2147,10 +2148,10 @@ var LANG = {
     calcInfoSubtitle: "Con o sin ruta real",
     calcInfoBtn: "ℹ️ Cálculo",
     calcInfoNoRoute: "Sin ruta · gran círculo",
-    calcInfoNoRouteBody: "Se traza el camino ortodrómico (círculo máximo) entre origen y destino y se divide en tramos. Para cada tramo se suma la tasa de dosis (µSv/h) según latitud, altitud y ciclo solar (HP), multiplicada por el tiempo de vuelo del tramo. La tasa sale de la tabla real CARI-7A embebida (91 lat × 11 alt × 10 HP), con la altitud del FL elegido.",
+    calcInfoNoRouteBody: "Se traza el camino ortodrómico (círculo máximo) entre origen y destino y se divide en tramos. Para cada tramo se suma la tasa de dosis (µSv/h) multiplicada por el tiempo de vuelo del tramo. La tasa se interpola sobre la rejilla real CARI-7A embebida según rigidez de corte, altitud y ciclo solar (HP). La posición entra por la rigidez de corte (mapa 1°×1° de la FAA), así que la longitud importa tanto como la latitud: dos puntos a la misma latitud pueden dar dosis muy distintas. La altitud es la del FL elegido.",
     calcInfoRoute: "Con ruta · FPL o steps de nivel",
-    calcInfoRouteBody: "La dosis se calcula sobre el camino real, tramo a tramo, con la misma tabla de tasas. Los waypoints de la ruta FPL se resuelven contra la base de fixes (descarga única bajo demanda). La altitud de cada tramo es la del FL elegido, o la de los steps de nivel del plan si los has pegado (se aplican por tramo y el selector de FL se bloquea).",
-    calcInfoRcBody: "El campo magnético de la Tierra desvía parte de la radiación cósmica antes de que llegue al avión: cuanto más te protege, menos dosis recibes. Y esa protección no depende solo de lo al norte que vueles, porque el polo magnético no está en el polo geográfico sino sobre el norte de Canadá. A una misma latitud del mapa, el escudo puede ser muy distinto según la longitud. El caso que más afecta a tripulación: volando a 50°N, sobre Canadá la protección es cinco veces menor que sobre Kamchatka — por eso las rutas del Atlántico Norte son las de más dosis, y no por ser las más al norte. La app calcula ese escudo punto a punto (la rigidez de corte vertical) con el mapa de 1°×1° que la FAA publica con CARI-7A, y de ahí saca la dosis. Limitación: ese mapa es de 2010 y el campo magnético se desplaza poco a poco, lo que en 2026 añade del orden de un 4-5% de incertidumbre en el peor caso; es una estimación, no una medida.",
+    calcInfoRouteBody: "La dosis se calcula sobre el camino real, tramo a tramo, con la misma tabla de tasas. Los waypoints de la ruta FPL se resuelven contra la base de fixes (descarga única bajo demanda). En cada tramo la tasa se interpola según rigidez de corte del punto, altitud y ciclo solar, por lo que la longitud del camino también cuenta. La altitud de cada tramo es la del FL elegido, o la de los steps de nivel del plan si los has pegado (se aplican por tramo y el selector de FL se bloquea).",
+    calcInfoRcBody: "El campo magnético de la Tierra desvía parte de la radiación cósmica antes de que llegue al avión: cuanto más te protege, menos dosis recibes. Y esa protección no depende solo de lo al norte que vueles, porque el polo magnético no está en el polo geográfico sino sobre el norte de Canadá. A una misma latitud del mapa, el escudo puede ser muy distinto según la longitud. El caso que más afecta a tripulación: volando a 50°N, sobre Canadá la protección es cinco veces menor que sobre Kamchatka — por eso las rutas del Atlántico Norte son las de más dosis, y no por ser las más al norte. La app calcula ese escudo punto a punto (la rigidez de corte vertical) con el mapa de 1°×1° que la FAA publica con CARI-7A, y de ahí saca la dosis. Para fechas de 2010 en adelante este es exactamente el mismo mapa que usa CARI-7A, así que la app no se separa del programa de referencia. La limitación es de CARI-7A: su última versión (4.2.0, octubre de 2021) sigue trayendo el mapa de 2010, y el campo magnético se desplaza. Eso añade unos pocos por ciento de incertidumbre a cualquier cálculo hecho con CARI-7A hoy, el nuestro incluido.",
     calcInfoFootnote: "Estimación orientativa basada en CARI-7A (FAA), no dosimetría certificada.",
     careerToggle: "Mostrar dosis de tu vida aeronáutica",
     careerYears: "Años de carrera",
@@ -2318,6 +2319,10 @@ var LANG = {
       icon: "🚿",
       title: "Mito: ducharse tras volar elimina la radiación",
       body: "Mito muy extendido, sin ninguna base cient\xEDfica.\n\nLa radiaci\xF3n c\xF3smica que recibes a bordo es ionizante penetrante \u2014fotones gamma, muones, neutrones de alta energ\xEDa. Cuando impacta en tus c\xE9lulas, el da\xF1o (si ocurre) ya est\xE1 hecho en el momento de la exposici\xF3n. No deja residuos radiactivos en tu piel, no contamina tu ropa y no se puede \"lavar\".\n\nDucharse elimina contaminaci\xF3n radiactiva superficial \u2014polvo con part\xEDculas radiactivas\u2014 algo relevante en accidentes nucleares o zonas contaminadas, pero completamente irrelevante tras un vuelo comercial."
+    }, {
+      icon: "🔬",
+      title: "¿Qué es CARI-7?",
+      body: "Es el programa de la Administración Federal de Aviación de EE.UU. (FAA) para calcular la dosis de radiación cósmica en un vuelo, el estándar de referencia. Esta app usa sus datos reales, no una aproximación: la rejilla de tasas (por rigidez, altitud y ciclo solar) y el mapa de rigidez de corte 1°×1° que la FAA publica con CARI-7A. Para una misma ruta, mes y altitud obtienes la misma dosis que daría CARI-7A."
     }],
     // PDF
     pdfTitle: "☢ Informe de Radiación Cósmica",
@@ -2384,10 +2389,10 @@ var LANG = {
     calcInfoSubtitle: "With or without a real route",
     calcInfoBtn: "ℹ️ Calculation",
     calcInfoNoRoute: "Without route · great circle",
-    calcInfoNoRouteBody: "The great-circle (orthodromic) path between origin and destination is drawn and split into segments. For each segment, the dose rate (µSv/h) for that latitude, altitude and solar cycle (HP) is multiplied by the segment's flight time. The rate comes from the embedded real CARI-7A table (91 lat × 11 alt × 10 HP), at the altitude of the selected FL.",
+    calcInfoNoRouteBody: "The great-circle (orthodromic) path between origin and destination is drawn and split into segments. For each segment, the dose rate (µSv/h) is multiplied by the segment's flight time. The rate is interpolated over the embedded real CARI-7A grid against cutoff rigidity, altitude and solar cycle (HP). Position enters through the cutoff rigidity (FAA 1°×1° map), so longitude matters as much as latitude: two points at the same latitude can give very different doses. The altitude is that of the selected FL.",
     calcInfoRoute: "With route · FPL or level steps",
-    calcInfoRouteBody: "The dose is computed along the real path, segment by segment, with the same rate table. FPL waypoints are resolved against the global fix database (one-time on-demand download). Each segment uses the altitude of the selected FL, or the plan's level steps if you pasted them (applied per segment; the FL selector locks).",
-    calcInfoRcBody: "Earth's magnetic field deflects part of the cosmic radiation before it reaches the aircraft: the more it shields you, the less dose you get. And that shielding does not depend only on how far north you fly, because the magnetic pole is not at the geographic pole but over northern Canada. At the same latitude on the map, the shield can differ a lot with longitude. The case that matters most to crew: flying at 50°N, the shielding over Canada is five times weaker than over Kamchatka — which is why North Atlantic routes carry the highest dose, not because they are the furthest north. The app computes that shielding point by point (the vertical cutoff rigidity) using the 1°×1° map the FAA ships with CARI-7A, and derives the dose from it. Limitation: that map is from 2010 and the magnetic field drifts slowly, which in 2026 adds on the order of 4-5% uncertainty in the worst case; that is an estimate, not a measurement.",
+    calcInfoRouteBody: "The dose is computed along the real path, segment by segment, with the same rate table. FPL waypoints are resolved against the global fix database (one-time on-demand download). For each segment the rate is interpolated against the point's cutoff rigidity, altitude and solar cycle, so the longitude along the path matters too. Each segment uses the altitude of the selected FL, or the plan's level steps if you pasted them (applied per segment; the FL selector locks).",
+    calcInfoRcBody: "Earth's magnetic field deflects part of the cosmic radiation before it reaches the aircraft: the more it shields you, the less dose you get. And that shielding does not depend only on how far north you fly, because the magnetic pole is not at the geographic pole but over northern Canada. At the same latitude on the map, the shield can differ a lot with longitude. The case that matters most to crew: flying at 50°N, the shielding over Canada is five times weaker than over Kamchatka — which is why North Atlantic routes carry the highest dose, not because they are the furthest north. The app computes that shielding point by point (the vertical cutoff rigidity) using the 1°×1° map the FAA ships with CARI-7A, and derives the dose from it. For dates from 2010 onward this is exactly the same map CARI-7A itself uses, so the app does not drift away from the reference program. The limitation is CARI-7A's: its latest release (4.2.0, October 2021) still ships the 2010 map, and the magnetic field keeps moving. That adds a few percent of uncertainty to any CARI-7A calculation made today, ours included.",
     calcInfoFootnote: "Orientation estimate based on CARI-7A (FAA), not certified dosimetry.",
     careerToggle: "Show aeronautical career dose",
     careerYears: "Career years",
@@ -2555,6 +2560,10 @@ var LANG = {
       icon: "🚿",
       title: "Myth: showering after a flight removes radiation",
       body: "A widespread myth with no scientific basis.\n\nThe cosmic radiation you receive on board is penetrating ionising radiation \u2014 gamma photons, muons, high-energy neutrons. When it hits your cells, any damage is done at the moment of exposure. It leaves no radioactive residue on your skin, does not contaminate your clothes, and cannot be \"washed off\".\n\nShowering removes surface radioactive contamination \u2014 dust containing radioactive particles \u2014 which is relevant after nuclear accidents or in contaminated areas, but completely irrelevant after a commercial flight."
+    }, {
+      icon: "🔬",
+      title: "What is CARI-7?",
+      body: "It is the US Federal Aviation Administration (FAA) program for computing the cosmic-radiation dose of a flight, the reference standard. This app uses its real data, not an approximation: the rate grid (by rigidity, altitude and solar cycle) and the 1°×1° cutoff-rigidity map the FAA ships with CARI-7A. For the same route, month and altitude you get the same dose CARI-7A would give."
     }],
     // PDF
     pdfTitle: "☢ Cosmic Radiation Report",
@@ -3334,11 +3343,18 @@ function FlightPair(_ref10) {
     onTrack = _ref10.onTrack,
     isNew = _ref10.isNew,
     onSettled = _ref10.onSettled,
+    initialCollapsed = _ref10.initialCollapsed,
+    onCollapsedChange = _ref10.onCollapsedChange,
     t = _ref10.t;
-  var _useStateP = useState(!isNew),
+  var _useStateP = useState(initialCollapsed != null ? initialCollapsed : !isNew),
     _useStateP2 = _slicedToArray(_useStateP, 2),
     collapsed = _useStateP2[0],
     setCollapsed = _useStateP2[1];
+  // Persistir el colapso: el estado local solo no sobrevive al navegar de mes.
+  function setCollapsedPersist(v) {
+    setCollapsed(v);
+    if (onCollapsedChange) onCollapsedChange(v);
+  }
   // Cuenta atrás del colapso automático: el par recién creado muestra un
   // chip junto a la flecha ▲ min ("colapsando en Ns") y se colapsa al llegar a 0.
   var _useStateQ = useState(isNew ? 10 : null),
@@ -3356,7 +3372,7 @@ function FlightPair(_ref10) {
   }, [countdown]);
   useEffect(function () {
     if (countdown === 0) {
-      setCollapsed(true);
+      setCollapsedPersist(true);
       setCountdown(null);
       // Sin borrar el pid, un par viejo re-montado (restaurar copia, volver de
       // mes) volvía a contar 10 s y se expandía/colapsaba solo.
@@ -3385,7 +3401,7 @@ function FlightPair(_ref10) {
   if (collapsed) {
     return /*#__PURE__*/React.createElement("div", {
       onClick: function onClick() {
-        setCollapsed(false);
+        setCollapsedPersist(false);
         setCountdown(null);
       },
       style: {
@@ -3455,7 +3471,7 @@ function FlightPair(_ref10) {
     }
   }, /*#__PURE__*/React.createElement("div", {
     onClick: function onClick() {
-      setCollapsed(true);
+      setCollapsedPersist(true);
       setCountdown(null);
     },
     style: {
@@ -4288,30 +4304,46 @@ function App() {
     var els = [];
     flights.forEach(function (f) {
       if (rendered[f.id]) return;
+      var mate = null;
+      var pid = null;
       if (f.pairId != null) {
-        var mate = flights.find(function (x) {
+        mate = flights.find(function (x) {
           return x.id !== f.id && x.pairId === f.pairId;
         });
-        if (mate) {
-          rendered[f.id] = true;
-          rendered[mate.id] = true;
-          els.push(/*#__PURE__*/React.createElement(FlightPair, {
-            key: "pair-" + f.pairId,
-            ida: f,
-            vuelta: mate,
-            hpMV: hpMV,
-            t: t,
-            onChange: updateFlight,
-            onRemove: removeFlight,
-            onAddReturn: addReturnFlight,
-            onTrack: onTrack,
-            isNew: newPairIdsRef.current.has(f.pairId),
-            onSettled: function () {
-              newPairIdsRef.current.delete(f.pairId);
-            }
-          }));
-          return;
-        }
+        if (mate) pid = f.pairId;
+      }
+      if (!mate && f.pairId == null) {
+        // Par natural ida/vuelta: dos vuelos con origen y destino cruzados
+        // se agrupan y colapsan igual que con el boton "anadir vuelta".
+        mate = flights.find(function (x) {
+          return x.id !== f.id && !rendered[x.id] && x.pairId == null &&
+            x.orig === f.dest && x.dest === f.orig;
+        });
+      }
+      if (mate) {
+        rendered[f.id] = true;
+        rendered[mate.id] = true;
+        els.push(/*#__PURE__*/React.createElement(FlightPair, {
+          key: pid != null ? "pair-" + pid : "nat-" + f.id + "-" + mate.id,
+          ida: f,
+          vuelta: mate,
+          hpMV: hpMV,
+          t: t,
+          onChange: updateFlight,
+          onRemove: removeFlight,
+          onAddReturn: addReturnFlight,
+          onTrack: onTrack,
+          isNew: pid != null ? newPairIdsRef.current.has(pid) : (f.collapsed == null && mate.collapsed == null),
+          initialCollapsed: f.collapsed != null ? f.collapsed : undefined,
+          onCollapsedChange: function (v) {
+            updateFlight(f.id, "collapsed", v);
+            updateFlight(mate.id, "collapsed", v);
+          },
+          onSettled: pid != null ? function () {
+            newPairIdsRef.current.delete(pid);
+          } : null
+        }));
+        return;
       }
       rendered[f.id] = true;
       els.push(/*#__PURE__*/React.createElement(FlightRow, {
