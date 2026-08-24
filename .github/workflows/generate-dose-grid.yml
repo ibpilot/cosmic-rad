@@ -53,7 +53,7 @@ jobs:
     needs: selftest
     if: github.event_name == 'workflow_dispatch' && github.event.inputs.regenerate_grid == 'true'
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -65,7 +65,8 @@ jobs:
       - name: Descargar CARI-7A (FAA)
         run: curl -sL -o cari7a.zip "$FAA_CARI7A_ZIP" && unzip -q cari7a.zip
       - name: Generar + ejecutar CARI-7A (HP ${{ matrix.hp }} MV)
-        run: python3 tools/cari7_generate.py --hp ${{ matrix.hp }} --cari-dir CARI_7A_DVD --binary "$CARI_BIN" --out rates_hp${{ matrix.hp }}.csv
+        run: python3 tools/cari7_generate.py --hp ${{ matrix.hp }} --cari-dir CARI_7A_DVD
+             --cutoffs CARI_7A_DVD/CUTOFFS --binary "$CARI_BIN" --out rates_hp${{ matrix.hp }}.csv
       - uses: actions/upload-artifact@v4
         with:
           name: rates-hp-${{ matrix.hp }}
@@ -80,6 +81,8 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: rates
+      - name: Descargar CARI-7A (FAA)
+        run: curl -sL -o cari7a.zip "$FAA_CARI7A_ZIP" && unzip -q cari7a.zip
       - name: Fusionar CSVs
         run: |
           python3 - <<'PY'
@@ -98,11 +101,13 @@ jobs:
               w.writerows(rows)
           print("total puntos:", len(rows))
           PY
-      - name: Ensamblar rejilla + validar + embeber
+      - name: Ensamblar rejilla + mapa de rigidez + embeber
         run: |
           python3 tools/generate_dose_grid.py --input rates_all.csv \
-            --axes "0:90:1,8.0:13.0:0.5,300:1200:100" --out dose_grid.js
-          python3 tools/embed_dose_grid.py --grid dose_grid.js --index index.html
+            --axes "0:18:0.25,8.0:13.0:0.5,300:1200:100" --out dose_grid.js
+          python3 tools/generate_dose_grid.py --rc-map CARI_7A_DVD/CUTOFFS/IGRF2010.1X1 \
+            --out rc_map.js
+          python3 tools/embed_dose_grid.py --grid dose_grid.js --rc-map rc_map.js --index index.html
       - name: Sanity check de monotonicidad (rejilla embebida)
         run: |
           node -e '
@@ -111,12 +116,26 @@ jobs:
           const m=html.match(/<script type="text\/javascript">([\s\S]*?)<\/script>/);
           const sb={React:{useState:()=>[null,()=>{}],useCallback:f=>f,useRef:()=>({current:null}),useEffect:()=>{},createElement:()=>({})},ReactDOM:{createRoot:()=>({render(){}})},document:{getElementById:()=>({})},atob:s=>Buffer.from(s,"base64").toString("binary"),console};
           vm.createContext(sb); vm.runInContext(m[1],sb,{filename:"app.js"});
-          const r=e=>vm.runInContext(e,sb);
-          const a=r("doseRateGrid(70,10.668,650)"), b=r("doseRateGrid(10,10.668,650)");
-          const c=r("doseRateGrid(45,12.5,650)"), d=r("doseRateGrid(45,9,650)");
-          const e=r("doseRateGrid(45,10.668,400)"), f=r("doseRateGrid(45,10.668,1100)");
-          if(!(a>b&&c>d&&e>f)){console.error("MONOTONICITY FAIL",a,b,c,d,e,f);process.exit(1);}
-          console.log("monotonicidad OK:",a.toFixed(2),b.toFixed(2),c.toFixed(2),d.toFixed(2),e.toFixed(2),f.toFixed(2));
+          const ctx=sb;
+          let malas = 0;
+          const casos = [[50,270],[50,150],[0,80],[70,20],[-40,140]];
+          for (const c of casos) {
+            const la = c[0], lo = c[1];
+            const bajo   = ctx.doseRateGrid(la, lo,  9.0,  650);
+            const alto   = ctx.doseRateGrid(la, lo, 12.5,  650);
+            const solMax = ctx.doseRateGrid(la, lo, 11.0, 1200);
+            const solMin = ctx.doseRateGrid(la, lo, 11.0,  300);
+            if (![bajo, alto, solMax, solMin].every(Number.isFinite)) {
+              malas++; console.log("valor no finito en", la, lo); continue;
+            }
+            if (!(alto > bajo))   { malas++; console.log("la altitud no sube la dosis en", la, lo); }
+            if (!(solMin > solMax)) { malas++; console.log("el sol no baja la dosis en", la, lo); }
+          }
+          if (!(ctx.doseRateGrid(50, 270, 11.0, 650) > ctx.doseRateGrid(50, 150, 11.0, 650))) {
+            malas++; console.log("la rigidez no baja la dosis");
+          }
+          if (malas) { console.log("FALLO: " + malas + " comprobaciones de monotonicidad"); process.exit(1); }
+          console.log("monotonicidad OK");
           '
       - name: Commit y push
         run: |

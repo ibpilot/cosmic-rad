@@ -12,6 +12,7 @@ import argparse, re, subprocess, sys, tempfile
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--grid", required=True, help="fichero JS generado (var DOSE_GRID = {...};)")
+    ap.add_argument("--rc-map", help="fichero JS generado (var RC_MAP = {...};)")
     ap.add_argument("--index", required=True)
     args = ap.parse_args()
 
@@ -23,6 +24,17 @@ def main():
     if not pat.search(html):
         sys.exit("no encontré el bloque DOSE_GRID (placeholder) en %s" % args.index)
     html = pat.sub(lambda m: block, html, count=1)
+
+    if args.rc_map:
+        rc_block = open(args.rc_map).read().strip()
+        assert "var RC_MAP = {" in rc_block and rc_block.rstrip().endswith("};"), \
+            "bloque RC_MAP inválido"
+        rc_pat = re.compile(r"var RC_MAP = \{[^}]*\};", re.S)
+        if rc_pat.search(html):
+            html = rc_pat.sub(lambda m: rc_block, html, count=1)
+        else:
+            # Primera vez: insertar justo detrás del bloque DOSE_GRID.
+            html = html.replace(block, block + "\n" + rc_block, 1)
 
     # verificación de sintaxis del script completo antes de guardar
     m = re.search(r'<script type="text/javascript">([\s\S]*?)</script>', html)
