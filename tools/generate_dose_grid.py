@@ -19,7 +19,7 @@ O con puntos sueltos (el script reordena según los ejes y rellena huecos con er
 --validate refs.csv → compara la rejilla generada contra valores de referencia
                       (misma columna rate_usvh) e informa del error máximo.
 """
-import argparse, base64, csv, struct, sys
+import argparse, base64, csv, os, struct, sys
 
 
 def parse_axis(spec):
@@ -124,8 +124,8 @@ def write_rc_map_js(cutoff_path, out_path):
     lats, lons, b64 = build_rc_map(rcmap)
     lines = [
         "// Generado por tools/generate_dose_grid.py --rc-map — NO editar a mano.",
-        "// Fuente: %s (%d celdas, %.1f KB Int16LE)." % (
-            cutoff_path, len(lats) * len(lons), len(lats) * len(lons) * 2 / 1024),
+        "// Fuente: %s (rigidez de corte IGRF2010, %d celdas, %.1f KB Int16LE)."
+        % (os.path.basename(cutoff_path), len(lats) * len(lons), len(lats) * len(lons) * 2 / 1024),
         "var RC_MAP = {",
         "  lat0: %d, lat1: %d," % (lats[0], lats[-1]),
         "  lon0: %d, lon1: %d," % (lons[0], lons[-1]),
@@ -171,8 +171,9 @@ def main():
     hp_js = "[" + ",".join(str(int(x)) for x in hp_axis) + "]"
     lines = [
         "// Generado por tools/generate_dose_grid.py - NO editar a mano.",
-        "// Fuente: %s (%d muestras -> %d nodos, %.1f KB Float32LE)." % (
-            args.input, len(rows), len(rc_axis) * len(alt_axis) * len(hp_axis), nbytes / 1024),
+        "// Fuente: %s (CARI-7A, %d muestras -> %d nodos, %.1f KB Float32LE)." % (
+            os.path.basename(args.input), len(rows),
+            len(rc_axis) * len(alt_axis) * len(hp_axis), nbytes / 1024),
         "var DOSE_GRID = {",
         "  rc: %s," % rc_js,
         "  alt: %s," % alt_js,

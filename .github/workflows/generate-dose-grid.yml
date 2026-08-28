@@ -9,10 +9,11 @@ name: CARI-7A dose grid
 #
 # El binario Linux de CARI-7A se descarga de la página oficial de la FAA.
 # S2 (suministro): el zip se verifica contra un SHA-256 conocido ANTES de
-# ejecutarlo. Si la FAA actualiza el zip, hay que renovar FAA_CARI7A_SHA256
-# (el pipeline falla cerrado con el mensaje claro de sha256sum). MV-DATES no
-# lleva checksum: cambia cada mes por diseño, y update_hp_months.py solo
-# extrae números con regex (no puede inyectar código).
+# descomprimir y de ejecutarlo. Si la FAA actualiza el zip, hay que renovar
+# FAA_CARI7A_SHA256 (el pipeline falla cerrado con el mensaje claro de
+# sha256sum). MV-DATES no lleva checksum: cambia cada mes por diseño, y
+# update_hp_months.py solo extrae números con regex (no puede inyectar código)
+# y descarta valores fuera de rango plausible antes de commitearlos a main.
 
 on:
   workflow_dispatch:
@@ -53,9 +54,11 @@ jobs:
       - name: Instalar runtime Fortran
         run: sudo apt-get update && sudo apt-get install -y libgfortran5
       - name: Descargar CARI-7A (FAA)
-        run: curl -sL -o cari7a.zip "$FAA_CARI7A_ZIP" && unzip -q cari7a.zip
+        run: curl -sfL -o cari7a.zip "$FAA_CARI7A_ZIP"
       - name: Verificar SHA-256 del zip CARI-7A (suministro)
         run: echo "$FAA_CARI7A_SHA256  cari7a.zip" | sha256sum -c -
+      - name: Descomprimir CARI-7A (tras verificar el checksum)
+        run: unzip -q cari7a.zip
       - name: Selftest de fidelidad
         run: python3 tools/cari7_generate.py --selftest-only --cari-dir CARI_7A_DVD --binary "$CARI_BIN"
 
@@ -73,9 +76,11 @@ jobs:
       - name: Instalar runtime Fortran
         run: sudo apt-get update && sudo apt-get install -y libgfortran5
       - name: Descargar CARI-7A (FAA)
-        run: curl -sL -o cari7a.zip "$FAA_CARI7A_ZIP" && unzip -q cari7a.zip
+        run: curl -sfL -o cari7a.zip "$FAA_CARI7A_ZIP"
       - name: Verificar SHA-256 del zip CARI-7A (suministro)
         run: echo "$FAA_CARI7A_SHA256  cari7a.zip" | sha256sum -c -
+      - name: Descomprimir CARI-7A (tras verificar el checksum)
+        run: unzip -q cari7a.zip
       - name: Generar + ejecutar CARI-7A (HP ${{ matrix.hp }} MV)
         run: python3 tools/cari7_generate.py --hp ${{ matrix.hp }} --cari-dir CARI_7A_DVD
              --cutoffs CARI_7A_DVD/CUTOFFS --binary "$CARI_BIN" --out rates_hp${{ matrix.hp }}.csv
@@ -92,14 +97,22 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
+      # S5: sin persist-credentials el GITHUB_TOKEN no se guarda en .git/config;
+      # este job descomprime y procesa ficheros de la FAA, y un checksum
+      # verificado tarde no puede convertirse en push a main. El push de abajo
+      # sigue funcionando (gh-actions bot / GITHUB_TOKEN por acción de git).
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
+        with:
+          persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4 (pin S2)
         with:
           path: rates
       - name: Descargar CARI-7A (FAA)
-        run: curl -sL -o cari7a.zip "$FAA_CARI7A_ZIP" && unzip -q cari7a.zip
+        run: curl -sfL -o cari7a.zip "$FAA_CARI7A_ZIP"
       - name: Verificar SHA-256 del zip CARI-7A (suministro)
         run: echo "$FAA_CARI7A_SHA256  cari7a.zip" | sha256sum -c -
+      - name: Descomprimir CARI-7A (tras verificar el checksum)
+        run: unzip -q cari7a.zip
       - name: Fusionar CSVs
         run: |
           python3 - <<'PY'
@@ -182,9 +195,13 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
+      # S5: este job descomprime MV-DATES (terceros, sin checksum) y commitea;
+      # sin credenciales persistidas un RCE ahí no obtiene push a main gratis.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
+        with:
+          persist-credentials: false
       - name: Descargar MV-DATES (FAA)
-        run: curl -sL -o mv.zip "$FAA_MVDATES_ZIP" && unzip -q mv.zip
+        run: curl -sfL -o mv.zip "$FAA_MVDATES_ZIP" && unzip -q mv.zip
       - name: Actualizar HP_MONTHS en index.html
         run: python3 tools/update_hp_months.py --mv-dates MV-DATES.L99 --index index.html --since 2011
       - name: Commit y push

@@ -6,7 +6,7 @@ parseable (node vm.Script) antes de escribir.
 Uso:
     python3 tools/embed_dose_grid.py --grid dose_grid.js --index index.html
 """
-import argparse, re, subprocess, sys, tempfile
+import argparse, os, re, subprocess, sys, tempfile
 
 
 def main():
@@ -36,17 +36,23 @@ def main():
             # Primera vez: insertar justo detrás del bloque DOSE_GRID.
             html = html.replace(block, block + "\n" + rc_block, 1)
 
-    # verificación de sintaxis del script completo antes de guardar
-    m = re.search(r'<script type="text/javascript">([\s\S]*?)</script>', html)
-    if not m:
+    # verificación de sintaxis del script completo antes de guardar. Se busca
+    # el <script> que CONTIENE el bloque DOSE_GRID recién embebido (el primero
+    # del fichero no es necesariamente la app; la rejilla está en otro bloque).
+    pat = re.compile(r"<script[^>]*>([\s\S]*?)</script>")
+    matches = [m for m in pat.finditer(html) if "var DOSE_GRID =" in m.group(1)]
+    if not matches:
         sys.exit("no encontré el script de la app en %s" % args.index)
     with tempfile.NamedTemporaryFile("w", suffix=".js", delete=False) as f:
-        f.write(m.group(1))
+        f.write(matches[0].group(1))
         tmp = f.name
-    r = subprocess.run(["node", "-e",
-                        'const fs=require("fs"),vm=require("vm");'
-                        'new vm.Script(fs.readFileSync(process.argv[1],"utf8"));console.log("SYNTAX OK");',
-                        tmp], capture_output=True, text=True)
+    try:
+        r = subprocess.run(["node", "-e",
+                            'const fs=require("fs"),vm=require("vm");'
+                            'new vm.Script(fs.readFileSync(process.argv[1],"utf8"));console.log("SYNTAX OK");',
+                            tmp], capture_output=True, text=True)
+    finally:
+        os.unlink(tmp)
     if r.returncode != 0:
         sys.exit("SYNTAX FAIL tras embeker:\n" + r.stderr[-2000:])
     print(r.stdout.strip())

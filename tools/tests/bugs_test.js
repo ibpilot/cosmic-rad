@@ -527,5 +527,70 @@ console.log("\nB27 — saneamiento de fixes.json, backups y topes de hydrateFlig
   ok("steps capado a 100", h.steps.length === 100, h.steps.length);
 }
 
+console.log("\nS5/A1 — calcTrack: el eje temporal se valida (NaN y DoS)");
+{
+  // A2: tiempo no numérico envenenaba la dosis con NaN (dtH = NaN pasaba
+  // las guardas dtH<0 y dtH>0.25 y caía al camino normal).
+  const t = ctx.calcTrack([["x", 40, 0, 11], ["y", 41, 1, 11]], 650, null);
+  ok("tiempos de texto → track rechazado (no NaN)", t === null, t && t.doseUsv);
+  const mixto = ctx.calcTrack([[0, 40, 0, 11], ["y", 41, 1, 11]], 650, null);
+  ok("un solo punto válido → null", mixto === null);
+  const conTiempo = ctx.calcTrack([[0, 40, 0, 11], [60, 41, 1, 11]], 650, null);
+  ok("track con hora normal sigue funcionando", conTiempo && isFinite(conTiempo.doseUsv) && conTiempo.doseUsv > 0,
+     conTiempo && conTiempo.doseUsv);
+
+  // A1: tiempos gigantes multiplicaban las iteraciones sin tope (t=6e6 →
+  // 400k sub-puntos, t=6e9 → ~33 min). Ahora se integran a lo sumo ~60
+  // sub-puntos por tramo (un punto por hora real).
+  const mega = ctx.calcTrack([[0, 40, 0, 11], [6e9, 41, 1, 11]], 650, null);
+  ok("dtH gigante → dosis finita y sin congelar", mega && isFinite(mega.doseUsv) && mega.doseUsv > 0, mega && mega.doseUsv);
+  ok("dtH gigante marca incomplete", mega && mega.incomplete === true);
+  ok("tiempo integrado se conserva", mega && Math.abs(mega.timeH - 1e8) < 1e-3, mega && mega.timeH);
+  // Un hueco normal de 30 min sigue interpolándose igual que antes (el tope
+  // solo actúa a partir de ~2h de salto).
+  const normal = ctx.calcTrack([[0, 40, 0, 11], [30, 41, 1, 11]], 650, null);
+  ok("hueco normal de 30 min inalterado", normal && isFinite(normal.doseUsv), normal && normal.doseUsv);
+  // La interpolación de un hueco corto con dosis constante es exacta.
+  const dosPts = [[0, 40, 0, 11], [120, 40.5, 0.5, 11]];
+  const ref = ctx.calcTrack([[0, 40, 0, 11], [120, 40.5, 0.5, 11]], 650, null);
+  ok("hueco de 2h integra sin distorsión", ref && isFinite(ref.doseUsv) && ref.doseUsv > 0, ref && ref.doseUsv);
+}
+
+console.log("\nS5/A3 — un backup vacío se rechaza (no borra el histórico)");
+{
+  ok("{} → null", ctx.parseBackup("{}") === null);
+  ok("{version:1,months:{}} → null", ctx.parseBackup('{"version":1,"months":{}}') === null);
+  ok("válido sigue pasando", ctx.parseBackup('{"2026-08":[]}') !== null);
+  // El flujo de restoreBackup empieza preguntando antes de tocar nada.
+  ok("restoreBackup pide confirmación (S5)", /if \(!confirm\(t\.restoreAsk\)\) return;/.test(html));
+  ok("traducción restoreAsk en ES", /restoreAsk: "¿Restaurar la copia\? Se reemplazará TODO el historial actual\."/.test(html));
+  ok("traducción restoreAsk en EN", /restoreAsk: "Restore backup\? The entire current history will be replaced\."/.test(html));
+}
+
+console.log("\nS5/B1 — claves __proto__ ya no mutan prototipos");
+{
+  const sf = ctx.sanitizeFixes;
+  const r = sf({ "__proto__": [1, 2], "AAA": [100, 200] });
+  ok("sanitizeFixes: __proto__ no entra como clave", r && !("__proto__" in r) && Object.keys(r).length === 1, r && Object.keys(r).join(","));
+  ok("sanitizeFixes: prototipo limpio", r && Object.getPrototypeOf(r) === null);
+  ok("sanitizeFixes: entradas buenas intactas", r && r["AAA"] && r["AAA"].length === 2);
+  // tokIdx: un token "__proto__" no debe contaminar la búsqueda de steps.
+  ctx.FIXES = JSON.parse(fs.readFileSync(path.join(REPO, "fixes.json"), "utf8"));
+  const rt = ctx.parseRouteString("LEMD..__proto__..ABNIR..LEBL", "MAD", "BCN", "F310 ABNIR/F390");
+  ok("ruta con token __proto__ resuelve igual", rt.track && rt.track.length >= 3, rt.error);
+  // newIcao es null-proto (se crea con Object.create(null)).
+  ok("newIcao se crea null-proto", /newIcao = Object\.create\(null\)/.test(html));
+}
+
+console.log("\nS5/B2 — el ICAO de OpenFlights se acota antes de entrar en newIcao");
+{
+  ok("ICAO de 4 caracteres admitido", /icao\.length <= 4 && \/\^\[A-Z0-9\]\+\$\/\.test\(icao\)/.test(html));
+}
+
+console.log("\nS5/B3 — el textarea de la ruta tiene tope");
+{
+  ok("maxLength 4000 en el textarea", /maxLength: 4000,/.test(html));
+}
+
 console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");
 process.exit(fail === 0 ? 0 : 1);

@@ -5,20 +5,28 @@ MV-DATES.L99 (FAA, descargable como MV-DATES.zip). Clave "YYYY-MM" -> MV.
 Solo incluye meses desde --since (por defecto 2011, suficiente para el histórico
 de la app). La fila anual (00/YYYY) se excluye.
 
+S5 (sanity de rango): MV-DATES no lleva checksum y el job commitea a main en
+cron. Un valor fuera de rango plausible (hp <= 0 o > 2000, mes 13, año fuera de
++-1 del actual) se descarta; si el fichero entero queda vacío, aborta en vez de
+publicar datos corruptos en producción.
+
 Uso:
     python3 tools/update_hp_months.py --mv-dates MV-DATES.L99 --index index.html --since 2011
 """
-import argparse, re, sys
+import argparse, datetime, re, sys
 
 
 def read_hp(path, since):
     out = {}
+    today = datetime.date.today()
     for line in open(path, errors="replace"):
         m = re.match(r"\s*(\d\d)/(\d{4}),\s*(\d+)", line)
         if not m:
             continue
         mm, yy, hp = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if mm == 0 or yy < since:
+        if mm == 0 or mm > 12 or yy < since or abs(today.year - yy) > 1:
+            continue
+        if hp <= 0 or hp > 2000:
             continue
         out["%04d-%02d" % (yy, mm)] = hp
     return out

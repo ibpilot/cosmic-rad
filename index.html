@@ -1447,7 +1447,7 @@ function _loadOpenFlights() {
           text = _context.v;
           lines = text.split("\n");
           extended = _objectSpread({}, AIRPORTS); // keep local overrides
-          newIcao = _objectSpread({}, icaoMap);
+          newIcao = Object.create(null); // S5: claves ICAO de terceros, null-proto
           added = 0;
           _iterator = _createForOfIteratorHelper(lines);
           _context.p = 4;
@@ -1484,9 +1484,12 @@ function _loadOpenFlights() {
         case 8:
           // S1: validación de integridad del dataset de terceros (OpenFlights).
           // Coordenadas imposibles o nombres absurdos = fichero manipulado/roto:
-          // se descarta la fila. Si todo el fichero es inválido, extended queda
-          // igual a la lista local curada y el fallback es silencioso.
-          if (!(lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 && name.length <= 200)) {
+          // se descarta la fila. El ICAO también se acota (clave de newIcao):
+          // un ICAO de 20 caracteres o con comas envenenaba el mapeo. Si todo
+          // el fichero es inválido, extended queda igual a la lista local
+          // curada y el fallback es silencioso.
+          if (!(lat >= -90 && lat <= 90 && lon >= -180 && lon <= 180 && name.length <= 200 &&
+                (!icao || icao === "\\N" || (icao.length <= 4 && /^[A-Z0-9]+$/.test(icao))))) {
             return _context.a(3, 9);
           }
           // Don't overwrite our curated local entries
@@ -1654,9 +1657,7 @@ var DOSE_GRID = {
 };
 
 // Generado por tools/generate_dose_grid.py --rc-map — NO editar a mano.
-// Fuente: /private/tmp/claude-501/-Users-v-Documents-GitHub-cosmic-rad/7c8ac963-e885-49aa-8af1-1a8177934973/scratchpad/cari/CARI_7A_DVD/CUTOFFS/IGRF2010.1X1 (64440 celdas, 125.9 KB Int16LE).
-// Generado por tools/generate_dose_grid.py --rc-map — NO editar a mano.
-// Fuente: /private/tmp/claude-501/-Users-v-Documents-GitHub-cosmic-rad/7c8ac963-e885-49aa-8af1-1a8177934973/scratchpad/cari/CARI_7A_DVD/CUTOFFS/IGRF2010.1X1 (64440 celdas, 125.9 KB Int16LE).
+// Fuente: IGRF2010.1X1 (rigidez de corte IGRF2010, 64440 celdas, 125.9 KB Int16LE).
 var RC_MAP = {
   lat0: -89, lat1: 89,
   lon0: 0, lon1: 359,
@@ -1873,9 +1874,12 @@ function calcTrack(track, hpMV, altKm) {
   // Coordenadas no finitas (backup manipulado, track corrupto) envenenaban
   // gcDistance → dtH → dosis, y salía "NaN µSv" en toda la app. Se descartan
   // los puntos inservibles antes de integrar; sin dos puntos válidos no hay track.
+  // El eje del tiempo cuenta igual: un tiempo no numérico daba dtH = NaN y
+  // "NaN µSv"; un tiempo gigante multiplicaba las iteraciones de interpolación
+  // sin tope (400k con t=6e6, ~33 min de hilo bloqueado con t=6e9).
   var dropped = 0;
   track = track.filter(function (p) {
-    var okp = Array.isArray(p) && isFinite(p[1]) && isFinite(p[2]);
+    var okp = Array.isArray(p) && isFinite(p[0]) && isFinite(p[1]) && isFinite(p[2]);
     if (!okp) dropped++;
     return okp;
   });
@@ -1903,7 +1907,11 @@ function calcTrack(track, hpMV, altKm) {
       if (dtH > 0.25) {
         // hueco (>15 min): sub-puntos interpolados para no perder el tiempo real
         if (dtH > 1) incomplete = true;
-        var n = Math.ceil(dtH / 0.25);
+        // S5: un dtH gigante (tiempo de backup manipulado) significaba "n"
+        // iteraciones sin tope: 6e6 → 400k sub-puntos, 6e9 → ~33 min de hilo
+        // bloqueado. El sub-punto se pone en ~1 hora de vuelo real para capar
+        // el bucle y conservar la dosis a la vez.
+        var n = Math.min(Math.ceil(dtH / 0.25), Math.ceil(dtH / 60));
         var dtSub = dtH / n;
         for (var k = 1; k <= n; k++) {
           var fk = k / n;
@@ -1957,7 +1965,10 @@ function sanitizeFixes(d) {
   if (d && typeof d === "object" && !Array.isArray(d)) {
     var keys = Object.keys(d);
     if (keys.length <= 500000) {
-      clean = {};
+      // S5: claves de terceros con nombre "__proto__" (9 caracteres, pasa el
+      // filtro k.length <= 12) mutaban el prototipo del objeto en vez de crear
+      // una entrada. Null-prototype lo cierra: no hay Object.prototype.
+      clean = Object.create(null);
       for (var i = 0; i < keys.length; i++) {
         var k = keys[i], arr = d[k];
         if (typeof k !== "string" || k.length < 1 || k.length > 12 || !Array.isArray(arr) ||
@@ -2061,7 +2072,7 @@ function parseRouteString(text, origIata, destIata, stepsText) {
   var orig = routeOrigIata && activeDB[routeOrigIata] ? activeDB[routeOrigIata] : (origIata && activeDB[origIata] ? activeDB[origIata] : null);
   var cur = orig ? [orig.lat, orig.lon] : null;
   var pts = [], unresolved = [], stepsUnmatched = [], F = FIXES || {};
-  var tokIdx = {};
+  var tokIdx = Object.create(null);
   // Primera aparición gana: con un fix repetido en la ruta, quedarse con la
   // última hacía que su step de nivel se aplicase más tarde de lo que dice el plan.
   tokens.forEach(function (tk, ti) { if (tokIdx[tk] === undefined) tokIdx[tk] = ti; });
@@ -2243,7 +2254,11 @@ function parseBackup(text) {
       }
     }
     var total = Object.keys(months).length;
-    if (total > 0 && Object.keys(clean).length === 0) return null;
+    // S5: un backup vacío ({}) pasaba la guarda de arriba (total === 0) y
+    // restoreBackup sobrescribía todo el histórico con nada, avisando además
+    // "restaurado correctamente". Sin un solo mes válido no hay nada que
+    // restaurar: se rechaza.
+    if (total === 0 || Object.keys(clean).length === 0) return null;
     return clean;
   } catch (e) {
     return null;
@@ -2395,6 +2410,7 @@ var LANG = {
     restoreBtn: "📂 Restaurar copia de seguridad",
     restoreOk: "Copia restaurada correctamente",
     restoreErr: "Error al leer el archivo",
+    restoreAsk: "¿Restaurar la copia? Se reemplazará TODO el historial actual.",
     singleDoseLabel: "Dosis por vuelo",
     singleEffRate: "Tasa efectiva",
     singleDistance: "Distancia",
@@ -2636,6 +2652,7 @@ var LANG = {
     restoreBtn: "📂 Restore backup",
     restoreOk: "Backup restored successfully",
     restoreErr: "Error reading file",
+    restoreAsk: "Restore backup? The entire current history will be replaced.",
     singleDoseLabel: "Dose per flight",
     singleEffRate: "Effective rate",
     singleDistance: "Distance",
@@ -4443,6 +4460,10 @@ function App() {
     }
   }, t.backupBtn), /*#__PURE__*/React.createElement("button", {
     onClick: function () {
+      // S5: restaurar reemplaza TODO el histórico (saveAllMonths no fusiona) y
+      // no hay copia previa; antes se ejecutaba sin preguntar. Un solo clic
+      // erróneo destruía meses enteros de datos.
+      if (!confirm(t.restoreAsk)) return;
       var inp = document.createElement("input");
       inp.type = "file"; inp.accept = ".json,application/json";
       inp.onchange = function (ev) {
@@ -5682,6 +5703,8 @@ function TrackModal(_refTrack) {
     onChange: function onChange(e) {
       return setText(e.target.value);
     },
+    // B3: sin tope, pegar un texto enorme congelaba la pestaña al parsear.
+    maxLength: 4000,
     placeholder: t.trackModalPlaceholder,
     style: {
       width: "100%",
