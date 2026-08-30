@@ -50,7 +50,7 @@ jobs:
     # referencia oficial (Examples/EXAMPLES.LOC -> EXAMPLES.ANS, tol 5%).
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
       - name: Instalar runtime Fortran
         run: sudo apt-get update && sudo apt-get install -y libgfortran5
       - name: Descargar CARI-7A (FAA)
@@ -72,7 +72,7 @@ jobs:
       matrix:
         hp: [300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
       - name: Instalar runtime Fortran
         run: sudo apt-get update && sudo apt-get install -y libgfortran5
       - name: Descargar CARI-7A (FAA)
@@ -101,7 +101,7 @@ jobs:
       # este job descomprime y procesa ficheros de la FAA, y un checksum
       # verificado tarde no puede convertirse en push a main. El push de abajo
       # sigue funcionando (gh-actions bot / GITHUB_TOKEN por acción de git).
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
         with:
           persist-credentials: false
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4 (pin S2)
@@ -197,7 +197,7 @@ jobs:
     steps:
       # S5: este job descomprime MV-DATES (terceros, sin checksum) y commitea;
       # sin credenciales persistidas un RCE ahí no obtiene push a main gratis.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4 (pin S2)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
         with:
           persist-credentials: false
       - name: Descargar MV-DATES (FAA)
