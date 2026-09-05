@@ -282,16 +282,21 @@ def _write_my_model(cari, rows):
     # Proyectar el espectro sobre la malla fija de Z=1 del BO11.
     proj = _project_powerlaw(rows, z1_grid)
     epoch = "2002.041096"          # epoca del BO11_GCR.OUT distribuido
+    # Formato EXACTO de las lineas del BO11_GCR.OUT distribuido (medido):
+    # 26 chars, columnas fijas: Z cols 0-3, 2 espacios, E cols 6-14 (9 chars,
+    # sin signo en el exponente de 2 cifras), 2 espacios, F cols 17-25.
+    # El formato de write_my_model de T4 (%4d %10.3E %12.3E, 28 chars) desplaza
+    # las columnas y CARI lee el espectro mal (tasas 0/NaN): destapado por T5.
     with open(dst, "w") as f:
         f.write(epoch + "\n")
         f.write("   Z       E            F\n")
         for e, fl in proj:
-            f.write("%4d %10.3E %12.3E\n" % (1, e, fl))
+            f.write("%4d  %9.3E  %9.3E\n" % (1, e, fl))
         for z in sorted(grids):
             if z == 1:
                 continue
             for e in grids[z]:
-                f.write("%4d %10.3E %12.3E\n" % (z, e, 0.0))
+                f.write("%4d  %9.3E  %9.3E\n" % (z, e, 0.0))
     return dst
 
 

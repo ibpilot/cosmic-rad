@@ -178,22 +178,40 @@ class TestWriteMyModelEstructura(unittest.TestCase):
         lin._write_my_model(cari, lin.power_law_rows(53))
         out = os.path.join(cari, "GCR_MODELS", "MY_MODEL.OUT")
         c = collections.Counter()
-        for line in open(out):
-            t = line.split()
-            if len(t) >= 3 and t[0].isdigit():
-                c[int(t[0])] += 1
+        with open(out) as fh:
+            for line in fh:
+                t = line.split()
+                if len(t) >= 3 and t[0].isdigit():
+                    c[int(t[0])] += 1
         self.assertEqual(len(c), 28)
         self.assertTrue(all(v == 100 for v in c.values()),
                         "cada Z debe tener 100 filas: %s" % dict(c))
+
+    def test_formato_columnas_fijas_26_chars(self):
+        # Bug destapado por CI (2.º): write_my_model de T4 usa
+        # "%4d %10.3E %12.3E" (28 chars) y desplaza las columnas; CARI lee el
+        # espectro mal (tasas 0). El BO11 real usa 26 chars con la columna F en
+        # las mismas posiciones. Cada linea de datos debe tener 26 chars.
+        cari = fake_cari_dir()
+        lin._write_my_model(cari, lin.power_law_rows(53))
+        out = os.path.join(cari, "GCR_MODELS", "MY_MODEL.OUT")
+        with open(out) as fh:
+            data = [l for l in fh if l.strip()
+                    and l.split() and l.split()[0].isdigit()]
+        self.assertTrue(data)
+        for l in data:
+            self.assertEqual(len(l.rstrip("\n")), 26,
+                             "linea con ancho != 26: %r" % l)
 
     def test_z2_a_28_cero(self):
         cari = fake_cari_dir()
         lin._write_my_model(cari, lin.power_law_rows(53))
         out = os.path.join(cari, "GCR_MODELS", "MY_MODEL.OUT")
-        for line in open(out):
-            t = line.split()
-            if len(t) >= 3 and t[0].isdigit() and int(t[0]) > 1:
-                self.assertEqual(float(t[2]), 0.0)
+        with open(out) as fh:
+            for line in fh:
+                t = line.split()
+                if len(t) >= 3 and t[0].isdigit() and int(t[0]) > 1:
+                    self.assertEqual(float(t[2]), 0.0)
 
 
 class TestProjectPowerlaw(unittest.TestCase):
