@@ -26,6 +26,12 @@ class TestParseNmdb(unittest.TestCase):
         vals = [v for _, v in self.rows]
         self.assertTrue(all(0 < v < 1e6 for v in vals))
 
+    def test_linea_html_con_forma_de_dato_se_rechaza(self):
+        # La respuesta trae CSS y HTML; una linea como "body; 12" tiene forma de
+        # par pero no es un dato. Sin este test, una regex laxa pasa inadvertida.
+        rows = parse_nmdb_ascii("body; 12\n2024-05-11 00:00:00; 88.4\n")
+        self.assertEqual(rows, [("2024-05-11 00:00:00", 88.4)])
+
     def test_lineas_sin_valor_se_descartan(self):
         # NMDB emite "fecha;   null" en huecos de datos.
         rows = parse_nmdb_ascii("2024-05-11 00:00:00; 88.4\n2024-05-11 00:01:00;   null\n")
