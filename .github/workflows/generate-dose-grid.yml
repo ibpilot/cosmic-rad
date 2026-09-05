@@ -8,12 +8,13 @@ name: CARI-7A dose grid
 #  - schedule (día 1 de cada mes): solo refresca HP_MONTHS desde MV-DATES.L99.
 #
 # El binario Linux de CARI-7A se descarga de la página oficial de la FAA.
-# S2 (suministro): el zip se verifica contra un SHA-256 conocido ANTES de
-# descomprimir y de ejecutarlo. Si la FAA actualiza el zip, hay que renovar
-# FAA_CARI7A_SHA256 (el pipeline falla cerrado con el mensaje claro de
-# sha256sum). MV-DATES no lleva checksum: cambia cada mes por diseño, y
-# update_hp_months.py solo extrae números con regex (no puede inyectar código)
-# y descarta valores fuera de rango plausible antes de commitearlos a main.
+# S2 (suministro): la composite action setup-cari7a verifica el SHA-256 conocido
+# ANTES de descomprimir y de ejecutar, y corre el selftest de fidelidad. El pin
+# vive en UN solo sitio (.github/actions/setup-cari7a/action.yml); si la FAA
+# actualiza el zip, hay que renovarlo ahí (el pipeline falla cerrado con el
+# mensaje claro de sha256sum). MV-DATES no lleva checksum: cambia cada mes por
+# diseño, y update_hp_months.py solo extrae números con regex (no puede inyectar
+# código) y descarta valores fuera de rango plausible antes de commitearlos a main.
 
 on:
   workflow_dispatch:
@@ -38,11 +39,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FAA_CARI7A_ZIP: https://www.faa.gov/sites/faa.gov/files/data_research/research/med_humanfacs/aeromedical/cari_7Aexe.zip
-  # SHA-256 del zip oficial de la FAA (verificado el 2026-08-24, 21.534.996 bytes).
-  FAA_CARI7A_SHA256: accf41177a2082ca1c526a8c757df48972ce4411ef2329c6ce22a48edfe3f613
   FAA_MVDATES_ZIP: https://www.faa.gov/sites/faa.gov/files/data_research/research/med_humanfacs/aeromedical/MV-DATES.zip
-  CARI_BIN: "cari7a_4.2.0(intel_linux)"
 
 jobs:
   selftest:
@@ -51,16 +48,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
-      - name: Instalar runtime Fortran
-        run: sudo apt-get update && sudo apt-get install -y libgfortran5
-      - name: Descargar CARI-7A (FAA)
-        run: curl -sfL -o cari7a.zip "$FAA_CARI7A_ZIP"
-      - name: Verificar SHA-256 del zip CARI-7A (suministro)
-        run: echo "$FAA_CARI7A_SHA256  cari7a.zip" | sha256sum -c -
-      - name: Descomprimir CARI-7A (tras verificar el checksum)
-        run: unzip -q cari7a.zip
-      - name: Selftest de fidelidad
-        run: python3 tools/cari7_generate.py --selftest-only --cari-dir CARI_7A_DVD --binary "$CARI_BIN"
+      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
+        id: cari
+        uses: ./.github/actions/setup-cari7a
 
   grid:
     needs: selftest
@@ -73,17 +63,12 @@ jobs:
         hp: [300, 400, 500, 600, 700, 800, 900, 1000, 1100, 1200]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
-      - name: Instalar runtime Fortran
-        run: sudo apt-get update && sudo apt-get install -y libgfortran5
-      - name: Descargar CARI-7A (FAA)
-        run: curl -sfL -o cari7a.zip "$FAA_CARI7A_ZIP"
-      - name: Verificar SHA-256 del zip CARI-7A (suministro)
-        run: echo "$FAA_CARI7A_SHA256  cari7a.zip" | sha256sum -c -
-      - name: Descomprimir CARI-7A (tras verificar el checksum)
-        run: unzip -q cari7a.zip
+      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
+        id: cari
+        uses: ./.github/actions/setup-cari7a
       - name: Generar + ejecutar CARI-7A (HP ${{ matrix.hp }} MV)
-        run: python3 tools/cari7_generate.py --hp ${{ matrix.hp }} --cari-dir CARI_7A_DVD
-             --cutoffs CARI_7A_DVD/CUTOFFS --binary "$CARI_BIN" --out rates_hp${{ matrix.hp }}.csv
+        run: python3 tools/cari7_generate.py --hp ${{ matrix.hp }} --cari-dir "${{ steps.cari.outputs.cari-dir }}"
+             --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" --binary "${{ steps.cari.outputs.binary }}" --out rates_hp${{ matrix.hp }}.csv
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (pin S2)
         with:
           name: rates-hp-${{ matrix.hp }}
@@ -107,12 +92,9 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4 (pin S2)
         with:
           path: rates
-      - name: Descargar CARI-7A (FAA)
-        run: curl -sfL -o cari7a.zip "$FAA_CARI7A_ZIP"
-      - name: Verificar SHA-256 del zip CARI-7A (suministro)
-        run: echo "$FAA_CARI7A_SHA256  cari7a.zip" | sha256sum -c -
-      - name: Descomprimir CARI-7A (tras verificar el checksum)
-        run: unzip -q cari7a.zip
+      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
+        id: cari
+        uses: ./.github/actions/setup-cari7a
       - name: Fusionar CSVs
         run: |
           python3 - <<'PY'
@@ -135,7 +117,7 @@ jobs:
         run: |
           python3 tools/generate_dose_grid.py --input rates_all.csv \
             --axes "0:18:0.25,8.0:13.0:0.5,300:1200:100" --out dose_grid.js
-          python3 tools/generate_dose_grid.py --rc-map CARI_7A_DVD/CUTOFFS/IGRF2010.1X1 \
+          python3 tools/generate_dose_grid.py --rc-map "${{ steps.cari.outputs.cari-dir }}/CUTOFFS/IGRF2010.1X1" \
             --out rc_map.js
           python3 tools/embed_dose_grid.py --grid dose_grid.js --rc-map rc_map.js --index index.html
       - name: Sanity check de monotonicidad (rejilla embebida)

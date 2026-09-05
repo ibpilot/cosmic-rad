@@ -1,0 +1,64 @@
+name: Setup CARI-7A
+description: >
+  Instala el runtime Fortran, descarga el zip de CARI-7A desde la FAA, verifica
+  su SHA-256 antes de descomprimir y de ejecutar, descomprime y corre el selftest
+  de fidelidad (Examples/EXAMPLES.LOC contra EXAMPLES.ANS, tolerancia 5 %).
+  Pin de suministro único (URL + SHA + binario) para los workflows que usan
+  CARI-7A. Expone cari-dir y binary como outputs.
+
+inputs:
+  cari-dir:
+    description: Directorio donde queda la distribución CARI-7A descomprimida.
+    required: false
+    default: CARI_7A_DVD
+  binary:
+    description: Nombre del binario Linux dentro de la distribución.
+    required: false
+    default: cari7a_4.2.0(intel_linux)
+  zip-url:
+    description: URL del zip oficial de CARI-7A (FAA CAMI).
+    required: false
+    default: https://www.faa.gov/sites/faa.gov/files/data_research/research/med_humanfacs/aeromedical/cari_7Aexe.zip
+  run-selftest:
+    description: Correr el selftest de fidelidad (gate) tras descomprimir.
+    required: false
+    default: 'true'
+
+outputs:
+  cari-dir:
+    description: Directorio de la distribución descomprimida.
+    value: ${{ steps.params.outputs.cari-dir }}
+  binary:
+    description: Nombre del binario Linux dentro de la distribución.
+    value: ${{ steps.params.outputs.binary }}
+
+runs:
+  using: composite
+  steps:
+    - id: params
+      shell: bash
+      run: |
+        echo "cari-dir=${{ inputs.cari-dir }}" >> "$GITHUB_OUTPUT"
+        echo "binary=${{ inputs.binary }}" >> "$GITHUB_OUTPUT"
+
+    - name: Instalar runtime Fortran
+      shell: bash
+      run: sudo apt-get update && sudo apt-get install -y libgfortran5
+
+    - name: Descargar CARI-7A (FAA)
+      shell: bash
+      run: curl -sfL -o cari7a.zip "${{ inputs.zip-url }}"
+
+    - name: Verificar SHA-256 del zip CARI-7A (suministro)
+      shell: bash
+      # FAA_CARI7A_SHA256 (pin de suministro único; zip oficial verificado el 2026-08-24, 21.534.996 bytes).
+      run: echo "accf41177a2082ca1c526a8c757df48972ce4411ef2329c6ce22a48edfe3f613  cari7a.zip" | sha256sum -c -
+
+    - name: Descomprimir CARI-7A (tras verificar el checksum)
+      shell: bash
+      run: unzip -q cari7a.zip
+
+    - name: Selftest de fidelidad
+      if: inputs.run-selftest == 'true'
+      shell: bash
+      run: python3 tools/cari7_generate.py --selftest-only --cari-dir "${{ inputs.cari-dir }}" --binary "${{ inputs.binary }}"
