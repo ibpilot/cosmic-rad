@@ -55,6 +55,42 @@ class TestBuildEvent(unittest.TestCase):
         ev = build_event(73, "2021-10-28T15:00Z", ser)
         self.assertEqual(ev["q"], "solo evento")
 
+    def test_promedia_dentro_del_paso_no_coge_la_primera_muestra(self):
+        # Paso de 15 min cuyo primer minuto vale la mitad: la media es P, la
+        # primera muestra es 0.5P. Con datos de 1 min y un evento que sube
+        # rapido, coger la primera muestra falsea I0.
+        target, r0 = 50.0, 2.0
+        ser = {}
+        for st, rc in STATIONS.items():
+            rows = [("2021-10-28 %02d:%02d:00" % (13 + m // 60, m % 60), 100.0)
+                    for m in range(120)]
+            p = target * math.exp(-rc / r0)
+            for m in range(15):
+                pct = 0.5 * p if m == 0 else p * (1.0 + 0.5 / 14.0)
+                rows.append(("2021-10-28 %02d:%02d:00" % (15 + (m // 60), m % 60),
+                             100.0 * (1.0 + pct / 100.0)))
+            ser[st] = rows
+        ev = build_event(73, "2021-10-28T15:00Z", ser)
+        self.assertAlmostEqual(ev["p"][0][0], target, places=2)
+
+    def test_el_perfil_se_corta_al_acabar_el_evento(self):
+        # Evento de 1 h, 2 h de calma, y un segundo brote. El perfil debe medir
+        # 4 pasos: la app deduce la duracion de len(p)*dt, y un hueco colado
+        # desplazaria la dosis a la hora equivocada.
+        i0, r0 = 50.0, 2.0
+        ser = {}
+        for st, rc in STATIONS.items():
+            pct = i0 * math.exp(-rc / r0)
+            rows = [("2021-10-28 %02d:%02d:00" % (13 + m // 60, m % 60), 100.0)
+                    for m in range(120)]
+            for m in range(300):
+                activo = m < 60 or m >= 180
+                v = 100.0 * (1.0 + pct / 100.0) if activo else 100.0
+                rows.append(("2021-10-28 %02d:%02d:00" % (15 + (m // 60), m % 60), v))
+            ser[st] = rows
+        ev = build_event(73, "2021-10-28T15:00Z", ser)
+        self.assertEqual(len(ev["p"]), 4)
+
     def test_valores_redondeados_para_caber_en_la_tabla(self):
         for row in self.ev["p"]:
             for v in row:
