@@ -12,7 +12,8 @@ import datetime
 import math
 
 MIN_STATIONS = 8      # por debajo de esto el ajuste no es fiable
-MIN_PCT = 0.5         # una estacion por debajo de 0,5% es ruido, no sennal
+MIN_PCT = 0.3         # suelo absoluto, por debajo de esto no hay sennal util
+NSIGMA = 3.0          # umbral en sigmas del ruido de la propia estacion
 
 
 def _dt(iso):
@@ -34,6 +35,15 @@ def baseline(rows, t0_iso, pre_hours=2.0):
     return vals[n // 2] if n % 2 else (vals[n // 2 - 1] + vals[n // 2]) / 2.0
 
 
+def stdev(vals):
+    """Desviacion tipica poblacional. Ruido propio de cada estacion."""
+    n = len(vals)
+    if n < 2:
+        return None
+    mu = sum(vals) / float(n)
+    return math.sqrt(sum((v - mu) ** 2 for v in vals) / float(n))
+
+
 def pct_increase(rows, base):
     """[(iso, incremento %)] respecto al baseline."""
     if not base:
@@ -44,15 +54,16 @@ def pct_increase(rows, base):
 def fit_step(samples):
     """Ajusta pct(Rc) = I0*exp(-Rc/R0) por minimos cuadrados en log.
 
-    samples: [(rc_gv, pct)]. Devuelve (I0, R0, rms) o None si no hay bastantes
-    estaciones con sennal.
+    samples: [(rc_gv, pct, sigma_pct)]. Devuelve (I0, R0, rms) o None si no
+    hay bastantes estaciones con sennal.
 
     El rms es el residuo en espacio logaritmico. Sube cuando el flujo NO es
     isotropo (fase inicial del GLE): dos estaciones a igual Rc discrepan segun
     su direccion asintotica. Se guarda para marcar esos pasos como de baja
     confianza en vez de esconder el problema.
     """
-    pts = [(rc, p) for rc, p in samples if p >= MIN_PCT]
+    pts = [(rc, p) for rc, p, sg in samples
+           if p >= max(MIN_PCT, NSIGMA * (sg or 0.0))]
     if len(pts) < MIN_STATIONS:
         return None
 

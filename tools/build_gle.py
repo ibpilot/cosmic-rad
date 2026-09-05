@@ -12,7 +12,7 @@ import argparse
 import datetime
 import json
 
-from gle_fit import baseline, fit_step, pct_increase
+from gle_fit import baseline, fit_step, pct_increase, stdev
 from gle_list import GLE_LIST
 from gle_nmdb import STATIONS, fetch_nmdb
 
@@ -29,6 +29,21 @@ def _sql_iso(dt):
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _step_means(pcts, lo, hi, step_min):
+    """Medias por paso de tiempo entre lo y hi. Base del calculo de sigma."""
+    out = []
+    k = 0
+    while True:
+        a = lo + datetime.timedelta(minutes=k * step_min)
+        b = a + datetime.timedelta(minutes=step_min)
+        if b > hi:
+            return out
+        vals = [p for iso, p in pcts if _sql_iso(a) <= iso < _sql_iso(b)]
+        if vals:
+            out.append(sum(vals) / len(vals))
+        k += 1
+
+
 def build_event(n, t0_iso, series, step_min=STEP_MIN, window_h=WINDOW_H):
     """Construye un evento del esquema embebido a partir de las series NMDB.
 
@@ -39,11 +54,17 @@ def build_event(n, t0_iso, series, step_min=STEP_MIN, window_h=WINDOW_H):
     que hubo GLE pero no se inventa una dosis.
     """
     t0 = _t0_dt(t0_iso)
-    base = {}
+    base, sigma = {}, {}
     for st, rows in series.items():
         b = baseline(rows, _sql_iso(t0), PRE_H)
-        if b:
-            base[st] = b
+        if not b:
+            continue
+        pre = _step_means(pct_increase(rows, b),
+                          t0 - datetime.timedelta(hours=PRE_H), t0, step_min)
+        if len(pre) < 4:
+            continue          # sin ventana previa no hay ruido medido: fuera
+        base[st] = b
+        sigma[st] = stdev(pre) or 0.0
 
     steps = int(window_h * 60 // step_min)
     prof = []
@@ -58,7 +79,7 @@ def build_event(n, t0_iso, series, step_min=STEP_MIN, window_h=WINDOW_H):
             vals = [p for iso, p in pct_increase(series[st], b)
                     if _sql_iso(lo) <= iso < _sql_iso(hi)]
             if vals:
-                samples.append((rc, sum(vals) / len(vals)))
+                samples.append((rc, sum(vals) / len(vals), sigma[st]))
         fit = fit_step(samples)
         if fit is None:
             if prof:
