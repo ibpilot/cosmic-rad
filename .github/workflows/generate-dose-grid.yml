@@ -79,10 +79,10 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      # S5: sin persist-credentials el GITHUB_TOKEN no se guarda en .git/config;
-      # este job descomprime y procesa ficheros de la FAA, y un checksum
-      # verificado tarde no puede convertirse en push a main. El push de abajo
-      # sigue funcionando (gh-actions bot / GITHUB_TOKEN por acción de git).
+      # S5: sin persist-credentials el GITHUB_TOKEN no se guarda en .git/config
+      # mientras se descomprimen y procesan ficheros de la FAA (un RCE ahi no
+      # obtiene push a main gratis). El paso Commit y push inyecta el token
+      # solo para el push, en el repo efimero del runner.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
         with:
           persist-credentials: false
@@ -147,11 +147,21 @@ jobs:
           console.log("monotonicidad OK");
           '
       - name: Commit y push
+        env:
+          TOKEN: ${{ github.token }}
         run: |
           git config user.name "cosmic-rad-bot"
           git config user.email "cosmic-rad-bot@users.noreply.github.com"
           git add index.html
-          git diff --cached --quiet || (git commit -m "chore(dose): regenerate CARI-7A effective-dose grid (FAA CAMI)" && git push)
+          if git diff --cached --quiet; then
+            echo "Sin cambios en index.html; no hay commit."
+          else
+            git commit -m "chore(dose): regenerate CARI-7A effective-dose grid (FAA CAMI)"
+            # S5: el checkout fue con persist-credentials: false; el token se
+            # inyecta solo para el push, en el repo efimero del runner.
+            git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
 
   hp-months:
     # Refresco mensual del potencial heliocéntrico (MV-DATES.L99 de la FAA).
@@ -179,7 +189,8 @@ jobs:
       # S5: este job procesa MV-DATES (terceros, sin checksum propio) y
       # commitea; sin credenciales persistidas un RCE ahí no obtiene push a
       # main gratis. El SHA-256 del zip lo verifica setup-cari7a antes de
-      # descomprimir (S2), y update_hp_months.py sanea los valores (S5).
+      # descomprimir (S2), update_hp_months.py sanea los valores (S5), y el
+      # token se inyecta solo en el paso de push.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
         with:
           persist-credentials: false
@@ -191,8 +202,19 @@ jobs:
       - name: Actualizar HP_MONTHS en index.html
         run: python3 tools/update_hp_months.py --mv-dates "${{ steps.cari.outputs.cari-dir }}/SOLARMOD/MV-DATES.L99" --index index.html --since 2011
       - name: Commit y push
+        env:
+          TOKEN: ${{ github.token }}
         run: |
           git config user.name "cosmic-rad-bot"
           git config user.email "cosmic-rad-bot@users.noreply.github.com"
           git add index.html
-          git diff --cached --quiet || (git commit -m "chore(dose): refresh monthly heliocentric potential (FAA MV-DATES)" && git push)
+          if git diff --cached --quiet; then
+            echo "Sin cambios en index.html; no hay commit."
+          else
+            git commit -m "chore(dose): refresh monthly heliocentric potential (FAA MV-DATES)"
+            # S5: el checkout fue con persist-credentials: false, asi que el
+            # token no esta en .git/config durante el procesado de terceros.
+            # Se inyecta aqui, solo para el push, en el repo efimero del runner.
+            git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
