@@ -45,6 +45,12 @@ class TestPctIncrease(unittest.TestCase):
         rows = _rows([200.0] * 5)
         self.assertAlmostEqual(pct_increase(rows, 100.0)[0][1], 100.0)
 
+    def test_normaliza_por_el_baseline_no_por_cien(self):
+        # Con baseline 50, un valor de 75 es +50%, no +25. Todos los demas tests
+        # usan baseline 100, donde diferencia absoluta y porcentaje coinciden y
+        # la falta de normalizacion pasaria inadvertida.
+        self.assertAlmostEqual(pct_increase(_rows([75.0]), 50.0)[0][1], 50.0)
+
     def test_baseline_cero_se_rechaza(self):
         with self.assertRaises(ValueError):
             pct_increase(_rows([100.0]), 0.0)
