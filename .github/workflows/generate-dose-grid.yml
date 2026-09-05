@@ -39,9 +39,9 @@ concurrency:
 
 env:
   FAA_CARI7A_ZIP: https://www.faa.gov/sites/faa.gov/files/data_research/research/med_humanfacs/aeromedical/cari_7Aexe.zip
-  # SHA-256 del zip oficial de la FAA (verificado el 2026-08-24, 21.534.996 bytes).
-  FAA_CARI7A_SHA256: accf41177a2082ca1c526a8c757df48972ce4411ef2329c6ce22a48edfe3f613
-  FAA_MVDATES_ZIP: https://www.faa.gov/sites/faa.gov/files/data_research/research/med_humanfacs/aeromedical/MV-DATES.zip
+  # SHA-256 del zip oficial de la FAA (renovado por la FAA el 2026-09-05, 21.541.742 bytes).
+  # El zip incluye SOLARMOD/MV-DATES.L99 (la FAA ya no publica MV-DATES.zip suelto).
+  FAA_CARI7A_SHA256: 6e330e8b8aac148be8a5f2c68898a6750dd9d5a311407b73a7eaa7a3964fc0cf
   CARI_BIN: "cari7a_4.2.0(intel_linux)"
 
 jobs:
@@ -97,10 +97,10 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      # S5: sin persist-credentials el GITHUB_TOKEN no se guarda en .git/config;
-      # este job descomprime y procesa ficheros de la FAA, y un checksum
-      # verificado tarde no puede convertirse en push a main. El push de abajo
-      # sigue funcionando (gh-actions bot / GITHUB_TOKEN por acción de git).
+      # S5: sin persist-credentials el GITHUB_TOKEN no se guarda en .git/config
+      # mientras se descomprimen y procesan ficheros de la FAA (un RCE ahi no
+      # obtiene push a main gratis). El paso Commit y push inyecta el token
+      # solo para el push, en el repo efimero del runner.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
         with:
           persist-credentials: false
@@ -168,14 +168,26 @@ jobs:
           console.log("monotonicidad OK");
           '
       - name: Commit y push
+        env:
+          TOKEN: ${{ github.token }}
         run: |
           git config user.name "cosmic-rad-bot"
           git config user.email "cosmic-rad-bot@users.noreply.github.com"
           git add index.html
-          git diff --cached --quiet || (git commit -m "chore(dose): regenerate CARI-7A effective-dose grid (FAA CAMI)" && git push)
+          if git diff --cached --quiet; then
+            echo "Sin cambios en index.html; no hay commit."
+          else
+            git commit -m "chore(dose): regenerate CARI-7A effective-dose grid (FAA CAMI)"
+            # S5: el checkout fue con persist-credentials: false; el token se
+            # inyecta solo para el push, en el repo efimero del runner.
+            git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
 
   hp-months:
     # Refresco mensual del potencial heliocéntrico (MV-DATES.L99 de la FAA).
+    # La FAA ya no publica MV-DATES.zip suelto: el L99 viaja dentro del zip de
+    # CARI-7A (SOLARMOD/MV-DATES.L99), verificado por el SHA-256 de arriba.
     # needs: assemble — serializa la escritura de index.html. Si un dispatch
     # pide grid+hp a la vez, hp-months espera a que assemble haya commiteado la
     # rejilla; antes ambos jobs reescribían index.html en paralelo y uno pisaba
@@ -195,18 +207,37 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      # S5: este job descomprime MV-DATES (terceros, sin checksum) y commitea;
-      # sin credenciales persistidas un RCE ahí no obtiene push a main gratis.
+      # S5: este job procesa MV-DATES (terceros, sin checksum propio) y
+      # commitea; sin credenciales persistidas un RCE ahí no obtiene push a
+      # main gratis. El SHA-256 del zip se verifica antes de descomprimir (S2),
+      # update_hp_months.py sanea los valores (S5), y el token se inyecta solo
+      # en el paso de push.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
         with:
           persist-credentials: false
-      - name: Descargar MV-DATES (FAA)
-        run: curl -sfL -o mv.zip "$FAA_MVDATES_ZIP" && unzip -q mv.zip
+      - name: Instalar runtime Fortran
+        run: sudo apt-get update && sudo apt-get install -y libgfortran5
+      - name: Descargar CARI-7A (FAA)
+        run: curl -sfL -o cari7a.zip "$FAA_CARI7A_ZIP"
+      - name: Verificar SHA-256 del zip CARI-7A (suministro)
+        run: echo "$FAA_CARI7A_SHA256  cari7a.zip" | sha256sum -c -
+      - name: Descomprimir CARI-7A (tras verificar el checksum)
+        run: unzip -q cari7a.zip
       - name: Actualizar HP_MONTHS en index.html
-        run: python3 tools/update_hp_months.py --mv-dates MV-DATES.L99 --index index.html --since 2011
+        run: python3 tools/update_hp_months.py --mv-dates CARI_7A_DVD/SOLARMOD/MV-DATES.L99 --index index.html --since 2011
       - name: Commit y push
+        env:
+          TOKEN: ${{ github.token }}
         run: |
           git config user.name "cosmic-rad-bot"
           git config user.email "cosmic-rad-bot@users.noreply.github.com"
           git add index.html
-          git diff --cached --quiet || (git commit -m "chore(dose): refresh monthly heliocentric potential (FAA MV-DATES)" && git push)
+          if git diff --cached --quiet; then
+            echo "Sin cambios en index.html; no hay commit."
+          else
+            git commit -m "chore(dose): refresh monthly heliocentric potential (FAA MV-DATES)"
+            # S5: el checkout fue con persist-credentials: false; el token se
+            # inyecta solo para el push, en el repo efimero del runner.
+            git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi

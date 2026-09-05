@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
 """Regenera el bloque HP_MONTHS de index.html desde el fichero oficial
-MV-DATES.L99 (FAA, descargable como MV-DATES.zip). Clave "YYYY-MM" -> MV.
+MV-DATES.L99 (FAA; viaja dentro del zip de CARI-7A, SOLARMOD/MV-DATES.L99).
+Clave "YYYY-MM" -> MV.
 
 Solo incluye meses desde --since (por defecto 2011, suficiente para el histórico
 de la app). La fila anual (00/YYYY) se excluye.
 
 S5 (sanity de rango): MV-DATES no lleva checksum y el job commitea a main en
-cron. Un valor fuera de rango plausible (hp <= 0 o > 2000, mes 13, año fuera de
-+-1 del actual) se descarta; si el fichero entero queda vacío, aborta en vez de
-publicar datos corruptos en producción.
+cron. Un valor fuera de rango plausible (hp <= 0 o > 2000, mes 13, año futuro
+imposible > actual+1) se descarta; si el fichero entero queda vacío, aborta en
+vez de publicar datos corruptos en producción. El L99 de la FAA trae el
+histórico completo desde 1958; el límite inferior lo fija --since.
 
 Uso:
     python3 tools/update_hp_months.py --mv-dates MV-DATES.L99 --index index.html --since 2011
@@ -24,7 +26,7 @@ def read_hp(path, since):
         if not m:
             continue
         mm, yy, hp = int(m.group(1)), int(m.group(2)), int(m.group(3))
-        if mm == 0 or mm > 12 or yy < since or abs(today.year - yy) > 1:
+        if mm == 0 or mm > 12 or yy < since or yy > today.year + 1:
             continue
         if hp <= 0 or hp > 2000:
             continue
