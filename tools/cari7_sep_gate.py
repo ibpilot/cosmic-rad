@@ -21,7 +21,7 @@ Uso (CI, con la distribucion CARI-7A ya descargada por setup-cari7a):
         --cutoffs CARI_7A_DVD/CUTOFFS
 Exit 0 si la puerta dura pasa; != 0 si el ratio se sale de la tolerancia.
 """
-import argparse, glob, math, os, shutil, sys
+import argparse, math, os, shutil, sys
 
 import cari7_generate as cg
 import cari7_sep_input as sep
@@ -105,6 +105,15 @@ def _diagnose_missing_ans(work, loc, ans):
             print("  %-28s %8d bytes" % (name, size))
 
 
+def find_ans(work, stem):
+    """Ruta del .ANS de CARI-7A con tolerancia de mayusculas: el programa escribe
+    la extension en mayusculas para los LOC (p. ej. MY.ANS) en Linux."""
+    for cand in (stem + ".ans", stem + ".ANS"):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
 def run_spectrum(cari, binary, spectrum, date, os_name="unix", wine=None,
                  chunk=150, tag=None, rcmap=None, cutoffs=None, verbose=False):
     """Corre CARI-7A sobre la rejilla SEP completa para un espectro (campo 11)
@@ -126,17 +135,12 @@ def run_spectrum(cari, binary, spectrum, date, os_name="unix", wine=None,
     for loc in paths:
         write_default_inp(0, cari, loc_name=os.path.basename(loc))
         _run_cari(prefix + [binpath], cari, env, verbose)
-        ans = os.path.splitext(loc)[0] + ".ans"
-        if not os.path.exists(ans):
-            _diagnose_missing_ans(cari, loc, ans)
-            hits = sorted(glob(os.path.join(cari, os.path.basename(ans)[:-4] + "*.ans")),
-                          key=os.path.getmtime)
-            if len(hits) == 1:
-                print("AVISO: CARI escribio %s en vez de %s; se usa esa."
-                      % (os.path.basename(hits[0]), os.path.basename(ans)))
-                ans = hits[0]
-            else:
-                sys.exit("no se genero %s (¿CARI fallo?)" % ans)
+        stem = os.path.splitext(loc)[0]
+        ans = find_ans(cari, stem)
+        if ans is None:
+            _diagnose_missing_ans(cari, loc, stem + ".ans")
+            sys.exit("no se genero el .ANS del LOC %s (¿CARI fallo?)"
+                     % os.path.basename(loc))
         for rc, alt, _hp, rate in parse_ans(ans, 0):
             rates[(rc, alt)] = rate
     return rates
@@ -163,16 +167,11 @@ def run_points(cari, binary, spectrum, date, points, os_name="unix", wine=None,
         f.write("STOP--------------------------------------------------------\n")
     write_default_inp(0, cari, loc_name=tag + ".loc")
     _run_cari(prefix + [binpath], cari, env, verbose)
-    ans = os.path.join(cari, tag + ".ans")
-    if not os.path.exists(ans):
-        _diagnose_missing_ans(cari, loc, ans)
-        hits = sorted(glob(os.path.join(cari, tag + "*.ans")), key=os.path.getmtime)
-        if len(hits) == 1:
-            print("AVISO: CARI escribio %s en vez de %s; se usa esa."
-                  % (os.path.basename(hits[0]), os.path.basename(ans)))
-            ans = hits[0]
-        else:
-            sys.exit("no se genero %s (¿CARI fallo?)" % ans)
+    ans = find_ans(cari, os.path.join(cari, tag))
+    if ans is None:
+        _diagnose_missing_ans(cari, loc, os.path.join(cari, tag + ".ans"))
+        sys.exit("no se genero el .ANS del LOC %s (¿CARI fallo?)"
+                 % os.path.basename(loc))
     return {(rc, alt): rate for rc, alt, _hp, rate in parse_ans(ans, 0)}
 
 
