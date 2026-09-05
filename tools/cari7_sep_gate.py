@@ -21,7 +21,7 @@ Uso (CI, con la distribucion CARI-7A ya descargada por setup-cari7a):
         --cutoffs CARI_7A_DVD/CUTOFFS
 Exit 0 si la puerta dura pasa; != 0 si el ratio se sale de la tolerancia.
 """
-import argparse, math, os, shutil, sys
+import argparse, glob, math, os, shutil, sys
 
 import cari7_generate as cg
 import cari7_sep_input as sep
@@ -63,8 +63,50 @@ def _binpath(cari, binary, os_name, wine):
     return b
 
 
+def _run_cari(cmd, cwd, env, verbose):
+    """Ejecuta el binario. Con --verbose muestra el stdout/stderr COMPLETO del
+    binario (para diagnosticar en CI, donde el runner corta el log); sin
+    verbose, comportamiento identico a cari7_generate.run (ultimos 3k)."""
+    import subprocess
+    if not verbose:
+        cg.run(cmd, cwd=cwd, env=env)
+        return
+    print(">", " ".join(cmd))
+    r = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
+    if r.stdout:
+        print("--- stdout CARI (completo) ---")
+        print(r.stdout)
+    if r.stderr:
+        print("--- stderr CARI (completo) ---")
+        print(r.stderr)
+    if r.returncode != 0:
+        sys.exit("ERROR: exit %d" % r.returncode)
+
+
+def _diagnose_missing_ans(work, loc, ans):
+    """Cuando CARI termina sin escribir el .ANS, vuelca lo que pueda explicarlo:
+    contenido de DEFAULT.INP, primeras lineas del .LOC y que ficheros de salida
+    dejo el binario en el directorio de trabajo."""
+    print("--- diagnostico: no existe %s ---" % ans)
+    dinp = os.path.join(work, "DEFAULT.INP")
+    if os.path.exists(dinp):
+        print("DEFAULT.INP:")
+        print(open(dinp).read())
+    if os.path.exists(loc):
+        lines = open(loc).read().splitlines()
+        print("LOC (%d lineas):" % len(lines))
+        for l in lines[:12]:
+            print("  |%s|" % l.rstrip())
+    print("ficheros generados por el binario en %s:" % work)
+    for name in sorted(os.listdir(work)):
+        low = name.lower()
+        if low.endswith((".ans", ".out", ".rpt", ".sum", ".dat", ".log")):
+            size = os.path.getsize(os.path.join(work, name))
+            print("  %-28s %8d bytes" % (name, size))
+
+
 def run_spectrum(cari, binary, spectrum, date, os_name="unix", wine=None,
-                 chunk=150, tag=None, rcmap=None, cutoffs=None):
+                 chunk=150, tag=None, rcmap=None, cutoffs=None, verbose=False):
     """Corre CARI-7A sobre la rejilla SEP completa para un espectro (campo 11)
     y devuelve { (rc_gv, alt_km): rate_usvh }."""
     if rcmap is None:
@@ -83,16 +125,25 @@ def run_spectrum(cari, binary, spectrum, date, os_name="unix", wine=None,
     rates = {}
     for loc in paths:
         write_default_inp(0, cari, loc_name=os.path.basename(loc))
-        cg.run(prefix + [binpath], cwd=cari, env=env)
+        _run_cari(prefix + [binpath], cari, env, verbose)
         ans = os.path.splitext(loc)[0] + ".ans"
         if not os.path.exists(ans):
-            sys.exit("no se genero %s (¿CARI fallo?)" % ans)
+            _diagnose_missing_ans(cari, loc, ans)
+            hits = sorted(glob(os.path.join(cari, os.path.basename(ans)[:-4] + "*.ans")),
+                          key=os.path.getmtime)
+            if len(hits) == 1:
+                print("AVISO: CARI escribio %s en vez de %s; se usa esa."
+                      % (os.path.basename(hits[0]), os.path.basename(ans)))
+                ans = hits[0]
+            else:
+                sys.exit("no se genero %s (¿CARI fallo?)" % ans)
         for rc, alt, _hp, rate in parse_ans(ans, 0):
             rates[(rc, alt)] = rate
     return rates
 
 
-def run_points(cari, binary, spectrum, date, points, os_name="unix", wine=None):
+def run_points(cari, binary, spectrum, date, points, os_name="unix", wine=None,
+               verbose=False):
     """Corre CARI-7A sobre una lista pequena de puntos (lat, lon, alt_km)."""
     tag = "probe_%d" % spectrum
     binpath = _binpath(cari, binary, os_name, wine)
@@ -111,8 +162,17 @@ def run_points(cari, binary, spectrum, date, points, os_name="unix", wine=None):
             f.write(sep.sep_loc_line(la, lo, alt, date, spectrum) + "\n")
         f.write("STOP--------------------------------------------------------\n")
     write_default_inp(0, cari, loc_name=tag + ".loc")
-    cg.run(prefix + [binpath], cwd=cari, env=env)
+    _run_cari(prefix + [binpath], cari, env, verbose)
     ans = os.path.join(cari, tag + ".ans")
+    if not os.path.exists(ans):
+        _diagnose_missing_ans(cari, loc, ans)
+        hits = sorted(glob(os.path.join(cari, tag + "*.ans")), key=os.path.getmtime)
+        if len(hits) == 1:
+            print("AVISO: CARI escribio %s en vez de %s; se usa esa."
+                  % (os.path.basename(hits[0]), os.path.basename(ans)))
+            ans = hits[0]
+        else:
+            sys.exit("no se genero %s (¿CARI fallo?)" % ans)
     return {(rc, alt): rate for rc, alt, _hp, rate in parse_ans(ans, 0)}
 
 
@@ -161,6 +221,8 @@ def main():
                     help="fechas del probe de sensibilidad solar")
     ap.add_argument("--no-probe", action="store_true",
                     help="saltar el probe de fechas (solo la puerta principal)")
+    ap.add_argument("--verbose", action="store_true",
+                    help="mostrar el stdout/stderr completo del binario CARI")
     args = ap.parse_args()
 
     cari = os.path.abspath(args.cari_dir)
@@ -193,10 +255,12 @@ def main():
                       if any(abs(v - t) <= 0.25 for t in targets)}
         r7 = run_spectrum(cari, args.binary, sep.SP_MYMODEL, args.date,
                           os_name=args.os, wine=args.wine, rcmap=rcmap_gate,
-                          cutoffs=args.cutoffs, tag="gate")
+                          cutoffs=args.cutoffs, tag="gate",
+                          verbose=args.verbose)
         r2 = run_spectrum(cari, args.binary, sep.SP_BO11, args.date,
                           os_name=args.os, wine=args.wine, rcmap=rcmap_gate,
-                          cutoffs=args.cutoffs, tag="gate")
+                          cutoffs=args.cutoffs, tag="gate",
+                          verbose=args.verbose)
         n, mx, mn, minr, maxr, same = compare_rate_maps(r7, r2)
         ok = summarize("BO'11 nativo (C2) vs MY_MODEL=BO11_GCR.OUT (C7) @ %s"
                        % args.date, n, mx, mn, minr, maxr, same,
@@ -213,9 +277,11 @@ def main():
                   % (len(pts), [(la, lo, round(a, 1)) for la, lo, a in pts]))
             for date in args.probe_dates.split(","):
                 r7p = run_points(cari, args.binary, sep.SP_MYMODEL, date, pts,
-                                 os_name=args.os, wine=args.wine)
+                                 os_name=args.os, wine=args.wine,
+                                 verbose=args.verbose)
                 r2p = run_points(cari, args.binary, sep.SP_BO11, date, pts,
-                                 os_name=args.os, wine=args.wine)
+                                 os_name=args.os, wine=args.wine,
+                                 verbose=args.verbose)
                 n, mx, mn, minr, maxr, same = compare_rate_maps(r7p, r2p)
                 if n:
                     print("[probe] %s  n=%d  ratio %g..%g  desv max %.2f%%"
@@ -224,9 +290,11 @@ def main():
             # --- diagnostico: normalizacion fluencia<->flujo SPE ---
             shutil.copy(os.path.join(gcr, sep.FEB56_FILE), my_model)
             r7p = run_points(cari, args.binary, sep.SP_MYMODEL, args.date, pts,
-                             os_name=args.os, wine=args.wine)
+                             os_name=args.os, wine=args.wine,
+                             verbose=args.verbose)
             r5p = run_points(cari, args.binary, sep.SP_FEB56, args.date, pts,
-                             os_name=args.os, wine=args.wine)
+                             os_name=args.os, wine=args.wine,
+                             verbose=args.verbose)
             n, mx, mn, minr, maxr, same = compare_rate_maps(r7p, r5p)
             if n:
                 rmed = math.sqrt(minr * maxr)
