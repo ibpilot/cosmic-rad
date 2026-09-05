@@ -72,6 +72,16 @@ table { border-collapse:collapse; width:100%; }
   .di-icao { display:none; }
   .ring-row { flex-direction:column; align-items:flex-start; gap:10px; }
 }
+.gle-banner { background:#3a2a10; border-left:3px solid #d08a2c; padding:8px 12px;
+  margin:8px 0; border-radius:4px; font-size:12px; color:#f0d09a; }
+.gle-hint { opacity:0.75; font-size:11px; margin-top:4px; }
+.gle-dep { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
+  font-size:11px; margin-top:4px; color:#d0b070; }
+.gle-dep input { min-width:130px; padding:3px 5px; background:rgba(255,255,255,0.07);
+  border:1px solid rgba(208,138,44,0.4); border-radius:5px; color:#e0eef5; }
+.gle-split { opacity:0.8; font-size:11px; color:#e0c080; }
+.gle-rt { background:#4a1f1f; border-left:3px solid #d04c4c; padding:8px 12px;
+  margin:8px 0; border-radius:4px; font-size:12px; color:#f0c0c0; }
 </style>
 </head>
 <body>
@@ -403,7 +413,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.10";
+var APP_VERSION = "1.11";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -1712,8 +1722,8 @@ function ensureDoseGrid() {
 var _rcI16 = null;
 // Eventos de protones solares (GLE). Generado por tools/build_gle.py y embebido
 // con tools/embed_gle.py. Cada evento: {n, t0, dt (min por paso), q, p:[[I0,R0,rms]]}.
-var GLE_EVENTS = [];
-var GLE_CAL = {k0: 0, beta: 0, attKm: 2.0, altRefKm: 10.668, r0Ref: 1.0};
+var GLE_EVENTS = [{"n":69,"t0":"2005-01-20T06:50Z","dt":15,"q":"solo evento","p":[]},{"n":70,"t0":"2006-12-13T02:45Z","dt":15,"q":"solo evento","p":[]},{"n":71,"t0":"2012-05-17T01:50Z","dt":15,"q":"solo evento","p":[]},{"n":72,"t0":"2017-09-10T16:30Z","dt":15,"q":"solo evento","p":[]},{"n":73,"t0":"2021-10-28T16:15Z","dt":15,"q":"solo evento","p":[]},{"n":74,"t0":"2024-05-11T01:30Z","dt":15,"q":"solo evento","p":[]}];
+var GLE_CAL = {k0: 0.0, beta: 0.0, attKm: 2.0, altRefKm: 10.668, r0Ref: 1.0};
 function ensureRcMap() {
   if (!RC_MAP || !RC_MAP.data) {
     _rcI16 = null;
@@ -1809,6 +1819,62 @@ function sepRate(lat, lon, altKm, tMs) {
   var alt = Math.exp((altKm - GLE_CAL.altRefKm) / GLE_CAL.attKm);
   var rate = kCal * i0 * Math.exp(-rc / r0) * alt;
   return isFinite(rate) && rate > 0 ? rate : 0;
+}
+// --- Clima espacial en tiempo real (NOAA SWPC) -----------------------------
+// Solo semaforo: nivel y flujo, NUNCA uSv. La conversion a dosis de un evento
+// solo existe a posteriori, cuando la red de monitores permite ajustarlo.
+// Ademas, el canal >=10 MeV que define la escala S NO es proxy de dosis en
+// cabina: hacen falta ~430 MeV para generar cascada a nivel de vuelo.
+var SWPC_URL = "https://services.swpc.noaa.gov/json/goes/primary/integral-protons-7-day.json";
+var SWPC_KEY = "cr_swpc";
+
+function parseSwpcProtons(data) {
+  if (!data || !Array.isArray(data)) return null;
+  var last = null;
+  for (var i = 0; i < data.length; i++) {
+    var r = data[i];
+    if (!r || String(r.energy).indexOf("10 MeV") < 0) continue;
+    var f = Number(r.flux);
+    if (!isFinite(f)) continue;
+    last = {fluxPfu: f, timeIso: String(r.time_tag || "")};
+  }
+  return last;
+}
+// Escala de tormenta de radiacion de NOAA, en pfu del canal >=10 MeV.
+function swpcLevel(fluxPfu) {
+  if (!isFinite(fluxPfu)) return "";
+  if (fluxPfu >= 1e5) return "S5";
+  if (fluxPfu >= 1e4) return "S4";
+  if (fluxPfu >= 1e3) return "S3";
+  if (fluxPfu >= 1e2) return "S2";
+  if (fluxPfu >= 10) return "S1";
+  return "";
+}
+function loadSwpcCache() {
+  try {
+    var raw = localStorage.getItem(SWPC_KEY);
+    if (!raw) return null;
+    var o = JSON.parse(raw);
+    return isFinite(o && o.fluxPfu) ? o : null;
+  } catch (e) { return null; }
+}
+function saveSwpcCache(o) {
+  try { localStorage.setItem(SWPC_KEY, JSON.stringify(o)); } catch (e) {}
+}
+// depMsOf(f): ms UTC de la salida, o null. Sin hora no hay ventana: un GLE dura
+// horas y colocar el vuelo en un dia entero daria falsos positivos.
+function depMsOf(f) {
+  if (!f || !f.depDate || !f.depTime) return null;
+  var d = /^(\d{4})-(\d{2})-(\d{2})$/.exec(f.depDate);
+  var t = /^(\d{2}):(\d{2})$/.exec(f.depTime);
+  if (!d || !t) return null;
+  var hh = +t[1], mm = +t[2], mo = +d[2], da = +d[3];
+  if (hh > 23 || mm > 59 || mo < 1 || mo > 12 || da < 1 || da > 31) return null;
+  var ms = Date.UTC(+d[1], mo - 1, da, hh, mm, 0);
+  var check = new Date(ms);
+  return isFinite(ms) && check.getUTCFullYear() === +d[1] &&
+    check.getUTCMonth() === mo - 1 && check.getUTCDate() === da &&
+    check.getUTCHours() === hh && check.getUTCMinutes() === mm ? ms : null;
 }
 // Interpolación trilineal (bilineal rigidez/altitud + lineal HP) sobre la rejilla.
 // La posición entra por la rigidez de corte: dos puntos con la misma Rc dan la
@@ -1925,7 +1991,7 @@ function calcFlight(orig, dest, flIdx, hpMV) {
 // Σ doseRate(lat, alt, HP) × Δt; sin hora → dist/830 por tramo y altitud =
 // altKm (el FL del vuelo) si se pasa; con hora la altitud del punto manda
 // (compatibilidad con tracks guardados anteriormente).
-function calcTrack(track, hpMV, altKm) {
+function calcTrack(track, hpMV, altKm, depMs) {
   if (!track || track.length < 2) return null;
   // Coordenadas no finitas (backup manipulado, track corrupto) envenenaban
   // gcDistance → dtH → dosis, y salía "NaN µSv" en toda la app. Se descartan
@@ -1941,7 +2007,8 @@ function calcTrack(track, hpMV, altKm) {
   });
   if (track.length < 2) return null;
   var hasTime = track[0][0] != null;
-  var doseUsv = 0, distKm = 0, timeH = 0, incomplete = false;
+  var doseUsv = 0, doseSepUsv = 0, distKm = 0, timeH = 0, incomplete = false;
+  var hasSep = isFinite(depMs) && depMs !== null;
   // Altitud por defecto FL350 para puntos sin altitud: un a[3] undefined daba
   // NaN dentro de doseRateGrid, y la guarda `rate == null` no captura NaN.
   var DEF_ALT_KM = 10.668;
@@ -1951,58 +2018,106 @@ function calcTrack(track, hpMV, altKm) {
     if (rate == null || !isFinite(rate)) rate = getDoseRate(Math.abs(lat));
     return rate * dtH;
   };
+  // sepDose(a, b, aAlt, bAlt, tMinA, tMinB): dosis SEP (µSv) del tramo entre los
+  // puntos a y b, limitada al intervalo [tMinA, tMinB] en minutos desde la
+  // salida. El SEP se integra SOLO sobre el solape exacto del tramo con las
+  // ventanas de los GLE: se parten los tramos en los bordes (inicio y fin) de
+  // cada evento y se evalua sepRate en el punto medio de cada celda activa.
+  // Muestrear un solo extremo y aplicar la tasa a todo el tramo cargaba dosis
+  // SEP fuera de la ventana (track que entra a mitad del evento).
+  var sepDose = function (a, b, aAlt, bAlt, tMinA, tMinB) {
+    if (!hasSep || !(tMinB > tMinA)) return 0;
+    var cuts = [tMinA, tMinB];
+    for (var e = 0; e < GLE_EVENTS.length; e++) {
+      var ev = GLE_EVENTS[e];
+      if (!ev || !ev.p || !ev.p.length) continue;
+      var ev0 = gleMs(ev.t0);
+      if (!isFinite(ev0)) continue;
+      var stepMin = Number(ev.dt);
+      if (!isFinite(stepMin) || stepMin <= 0) continue;
+      var ev1 = ev0 + ev.p.length * stepMin * 60000;
+      var c0 = (ev0 - depMs) / 60000, c1 = (ev1 - depMs) / 60000;
+      if (c1 <= tMinA || c0 >= tMinB) continue; // el evento no toca el tramo
+      if (c0 > tMinA && c0 < tMinB) cuts.push(c0);
+      if (c1 > tMinA && c1 < tMinB) cuts.push(c1);
+      // El perfil puede cambiar dentro del evento. Cada paso tiene una tasa
+      // distinta, así que también hay que partir en sus fronteras internas.
+      for (var kStep = 1; kStep < ev.p.length; kStep++) {
+        var ck = c0 + kStep * stepMin;
+        if (ck > tMinA && ck < tMinB) cuts.push(ck);
+      }
+    }
+    cuts.sort(function (x, y) { return x - y; });
+    var sum = 0;
+    for (var c = 1; c < cuts.length; c++) {
+      var s = cuts[c - 1], en = cuts[c];
+      if (!(en > s)) continue;
+      var mid = (s + en) / 2;
+      if (!gleWindow(depMs + mid * 60000)) continue; // celda entre eventos
+      var f = (mid - tMinA) / (tMinB - tMinA);
+      var sep = sepRate(a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f,
+                        aAlt + (bAlt - aAlt) * f, depMs + mid * 60000);
+      if (sep > 0) sum += sep * ((en - s) / 60);
+    }
+    return sum;
+  };
   for (var i = 1; i < track.length; i++) {
     var a = track[i - 1], b = track[i];
     var aAlt = okAlt(hasTime || altKm == null ? a[3] : altKm);
     var bAlt = okAlt(hasTime || altKm == null ? b[3] : altKm);
     var seg = gcDistance(a[1], a[2], b[1], b[2]);
     var dtH;
+    var tMinA, tMinB; // minutos desde la salida que cubre el tramo (para el SEP)
     if (hasTime) {
-      dtH = (b[0] - a[0]) / 60;
+      tMinA = a[0]; tMinB = b[0];
+      dtH = (tMinB - tMinA) / 60;
       if (dtH < 0) dtH = 0;
-      if (dtH > 0.25) {
-        // hueco (>15 min): sub-puntos interpolados para no perder el tiempo real
-        if (dtH > 1) incomplete = true;
-        // S5: un dtH gigante (tiempo de backup manipulado) significaba "n"
-        // iteraciones sin tope: 6e6 → 400k sub-puntos, 6e9 → ~33 min de hilo
-        // bloqueado. El sub-punto se pone en ~1 hora de vuelo real para capar
-        // el bucle y conservar la dosis a la vez.
-        var n = Math.min(Math.ceil(dtH / 0.25), Math.ceil(dtH / 60));
-        var dtSub = dtH / n;
-        for (var k = 1; k <= n; k++) {
-          var fk = k / n;
-          doseUsv += segDose(a[1] + (b[1] - a[1]) * fk, a[2] + (b[2] - a[2]) * fk, aAlt + (bAlt - aAlt) * fk, dtSub);
-        }
-        distKm += seg;
-        timeH += dtH;
-        continue;
+    } else {
+      tMinA = timeH * 60;
+      dtH = seg / 830;
+      tMinB = tMinA + dtH * 60;
+    }
+    if (hasTime && dtH > 0.25) {
+      // hueco (>15 min): sub-puntos interpolados para no perder el tiempo real
+      if (dtH > 1) incomplete = true;
+      // S5: un dtH gigante (tiempo de backup manipulado) significaba "n"
+      // iteraciones sin tope: 6e6 → 400k sub-puntos, 6e9 → ~33 min de hilo
+      // bloqueado. El sub-punto se pone en ~1 hora de vuelo real para capar
+      // el bucle y conservar la dosis a la vez.
+      var n = Math.min(Math.ceil(dtH / 0.25), Math.ceil(dtH / 60));
+      var dtSub = dtH / n;
+      for (var k = 1; k <= n; k++) {
+        var fk = k / n;
+        doseUsv += segDose(a[1] + (b[1] - a[1]) * fk, a[2] + (b[2] - a[2]) * fk,
+                           aAlt + (bAlt - aAlt) * fk, dtSub);
       }
     } else {
-      dtH = seg / 830;
+      var mlat = (a[1] + b[1]) / 2, mlon = (a[2] + b[2]) / 2, malt = (aAlt + bAlt) / 2;
+      doseUsv += segDose(mlat, mlon, malt, dtH);
     }
-    var mlat = (a[1] + b[1]) / 2, mlon = (a[2] + b[2]) / 2, malt = (aAlt + bAlt) / 2;
-    doseUsv += segDose(mlat, mlon, malt, dtH);
+    var sep = sepDose(a, b, aAlt, bAlt, tMinA, tMinB);
+    if (sep > 0) { doseSepUsv += sep; doseUsv += sep; }
     distKm += seg;
     timeH += dtH;
   }
-  return { distKm: Math.round(distKm), timeH: timeH, doseUsv: doseUsv, effLat: null, rateUsvh: timeH > 0 ? doseUsv / timeH : 0, nPts: track.length, incomplete: incomplete };
+  return { distKm: Math.round(distKm), timeH: timeH, doseUsv: doseUsv,
+           doseSepUsv: doseSepUsv, effLat: null,
+           rateUsvh: timeH > 0 ? doseUsv / timeH : 0,
+           nPts: track.length, incomplete: incomplete };
 }
 // flightCalc(f, hpMV): usa el track de la ruta si existe (≥2 pts), si no el gran círculo.
 function flightCalc(f, hpMV) {
-  if (f && Array.isArray(f.track) && f.track.length >= 2) {
-    var fi = f.flIdx != null ? f.flIdx : 1;
-    if (!FL_OPTIONS[fi]) fi = 1;
-    // Ruta FPL con steps de FL del plan: la altitud por punto del track manda
-    // (calcTrack con altKm=null usa a[3]/b[3]); el selector FL queda bloqueado.
-    var hasSteps = Array.isArray(f.steps) && f.steps.length > 0;
-    if (hasSteps) return calcTrack(f.track, hpMV, null);
-    // Ruta FPL (waypoints, sin hora): la altitud la manda el FL elegido.
-    // Tracks con hora guardados anteriormente: calcTrack usa la altitud del punto.
-    return calcTrack(f.track, hpMV, FL_OPTIONS[fi].altKm);
+  var depMs = depMsOf(f);
+  var hasSteps = Array.isArray(f.steps) && f.steps.length > 0;
+  if (Array.isArray(f.track) && f.track.length >= 2) {
+    if (hasSteps) return calcTrack(f.track, hpMV, null, depMs);
+    var fi = FL_OPTIONS[f.flIdx] ? f.flIdx : 1;
+    return calcTrack(f.track, hpMV, FL_OPTIONS[fi].altKm, depMs);
   }
-  var fi2 = f && f.flIdx != null ? f.flIdx : 1;
-  if (!FL_OPTIONS[fi2]) fi2 = 1;
-  return calcFlight(f.orig, f.dest, fi2, hpMV);
+  var fi2 = FL_OPTIONS[f.flIdx] ? f.flIdx : 1;
+  var r = calcFlight(f.orig, f.dest, fi2, hpMV);
+  if (r && r.doseSepUsv === undefined) r.doseSepUsv = 0;
+  return r;
 }
 
 // ── Base de datos de fixes/waypoints (rutas de plan de vuelo FPL) ────────────
@@ -2287,7 +2402,11 @@ function hydrateFlight(f) {
     // S4: un backup manipulado puede traer tracks de millones de puntos o
     // steps sin límite (congelan la UI/CPU); se recortan a topes razonables.
     track: Array.isArray(f.track) && f.track.length > 5000 ? f.track.slice(0, 5000) : f.track,
-    steps: Array.isArray(f.steps) && f.steps.length > 100 ? f.steps.slice(0, 100) : f.steps
+    steps: Array.isArray(f.steps) && f.steps.length > 100 ? f.steps.slice(0, 100) : f.steps,
+    // Un backup manipulado puede traer objetos donde se espera "YYYY-MM-DD":
+    // se descartan en vez de dejar que lleguen a depMsOf.
+    depDate: typeof f.depDate === "string" ? f.depDate : undefined,
+    depTime: typeof f.depTime === "string" ? f.depTime : undefined
   });
 }
 
@@ -2333,7 +2452,9 @@ function serializeFlight(f) {
     pairId: f.pairId,
     track: f.track,
     steps: f.steps,
-    collapsed: f.collapsed
+    collapsed: f.collapsed,
+    depDate: f.depDate,
+    depTime: f.depTime
   };
 }
 
@@ -2347,6 +2468,18 @@ var LANG = {
     dbLocal: "📡 Sin conexión · base local activa",
     flightLevel: "Nivel de vuelo",
     solarCycle: "Ciclo solar",
+    gleBanner: "Evento solar este mes",
+    gleWindow: "Ventana UTC",
+    gleHint: "Pon fecha y hora de salida en los vuelos para incluir su dosis.",
+    gleDate: "Fecha",
+    gleTime: "Hora UTC",
+    gleSep: "SEP",
+    gleGcr: "GCR",
+    gleQAjustado: "ajustado",
+    gleQSoloEvento: "solo evento",
+    gleQMedido: "medido",
+    gleRt: "Tormenta de radiación solar",
+    gleRtAge: "hace",
     solarAuto: "Automático",
     solarAutoSub: "HP mensual FAA",
     solarMin: "Mínimo ☁️",
@@ -2589,6 +2722,18 @@ var LANG = {
     dbLocal: "📡 Offline · local database active",
     flightLevel: "Flight level",
     solarCycle: "Solar cycle",
+    gleBanner: "Solar event this month",
+    gleWindow: "UTC window",
+    gleHint: "Set departure date and time on flights to include their dose.",
+    gleDate: "Date",
+    gleTime: "UTC time",
+    gleSep: "SEP",
+    gleGcr: "GCR",
+    gleQAjustado: "fitted",
+    gleQSoloEvento: "event only",
+    gleQMedido: "measured",
+    gleRt: "solar radiation storm",
+    gleRtAge: "ago",
     solarAuto: "Automatic",
     solarAutoSub: "monthly FAA HP",
     solarMin: "Minimum ☁️",
@@ -3314,6 +3459,7 @@ function FlightRow(_ref9) {
     onRemove = _ref9.onRemove,
     onAddReturn = _ref9.onAddReturn,
     onTrack = _ref9.onTrack,
+    showDep = _ref9.showDep,
     t = _ref9.t;
   var id = flight.id,
     orig = flight.orig,
@@ -3435,7 +3581,21 @@ function FlightRow(_ref9) {
         transition: "all 0.15s"
       }
     }, fl.label);
-  })), /*#__PURE__*/React.createElement("div", {
+  })), showDep && /*#__PURE__*/React.createElement("div", {
+    className: "gle-dep"
+  }, /*#__PURE__*/React.createElement("label", null, t.gleDate, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    value: flight.depDate || "",
+    onChange: function onChange(e) {
+      return _onChange(id, "depDate", e.target.value);
+    }
+  })), /*#__PURE__*/React.createElement("label", null, t.gleTime, /*#__PURE__*/React.createElement("input", {
+    type: "time",
+    value: flight.depTime || "",
+    onChange: function onChange(e) {
+      return _onChange(id, "depTime", e.target.value);
+    }
+  }))), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
@@ -3523,7 +3683,9 @@ function FlightRow(_ref9) {
     icon: "\u2622\uFE0F",
     label: "".concat(fmtDose(calc.doseUsv), "/leg"),
     accent: true
-  }), legs > 1 && /*#__PURE__*/React.createElement(Chip, {
+  }), calc.doseSepUsv > 0 && /*#__PURE__*/React.createElement("span", {
+    className: "gle-split"
+  }, t.gleGcr, " ", fmtDose(calc.doseUsv - calc.doseSepUsv), " + ", t.gleSep, " ", fmtDose(calc.doseSepUsv), " · ", t.gleQAjustado), legs > 1 && /*#__PURE__*/React.createElement(Chip, {
     icon: "\u2716\uFE0F",
     label: "".concat(fmtDose(totalUsv), " (\xD7").concat(legs, ")"),
     accent: true
@@ -3572,6 +3734,7 @@ function FlightPair(_ref10) {
     onSettled = _ref10.onSettled,
     initialCollapsed = _ref10.initialCollapsed,
     onCollapsedChange = _ref10.onCollapsedChange,
+    showDep = _ref10.showDep,
     t = _ref10.t;
   var _useStateP = useState(initialCollapsed != null ? initialCollapsed : !isNew),
     _useStateP2 = _slicedToArray(_useStateP, 2),
@@ -3744,7 +3907,8 @@ function FlightPair(_ref10) {
     onChange: onChange,
     onRemove: onRemove,
     onAddReturn: onAddReturn,
-    onTrack: onTrack
+    onTrack: onTrack,
+    showDep: showDep
   }), /*#__PURE__*/React.createElement(FlightRow, {
     key: vuelta.id,
     flight: vuelta,
@@ -3753,7 +3917,8 @@ function FlightPair(_ref10) {
     onChange: onChange,
     onRemove: onRemove,
     onAddReturn: onAddReturn,
-    onTrack: onTrack
+    onTrack: onTrack,
+    showDep: showDep
   }));
 }
 
@@ -3830,6 +3995,23 @@ function App() {
     _useState28 = _slicedToArray(_useState27, 2),
     savedAt = _useState28[0],
     setSavedAt = _useState28[1];
+
+  // ── Real-time space weather (SWPC) ────────────────────────────────────────
+  // Estado inicial desde cache y fetch en background; un fallo de red queda en
+  // silencio y se conserva lo cacheado. Solo informa del nivel, nunca dosis.
+  var _swpcH = useState(loadSwpcCache()),
+    _swpcH2 = _slicedToArray(_swpcH, 2),
+    swpc = _swpcH2[0],
+    setSwpc = _swpcH2[1];
+  useEffect(function () {
+    fetch(SWPC_URL).then(function (r) { return r.json(); }).then(function (j) {
+      var p = parseSwpcProtons(j);
+      if (!p) return;
+      var o = {fluxPfu: p.fluxPfu, timeIso: p.timeIso, fetchedMs: Date.now()};
+      saveSwpcCache(o);
+      setSwpc(o);
+    })["catch"](function () {});
+  }, []);
 
   // ── Month navigation ──────────────────────────────────────────────────────
   var todayKey = function todayKey() {
@@ -4058,6 +4240,7 @@ function App() {
   var validFlights = flights.filter(function (f) {
     return f.orig && f.dest && f.orig !== f.dest && activeDB[f.orig] && activeDB[f.dest];
   });
+  var monthGles = gleForMonth(currentMonth);
   var monthlyUsv = validFlights.reduce(function (s, f) {
     return s + flightCalc(f, hpMV).doseUsv * f.legs;
   }, 0);
@@ -4534,7 +4717,13 @@ function App() {
       border: "1px solid rgba(168,85,247,0.3)", borderRadius: 8,
       color: "#c084fc", fontWeight: 700, fontSize: 10, cursor: "pointer"
     }
-  }, t.restoreBtn)), function () {
+  }, t.restoreBtn)), swpc && swpcLevel(swpc.fluxPfu) ? /*#__PURE__*/React.createElement("div", {
+    className: "gle-rt"
+  }, /*#__PURE__*/React.createElement("strong", null, swpcLevel(swpc.fluxPfu), " \xB7 ", t.gleRt), /*#__PURE__*/React.createElement("span", null, " \xB7 ", Math.round(swpc.fluxPfu), " pfu"), /*#__PURE__*/React.createElement("span", null, " \xB7 ", t.gleRtAge, " ", Math.round((Date.now() - swpc.fetchedMs) / 3600000), " h")) : null, monthGles.length ? /*#__PURE__*/React.createElement("div", {
+    className: "gle-banner"
+  }, /*#__PURE__*/React.createElement("strong", null, t.gleBanner, ": GLE", monthGles[0].n), /*#__PURE__*/React.createElement("span", null, " · ", t.gleWindow, " ", monthGles[0].t0), /*#__PURE__*/React.createElement("span", null, " · ", monthGles[0].q === "ajustado" ? t.gleQAjustado : t.gleQSoloEvento), /*#__PURE__*/React.createElement("div", {
+    className: "gle-hint"
+  }, t.gleHint)) : null, function () {
     var rendered = {};
     var els = [];
     flights.forEach(function (f) {
@@ -4568,6 +4757,7 @@ function App() {
           onRemove: removeFlight,
           onAddReturn: addReturnFlight,
           onTrack: onTrack,
+          showDep: monthGles.length > 0,
           isNew: pid != null ? newPairIdsRef.current.has(pid) : (f.collapsed == null && mate.collapsed == null),
           initialCollapsed: f.collapsed != null ? f.collapsed : undefined,
           onCollapsedChange: function (v) {
@@ -4589,7 +4779,8 @@ function App() {
         onChange: updateFlight,
         onRemove: removeFlight,
         onAddReturn: addReturnFlight,
-        onTrack: onTrack
+        onTrack: onTrack,
+        showDep: monthGles.length > 0
       }));
     });
     return els;

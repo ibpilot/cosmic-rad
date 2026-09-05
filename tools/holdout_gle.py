@@ -10,6 +10,7 @@ Uso:
 import argparse
 import json
 import math
+import os
 
 R0REF_GV = 1.0
 ALT_REF_KM = 10.668     # FL350
@@ -97,7 +98,7 @@ def holdout(events, published):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--events", required=True)
-    ap.add_argument("--published", default="tools/gle_published.json")
+    ap.add_argument("--published", default=os.path.join(os.path.dirname(__file__), "gle_published.json"))
     args = ap.parse_args()
 
     events = json.load(open(args.events))

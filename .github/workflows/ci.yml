@@ -31,3 +31,9 @@ jobs:
         run: node tools/tests/bugs_test.js
       - name: Suite de la rejilla de dosis
         run: node tools/tests/grid_test.js
+      - name: Suite de eventos solares (GLE)
+        run: node tools/tests/sep_test.js
+      - name: Tests del pipeline de GLE
+        run: |
+          cd tools
+          python3 -m unittest test_gle_nmdb test_gle_fit test_build_gle test_holdout_gle test_embed_gle -v
