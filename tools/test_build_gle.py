@@ -134,6 +134,15 @@ class TestGleList(unittest.TestCase):
         ns = [e["n"] for e in GLE_LIST]
         self.assertEqual(len(ns), len(set(ns)))
 
+    def test_cubre_los_eventos_con_dosis_publicada(self):
+        # gle_published.json cita 69-72: si la lista no los trae, esos eventos
+        # nunca casan en la calibracion ni en el hold-out.
+        import json, os
+        ns = set(e["n"] for e in GLE_LIST)
+        pub = json.load(open(os.path.join(os.path.dirname(__file__),
+                                          "gle_published.json")))
+        self.assertTrue(set(p["n"] for p in pub) <= ns)
+
 
 if __name__ == "__main__":
     unittest.main()

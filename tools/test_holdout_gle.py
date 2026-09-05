@@ -65,6 +65,17 @@ class TestCalibration(unittest.TestCase):
         _, beta = fit_calibration(events, pub)
         self.assertEqual(beta, 0.0)
 
+    def test_empate_en_beta_gana_el_modelo_simple(self):
+        # Eventos identicos: la perdida es plana en beta y cualquier valor
+        # encaja. Sin desempate salia beta = -1.0 y un K0 del doble.
+        events = [dict(EV, n=i) for i in range(1, 5)]
+        pub = [{"n": i, "rc_gv": 0.0, "alt_km": ALT_REF_KM,
+                "dose_usv": event_dose(EV, 0.0, ALT_REF_KM, 3.0, 0.0)}
+               for i in range(1, 5)]
+        k0, beta = fit_calibration(events, pub)
+        self.assertEqual(beta, 0.0)
+        self.assertAlmostEqual(k0, 3.0, places=2)
+
 
 class TestHoldout(unittest.TestCase):
     def test_holdout_perfecto_da_factor_uno(self):

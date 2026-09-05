@@ -53,7 +53,10 @@ def fit_calibration(events, published):
     if not pairs:
         raise SystemExit("ningun evento publicado casa con la tabla generada")
 
-    betas = [0.0] if len(pairs) < MIN_FOR_BETA else [b / 20.0 for b in range(-20, 41)]
+    # Ordenado por |beta| ascendente: ante empate (perdida plana, p. ej. eventos
+    # publicados sin contraste espectral) gana el modelo mas simple, beta = 0.
+    betas = ([0.0] if len(pairs) < MIN_FOR_BETA
+             else sorted([b / 20.0 for b in range(-20, 41)], key=lambda x: (abs(x), x)))
     best = None
     for beta in betas:
         logs = []
