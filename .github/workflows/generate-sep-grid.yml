@@ -16,6 +16,11 @@ name: SEP response grid
 
 on:
   workflow_dispatch:
+    inputs:
+      verbose:
+        description: 'Vierte el stdout/stderr completo del binario CARI (diagnostico)'
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -40,4 +45,5 @@ jobs:
           python3 tools/cari7_sep_gate.py \
             --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
             --binary "${{ steps.cari.outputs.binary }}" \
-            --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS"
+            --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
+            ${{ github.event.inputs.verbose == 'true' && '--verbose' || '' }}
