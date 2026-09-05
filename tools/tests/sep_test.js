@@ -59,5 +59,19 @@ ok("evento sin ajuste no da dosis", (function () {
 ok("sin NaN con entradas basura",
    isFinite(ctx.sepRate(NaN, 0, 10.668, T_IN)) && ctx.sepRate(78, -70, NaN, T_IN) === 0);
 
+const T_AFTER = Date.UTC(2021, 9, 28, 18, 0, 0);  // 1 h despues del final
+
+ok("ventana nula despues de que acabe el evento", ctx.gleWindow(T_AFTER) === null);
+ok("cero despues del evento", ctx.sepRate(78, -70, 10.668, T_AFTER) === 0);
+ok("el perfil temporal se sigue paso a paso", (function () {
+  const saved = ctx.GLE_EVENTS;
+  ctx.GLE_EVENTS = [{n: 73, t0: "2021-10-28T15:45Z", dt: 15, q: "ajustado",
+                     p: [[100, 2, 0.01], [50, 2, 0.01], [25, 2, 0.01], [10, 2, 0.01]]}];
+  const s0 = ctx.sepRate(78, -70, 10.668, Date.UTC(2021, 9, 28, 15, 50, 0));
+  const s2 = ctx.sepRate(78, -70, 10.668, Date.UTC(2021, 9, 28, 16, 20, 0));
+  ctx.GLE_EVENTS = saved;
+  return s0 > 0 && Math.abs(s2 / s0 - 0.25) < 1e-9;
+})());
+
 console.log("\n" + pass + " pass, " + fail + " fail");
 process.exit(fail ? 1 : 0);
