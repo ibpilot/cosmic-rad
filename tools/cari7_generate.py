@@ -89,8 +89,8 @@ def main():
     ap.add_argument("--hp", type=int, help="nivel de HP (300..1200); opcional con --selftest-only")
     ap.add_argument("--cari-dir", required=True, help="directorio de la distribución CARI-7A")
     ap.add_argument("--binary", required=True, help="nombre del binario dentro de cari-dir")
-    ap.add_argument("--cutoffs", required=True,
-                    help="directorio CUTOFFS/ de la distribucion de CARI-7A")
+    ap.add_argument("--cutoffs",
+                    help="directorio CUTOFFS/ de la distribucion de CARI-7A (requerido salvo con --selftest-only)")
     ap.add_argument("--out", help="CSV de salida (requerido sin --selftest-only)")
     ap.add_argument("--chunk", type=int, default=0,
                     help="partir el .LOC en lotes de N puntos (0 = un solo fichero)")
@@ -105,6 +105,8 @@ def main():
         return
     if args.hp is None or not args.out:
         ap.error("--hp y --out son requeridos salvo con --selftest-only")
+    if not args.cutoffs:
+        ap.error("--cutoffs es requerido salvo con --selftest-only")
 
     env = None
     cmd_prefix = []
