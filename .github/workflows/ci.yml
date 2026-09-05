@@ -37,3 +37,7 @@ jobs:
         run: |
           cd tools
           python3 -m unittest test_gle_nmdb test_gle_fit test_build_gle test_holdout_gle test_embed_gle -v
+      - name: Tests del driver SEP (MY_MODEL.OUT + puerta de unidades)
+        run: |
+          cd tools
+          python3 -m unittest test_cari7_sep -v

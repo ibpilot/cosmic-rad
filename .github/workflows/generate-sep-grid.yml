@@ -1,0 +1,43 @@
+name: SEP response grid
+
+# Rejilla de respuesta SEP (MY_MODEL.OUT -> CARI-7A). El kernel es estatico,
+# asi que el workflow es SOLO `workflow_dispatch`: no lleva cron ni schedule.
+#
+# T4 (este fichero): puerta de unidades cm2/m2 bloqueante. Reproduce con
+# MY_MODEL.OUT un espectro incorporado de CARI-7A (BO'11 GCR) y falla si el
+# ratio contra el camino nativo se sale del 5 %. El job imprime el ratio
+# medido (no solo OK/FAIL): un factor silencioso 10^4 (ambiguedad cm^2/m^2 de
+# la documentacion FAA) aparece ahi como ratio ~1e-4/1e4 y aborta el run.
+#
+# T5 anade aqui mismo las cuatro puertas de linealidad (escalado, superposicion,
+# convergencia de binning, reproduccion al 5 %) antes de generar el kernel;
+# T6 anade el barrido de 53 bins x 73 Rc x 11 alt y el ensamblado/embebido.
+# El ratio de T4 se reutiliza como primera puerta de T5.
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: sep-grid
+  cancel-in-progress: true
+
+jobs:
+  gate-unidades:
+    # Puerta bloqueante de T4: MY_MODEL.OUT debe reproducir un espectro
+    # incorporado dentro del 5 %. Sin esto no hay kernel SEP que valga.
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
+      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
+        id: cari
+        uses: ./.github/actions/setup-cari7a
+      - name: Puerta de unidades (reproduccion del espectro incorporado)
+        run: |
+          python3 tools/cari7_sep_gate.py \
+            --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
+            --binary "${{ steps.cari.outputs.binary }}" \
+            --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS"
