@@ -14,22 +14,64 @@ import urllib.request
 
 # Codigo NMDB -> rigidez de corte vertical en GV.
 STATIONS = {
-    "SOPO": 0.10,   # South Pole
-    "THUL": 0.30,   # Thule
-    "MCMU": 0.30,   # McMurdo
-    "TERA": 0.01,   # Terre Adelie
-    "APTY": 0.65,   # Apatity
-    "OULU": 0.81,   # Oulu
-    "KERG": 1.14,   # Kerguelen
-    "INVK": 0.30,   # Inuvik
-    "NAIN": 0.30,   # Nain
-    "JUNG": 4.49,   # Jungfraujoch
-    "LMKS": 3.84,   # Lomnicky Stit
-    "ROME": 6.27,   # Rome
-    "ATHN": 8.53,   # Athens
-    "MXCO": 8.20,   # Mexico City
-    "TSMB": 9.15,   # Tsumeb
-    "PSNM": 16.80,  # Doi Inthanon
+    "DOMC": 0.01,
+    "TERA": 0.01,
+    "MRNY": 0.03,
+    "NEU3": 0.10,
+    "SOPO": 0.10,
+    "MWSN": 0.22,
+    "FSMT": 0.30,
+    "INVK": 0.30,
+    "JBGO": 0.30,
+    "MCMU": 0.30,
+    "NAIN": 0.30,
+    "PWNK": 0.30,
+    "THUL": 0.30,
+    "TXBY": 0.48,
+    "NRLK": 0.63,
+    "APTY": 0.65,
+    "SANB": 0.73,
+    "SNAE": 0.73,
+    "OULU": 0.81,
+    "CALG": 1.08,
+    "KERG": 1.14,
+    "YKTK": 1.65,
+    "KGSN": 1.88,
+    "MGDN": 2.10,
+    "DRHM": 2.21,
+    "KIEL": 2.36,
+    "KIEL2": 2.36,
+    "NEWK": 2.40,
+    "MOSC": 2.43,
+    "NVBK": 2.91,
+    "CLMX": 3.00,
+    "DRBS": 3.18,
+    "IRK2": 3.64,
+    "IRK3": 3.64,
+    "IRKT": 3.64,
+    "LMKS": 3.84,
+    "UFSZ": 4.10,
+    "ZUGS": 4.24,
+    "JUNG": 4.49,
+    "JUNG1": 4.49,
+    "HRMS": 4.58,
+    "BKSN": 5.70,
+    "AATA": 5.90,
+    "AATB": 5.90,
+    "ROME": 6.27,
+    "CALM": 6.95,
+    "PTFM": 6.98,
+    "ARNM": 7.10,
+    "NANM": 7.10,
+    "MXCO": 8.28,
+    "ATHN": 8.53,
+    "TSMB": 9.15,
+    "ESOI": 10.75,
+    "DJON": 11.20,
+    "CHAC": 11.80,
+    "HUAN": 12.92,
+    "AHMD": 15.94,
+    "PSNM": 16.80,
 }
 
 _URL = ("https://www.nmdb.eu/nest/draw_graph.php?formchk=1&stations[]={st}"
