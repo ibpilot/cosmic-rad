@@ -1,6 +1,14 @@
 [
-  {"n": 69, "rc_gv": 0.0, "alt_km": 10.668, "dose_usv": 0.0, "cite": "RELLENAR"},
-  {"n": 70, "rc_gv": 0.0, "alt_km": 10.668, "dose_usv": 0.0, "cite": "RELLENAR"},
-  {"n": 71, "rc_gv": 0.0, "alt_km": 10.668, "dose_usv": 0.0, "cite": "RELLENAR"},
-  {"n": 72, "rc_gv": 0.0, "alt_km": 10.668, "dose_usv": 0.0, "cite": "RELLENAR"}
+  {"n": 69, "rc_gv": 0.0, "alt_km": 12.0, "dose_usv": 264.0,
+   "cite": "Sato et al. 2018, https://doi.org/10.1029/2018SW001873",
+   "note": "SEP-only conservative maximum at 12 km, highest-dose location for the event"},
+  {"n": 70, "rc_gv": 0.0, "alt_km": 12.0, "dose_usv": 48.4,
+   "cite": "Sato et al. 2018, https://doi.org/10.1029/2018SW001873",
+   "note": "SEP-only conservative maximum at 12 km, highest-dose location for the event"},
+  {"n": 71, "rc_gv": 0.0, "alt_km": 12.0, "dose_usv": 9.99,
+   "cite": "Sato et al. 2018, https://doi.org/10.1029/2018SW001873",
+   "note": "SEP-only conservative maximum at 12 km, highest-dose location for the event"},
+  {"n": 72, "rc_gv": 0.01, "alt_km": 10.7, "dose_usv": 22.56,
+   "cite": "Copeland et al. 2018, https://doi.org/10.1029/2018SW001917",
+   "note": "PANDOCA SEP average 0.47 uSv/h over the first 48 h at 10.7 km and Rc 0.01 GV"}
 ]
