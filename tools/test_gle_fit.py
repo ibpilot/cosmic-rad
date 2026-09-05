@@ -96,6 +96,16 @@ class TestFitStep(unittest.TestCase):
     def test_sin_sennal_devuelve_none(self):
         self.assertIsNone(fit_step([(rc, 0.0) for rc in RCS]))
 
+    def test_incremento_que_crece_con_rc_no_es_un_gle(self):
+        # Ruido, no evento: sin esta guarda el ajuste devuelve un R0 negativo y
+        # se cuela en la tabla como si fuese un evento valido.
+        subiendo = [(rc, 1.0 + rc) for rc in RCS]
+        self.assertIsNone(fit_step(subiendo))
+
+    def test_todas_las_estaciones_a_la_misma_rc(self):
+        # Pendiente indefinida: sin la guarda de sxx esto es ZeroDivisionError.
+        self.assertIsNone(fit_step([(2.0, 10.0)] * 10))
+
     def test_umbral_de_estaciones_es_ocho(self):
         self.assertEqual(MIN_STATIONS, 8)
 
