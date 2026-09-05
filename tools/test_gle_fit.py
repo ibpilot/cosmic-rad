@@ -1,7 +1,8 @@
 """Tests del baseline y del incremento porcentual."""
+import math
 import unittest
 
-from gle_fit import baseline, pct_increase
+from gle_fit import MIN_STATIONS, baseline, fit_step, pct_increase
 
 
 def _rows(vals, day="2021-10-28", start_min=0):
@@ -10,6 +11,14 @@ def _rows(vals, day="2021-10-28", start_min=0):
         m = start_min + i
         out.append(("%s %02d:%02d:00" % (day, m // 60, m % 60), float(v)))
     return out
+
+
+def _synth(i0, r0, rcs):
+    """Muestras sinteticas exactas del modelo I0*exp(-Rc/R0)."""
+    return [(rc, i0 * math.exp(-rc / r0)) for rc in rcs]
+
+
+RCS = [0.10, 0.30, 0.65, 0.81, 1.14, 3.84, 4.49, 6.27, 8.20, 8.53]
 
 
 class TestBaseline(unittest.TestCase):
@@ -54,6 +63,41 @@ class TestPctIncrease(unittest.TestCase):
     def test_baseline_cero_se_rechaza(self):
         with self.assertRaises(ValueError):
             pct_increase(_rows([100.0]), 0.0)
+
+
+class TestFitStep(unittest.TestCase):
+    def test_recupera_los_parametros_conocidos(self):
+        i0, r0, rms = fit_step(_synth(50.0, 2.0, RCS))
+        self.assertAlmostEqual(i0, 50.0, places=3)
+        self.assertAlmostEqual(r0, 2.0, places=3)
+        self.assertLess(rms, 1e-6)
+
+    def test_recupera_un_evento_duro(self):
+        i0, r0, rms = fit_step(_synth(12.0, 6.0, RCS))
+        self.assertAlmostEqual(i0, 12.0, places=3)
+        self.assertAlmostEqual(r0, 6.0, places=3)
+
+    def test_el_ruido_sube_el_rms_pero_no_rompe_el_ajuste(self):
+        s = _synth(50.0, 2.0, RCS)
+        s[0] = (s[0][0], s[0][1] * 2.0)   # una estacion anomala (anisotropia)
+        i0, r0, rms = fit_step(s)
+        self.assertGreater(rms, 0.05)
+        self.assertGreater(i0, 10.0)
+
+    def test_pocas_estaciones_devuelve_none(self):
+        pocas = _synth(50.0, 2.0, RCS[:3])
+        self.assertIsNone(fit_step(pocas))
+
+    def test_estaciones_por_debajo_del_umbral_no_cuentan(self):
+        # 10 muestras, pero 8 son ruido de 0,1%: quedan 2 utiles -> None.
+        s = _synth(50.0, 2.0, RCS[:2]) + [(rc, 0.1) for rc in RCS[2:]]
+        self.assertIsNone(fit_step(s))
+
+    def test_sin_sennal_devuelve_none(self):
+        self.assertIsNone(fit_step([(rc, 0.0) for rc in RCS]))
+
+    def test_umbral_de_estaciones_es_ocho(self):
+        self.assertEqual(MIN_STATIONS, 8)
 
 
 if __name__ == "__main__":

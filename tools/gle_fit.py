@@ -39,3 +39,38 @@ def pct_increase(rows, base):
     if not base:
         raise ValueError("baseline nulo o cero")
     return [(iso, (v - base) / base * 100.0) for iso, v in rows]
+
+
+def fit_step(samples):
+    """Ajusta pct(Rc) = I0*exp(-Rc/R0) por minimos cuadrados en log.
+
+    samples: [(rc_gv, pct)]. Devuelve (I0, R0, rms) o None si no hay bastantes
+    estaciones con sennal.
+
+    El rms es el residuo en espacio logaritmico. Sube cuando el flujo NO es
+    isotropo (fase inicial del GLE): dos estaciones a igual Rc discrepan segun
+    su direccion asintotica. Se guarda para marcar esos pasos como de baja
+    confianza en vez de esconder el problema.
+    """
+    pts = [(rc, p) for rc, p in samples if p >= MIN_PCT]
+    if len(pts) < MIN_STATIONS:
+        return None
+
+    n = float(len(pts))
+    xs = [rc for rc, _ in pts]
+    ys = [math.log(p) for _, p in pts]
+    mx = sum(xs) / n
+    my = sum(ys) / n
+    sxx = sum((x - mx) ** 2 for x in xs)
+    if sxx <= 0:
+        return None   # todas las estaciones a la misma Rc: pendiente indefinida
+    slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
+    if slope >= 0:
+        return None   # el incremento crece con Rc: no es un GLE, es ruido
+    intercept = my - slope * mx
+
+    i0 = math.exp(intercept)
+    r0 = -1.0 / slope
+    resid = [y - (intercept + slope * x) for x, y in zip(xs, ys)]
+    rms = math.sqrt(sum(r * r for r in resid) / n)
+    return (i0, r0, rms)
