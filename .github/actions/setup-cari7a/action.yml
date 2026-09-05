@@ -51,8 +51,8 @@ runs:
 
     - name: Verificar SHA-256 del zip CARI-7A (suministro)
       shell: bash
-      # FAA_CARI7A_SHA256 (pin de suministro único; zip oficial verificado el 2026-08-24, 21.534.996 bytes).
-      run: echo "accf41177a2082ca1c526a8c757df48972ce4411ef2329c6ce22a48edfe3f613  cari7a.zip" | sha256sum -c -
+      # FAA_CARI7A_SHA256 (pin de suministro único; zip renovado por la FAA el 2026-09-05, 21.541.742 bytes).
+      run: echo "6e330e8b8aac148be8a5f2c68898a6750dd9d5a311407b73a7eaa7a3964fc0cf  cari7a.zip" | sha256sum -c -
 
     - name: Descomprimir CARI-7A (tras verificar el checksum)
       shell: bash
