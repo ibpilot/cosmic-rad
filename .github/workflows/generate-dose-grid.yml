@@ -38,10 +38,6 @@ concurrency:
   group: dose-grid
   cancel-in-progress: true
 
-env:
-  # El zip de CARI-7A (que ya incluye SOLARMOD/MV-DATES.L99) se descarga via
-  # la composite action setup-cari7a. La FAA ya no publica MV-DATES.zip suelto.
-
 jobs:
   selftest:
     # Autocomprobación: la configuración batch debe reproducir la salida de
