@@ -9,16 +9,33 @@ name: SEP response grid
 # medido (no solo OK/FAIL): un factor silencioso 10^4 (ambiguedad cm^2/m^2 de
 # la documentacion FAA) aparece ahi como ratio ~1e-4/1e4 y aborta el run.
 #
-# T5 anade aqui mismo las cuatro puertas de linealidad (escalado, superposicion,
-# convergencia de binning, reproduccion al 5 %) antes de generar el kernel;
-# T6 anade el barrido de 53 bins x 73 Rc x 11 alt y el ensamblado/embebido.
-# El ratio de T4 se reutiliza como primera puerta de T5.
+# T5 (este fichero): cuatro puertas de linealidad ANTES de generar el kernel:
+#   - escalado x10/x100 (tol 1 %)
+#   - superposicion dosis(A+B) vs dosis(A)+dosis(B) (tol 1 %)
+#   - convergencia de binning 53 vs 106 bins (tol 1 %)
+#   - reproduccion de un espectro incorporado (tol 5 %, el ratio de T4)
+# Fallar cualquiera aborta el run: no hay kernel parcheado; un kernel no
+# lineal miente mas cuanto mas duro es el evento. Si T5 falla de verdad, el
+# bloque T4-T6 se rehace sobre AniMAIRE (riesgo declarado en el plan).
+#
+# T6 anade aqui el barrido de 53 bins x 73 Rc x 11 alt y el ensamblado/embebido.
+#
+# `gate-unidades` (T4) y `linearity` (T5) corren el MISMO setup de CARI-7A en
+# jobs separados porque el runner es efimero. El job `linearity` ejecuta las
+# cuatro puertas COMPLETAS (incluida la reproduccion de T4, puerta 4): el plan
+# exige que el job imprima las cuatro metricas con su margen. La reproduccion
+# duplicada (~4 min) es el coste de que el job de T5 sea autonomo y su veredicto
+# no dependa de leer la salida de otro job.
 
 on:
   workflow_dispatch:
     inputs:
       verbose:
         description: 'Vierte el stdout/stderr completo del binario CARI (diagnostico)'
+        type: boolean
+        default: false
+      skip_linearity:
+        description: 'Saltar las puertas de linealidad (T5) — solo diagnostico'
         type: boolean
         default: false
 
@@ -31,8 +48,9 @@ concurrency:
 
 jobs:
   gate-unidades:
-    # Puerta bloqueante de T4: MY_MODEL.OUT debe reproducir un espectro
-    # incorporado dentro del 5 %. Sin esto no hay kernel SEP que valga.
+    # Puerta bloqueante de T4 (y puerta 4 de T5): MY_MODEL.OUT debe reproducir
+    # un espectro incorporado dentro del 5 %. Sin esto no hay kernel SEP que
+    # valga.
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -43,6 +61,28 @@ jobs:
       - name: Puerta de unidades (reproduccion del espectro incorporado)
         run: |
           python3 tools/cari7_sep_gate.py \
+            --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
+            --binary "${{ steps.cari.outputs.binary }}" \
+            --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
+            ${{ github.event.inputs.verbose == 'true' && '--verbose' || '' }}
+
+  linearity:
+    # T5: las cuatro puertas de linealidad (escalado, superposicion, binning,
+    # reproduccion) sobre el MISMO CARI-7A. Corre completo (sin
+    # --skip-reproduction) para que el job imprima las cuatro metricas con su
+    # margen; la reproduccion duplicada es el coste de la autonomia del job.
+    needs: gate-unidades
+    if: github.event.inputs.skip_linearity != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
+      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
+        id: cari
+        uses: ./.github/actions/setup-cari7a
+      - name: Puertas de linealidad (T5)
+        run: |
+          python3 tools/cari7_sep_linearity.py \
             --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
             --binary "${{ steps.cari.outputs.binary }}" \
             --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \

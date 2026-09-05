@@ -41,3 +41,7 @@ jobs:
         run: |
           cd tools
           python3 -m unittest test_cari7_sep -v
+      - name: Tests de las puertas de linealidad (T5)
+        run: |
+          cd tools
+          python3 -m unittest test_cari7_sep_linearity -v
