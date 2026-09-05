@@ -1710,6 +1710,10 @@ function ensureDoseGrid() {
   }
 }
 var _rcI16 = null;
+// Eventos de protones solares (GLE). Generado por tools/build_gle.py y embebido
+// con tools/embed_gle.py. Cada evento: {n, t0, dt (min por paso), q, p:[[I0,R0,rms]]}.
+var GLE_EVENTS = [];
+var GLE_CAL = {k0: 0, beta: 0, attKm: 2.0, altRefKm: 10.668, r0Ref: 1.0};
 function ensureRcMap() {
   if (!RC_MAP || !RC_MAP.data) {
     _rcI16 = null;
