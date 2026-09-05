@@ -128,7 +128,9 @@ class TestFitStep(unittest.TestCase):
     def test_sin_dependencia_de_la_rigidez_no_es_un_gle(self):
         # Firma de Forbush: el mismo incremento a toda rigidez -> R0 enorme.
         # GLE74 daba R0 = 681 GV en su primer paso por la tormenta de mayo 2024.
-        plano = [(rc, 5.0 + 0.001 * rc, 0.0) for rc in RCS]
+        # Decreciente, pero tan lentamente que R0 sale ~1000 GV: tiene que
+        # cazarlo el techo de R0, no la guarda de pendiente positiva.
+        plano = [(rc, 5.0 * math.exp(-rc / 1000.0), 0.0) for rc in RCS]
         self.assertIsNone(fit_step(plano))
 
     def test_r0_dentro_del_rango_fisico_se_acepta(self):
