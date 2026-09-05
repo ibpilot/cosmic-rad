@@ -1758,6 +1758,58 @@ function rcAt(lat, lon) {
   var b = g(i0 + 1, j0) + (g(i0 + 1, j1) - g(i0 + 1, j0)) * fLon;
   return a + (b - a) * fLat;
 }
+// --- Eventos de protones solares (GLE) -------------------------------------
+// La dosis SEP es un termino ADITIVO sobre el GCR, no un factor: CARI-7A no
+// modela estos eventos. El perfil [I0, R0] de cada paso sale del ajuste de la
+// red de monitores de neutrones (tools/build_gle.py).
+function gleMs(iso) {
+  // "2021-10-28T15:45Z" -> ms UTC. Sin Date.parse de formatos raros.
+  var m = /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})Z$/.exec(iso || "");
+  if (!m) return NaN;
+  return Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], 0);
+}
+// gleForMonth("YYYY-MM"): eventos que caen en ese mes. Con ~74 GLE en 70 anos,
+// la inmensa mayoria de los meses devuelve [] y la UI no se pinta.
+function gleForMonth(ym) {
+  var out = [];
+  if (!ym) return out;
+  for (var i = 0; i < GLE_EVENTS.length; i++) {
+    if (String(GLE_EVENTS[i].t0).slice(0, 7) === ym) out.push(GLE_EVENTS[i]);
+  }
+  return out;
+}
+// gleWindow(tMs): evento activo en ese instante, o null.
+function gleWindow(tMs) {
+  if (!isFinite(tMs)) return null;
+  for (var i = 0; i < GLE_EVENTS.length; i++) {
+    var ev = GLE_EVENTS[i];
+    if (!ev.p || !ev.p.length) continue;
+    var t0 = gleMs(ev.t0);
+    if (!isFinite(t0)) continue;
+    if (tMs >= t0 && tMs < t0 + ev.p.length * ev.dt * 60000) return ev;
+  }
+  return null;
+}
+// sepRate(lat, lon, altKm, tMs): uSv/h aportados por el evento activo.
+//   K(R0) * I0(t) * exp(-Rc/R0(t)) * altFactor
+// El factor de altitud NO es el de la rejilla: el espectro SEP es mas blando y
+// su gradiente con la altitud, mas pronunciado.
+function sepRate(lat, lon, altKm, tMs) {
+  var ev = gleWindow(tMs);
+  if (!ev) return 0;
+  if (!isFinite(altKm)) return 0;
+  var k = Math.floor((tMs - gleMs(ev.t0)) / (ev.dt * 60000));
+  if (k < 0 || k >= ev.p.length) return 0;
+  var step = ev.p[k];
+  var i0 = step[0], r0 = step[1];
+  if (!isFinite(i0) || !isFinite(r0) || r0 <= 0) return 0;
+  var rc = rcAt(lat, lon);
+  if (rc == null || !isFinite(rc)) rc = 0;
+  var kCal = GLE_CAL.k0 * Math.pow(r0 / GLE_CAL.r0Ref, GLE_CAL.beta);
+  var alt = Math.exp((altKm - GLE_CAL.altRefKm) / GLE_CAL.attKm);
+  var rate = kCal * i0 * Math.exp(-rc / r0) * alt;
+  return isFinite(rate) && rate > 0 ? rate : 0;
+}
 // Interpolación trilineal (bilineal rigidez/altitud + lineal HP) sobre la rejilla.
 // La posición entra por la rigidez de corte: dos puntos con la misma Rc dan la
 // misma dosis, verificado contra CARI-7A. Devuelve null si no hay tabla (el
