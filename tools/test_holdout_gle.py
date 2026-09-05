@@ -36,6 +36,11 @@ class TestEventDose(unittest.TestCase):
         vacio = dict(EV, q="solo evento", p=[])
         self.assertEqual(event_dose(vacio, 0.0, ALT_REF_KM, 1.0, 0.0), 0.0)
 
+    def test_evento_sin_campo_p_no_revienta(self):
+        # Un evento embebido sin la clave "p" daria KeyError sin la guarda.
+        self.assertEqual(event_dose({"n": 1, "t0": "x", "dt": 15}, 0.0,
+                                    ALT_REF_KM, 1.0, 0.0), 0.0)
+
     def test_beta_endurece_segun_r0(self):
         blando = dict(EV, p=[[100.0, 1.0, 0.01]] * 4)
         duro = dict(EV, p=[[100.0, 4.0, 0.01]] * 4)
@@ -85,6 +90,21 @@ class TestHoldout(unittest.TestCase):
                for i in range(1, 6)]
         for row in holdout(events, pub):
             self.assertAlmostEqual(row["factor"], 1.0, places=2)
+
+
+    def test_el_factor_es_simetrico_y_caza_la_subestimacion(self):
+        # Sin simetrizar, subestimar da factor < 1 y el criterio de aceptacion
+        # nunca salta: la puerta de calidad se abriria sola en media de los casos.
+        from holdout_gle import MAX_FACTOR
+        self.assertEqual(MAX_FACTOR, 3.0)
+        events = [dict(EV, n=i) for i in range(1, 6)]
+        real = event_dose(EV, 0.0, ALT_REF_KM, 3.0, 0.0)
+        pub = [{"n": i, "rc_gv": 0.0, "alt_km": ALT_REF_KM, "dose_usv": real}
+               for i in range(1, 5)]
+        # El quinto evento vale 5 veces mas de lo que predice el ajuste del resto.
+        pub.append({"n": 5, "rc_gv": 0.0, "alt_km": ALT_REF_KM, "dose_usv": real * 5})
+        peor = max(row["factor"] for row in holdout(events, pub))
+        self.assertGreater(peor, MAX_FACTOR)
 
 
 if __name__ == "__main__":
