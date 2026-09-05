@@ -21,6 +21,14 @@ este script la incluye para poder correrse autonomo, y el workflow puede
 saltarla con `--skip-reproduction` cuando el gate de T4 ya corrio en el mismo
 job (el plan T5 dice: "El ratio de T4 se reutiliza como primera puerta").
 
+HALLAZGO del run de T5 en CI: el lector de CARI-7A exige que MY_MODEL.OUT
+tenga EXACTAMENTE la estructura del BO11_GCR.OUT (100 filas por Z=1..28, con
+la malla de energia del propio BO11). Un MY_MODEL.OUT con una malla propia de
+53 puntos en Z=1 se lee mal: CARI produce tasas 0/NaN y las puertas fallan con
+ratios nan. Por eso los espectros arbitrarios se PROYECTAN sobre la malla Z=1
+del BO11 antes de escribir el fichero (ver `_write_my_model`). La fecha de la
+reproduccion C7-vs-C2 debe ser 2002/01/00 (snapshot solar del BO11).
+
 Uso (CI, con la distribucion CARI-7A ya descargada por setup-cari7a):
     python3 tools/cari7_sep_linearity.py --cari-dir CARI_7A_DVD \
         --binary "cari7a_4.2.0(intel_linux)" --cutoffs CARI_7A_DVD/CUTOFFS
@@ -223,38 +231,137 @@ def _rcmap_gate(cutoffs, date, grid_step):
             if any(abs(v - t) <= 0.25 for t in targets)}
 
 
+def _project_powerlaw(rows, grid):
+    """Proyecta (E, F) sobre `grid` interpolando en log-log y extrapolando con
+    la pendiente espectral local FUERA del rango (ley de potencia), no plano:
+    una cola plana hasta 10 TeV (la malla del BO11 llega a 10000 GeV) daria una
+    dosis absurda y romperia la convergencia."""
+    import bisect
+    pts = sorted((math.log(e), math.log(f)) for e, f in rows if e > 0 and f > 0)
+    if not pts:
+        raise SystemExit("espectro sin puntos positivos para proyectar")
+    out = []
+    for e in grid:
+        x = math.log(e)
+        if x <= pts[0][0]:
+            x1, y1 = pts[0]
+            x2, y2 = pts[min(1, len(pts) - 1)]
+            m = (y2 - y1) / (x2 - x1) if x2 != x1 else 0.0
+            out.append((e, math.exp(y1 + m * (x - x1))))
+        elif x >= pts[-1][0]:
+            x1, y1 = pts[-2]
+            x2, y2 = pts[-1]
+            m = (y2 - y1) / (x2 - x1) if x2 != x1 else 0.0
+            out.append((e, math.exp(y2 + m * (x - x2))))
+        else:
+            i = bisect.bisect_right([p[0] for p in pts], x)
+            x1, y1 = pts[i - 1]
+            x2, y2 = pts[i]
+            out.append((e, math.exp(y1 + (y2 - y1) * (x - x1) / (x2 - x1))))
+    return out
+
+
 def _write_my_model(cari, rows):
-    """Escribe GCR_MODELS/MY_MODEL.OUT desde filas (E_GeV, F), conservando los
-    bloques Z=2..28 a cero que espera el lector de CARI-7A."""
+    """Escribe GCR_MODELS/MY_MODEL.OUT con un espectro de protones arbitrario.
+
+    El lector de CARI-7A espera EXACTAMENTE la estructura del BO11_GCR.OUT:
+    100 filas por Z, Z=1..28, con la malla de energia del propio BO11
+    (0.01..10000 GeV para Z=1). Un MY_MODEL.OUT con menos filas en Z=1 (p. ej.
+    una malla propia de 53 puntos) NO se lee bien: CARI produce tasas 0/NaN
+    (destapado por el run de T5 en CI). Por eso el espectro arbitrario se
+    PROYECTA sobre la malla Z=1 del BO11 (interpolacion log-log con cola de ley
+    de potencia fuera del rango) y los bloques Z=2..28 se escriben a cero con
+    su malla original.
+    """
     gcr = os.path.join(cari, "GCR_MODELS")
     dst = os.path.join(gcr, sep.MY_MODEL_NAME)
     grids = sep.load_ion_grids(cari)
-    sep.write_my_model(dst, rows, grids=grids)
+    z1_grid = grids.get(1)
+    if not z1_grid:
+        raise SystemExit("no hay malla Z=1 en BO11_GCR.OUT (¿distro incompleta?)")
+    # Proyectar el espectro sobre la malla fija de Z=1 del BO11.
+    proj = _project_powerlaw(rows, z1_grid)
+    epoch = "2002.041096"          # epoca del BO11_GCR.OUT distribuido
+    with open(dst, "w") as f:
+        f.write(epoch + "\n")
+        f.write("   Z       E            F\n")
+        for e, fl in proj:
+            f.write("%4d %10.3E %12.3E\n" % (1, e, fl))
+        for z in sorted(grids):
+            if z == 1:
+                continue
+            for e in grids[z]:
+                f.write("%4d %10.3E %12.3E\n" % (z, e, 0.0))
     return dst
 
 
 def run_rows(cari, binary, rows, date, cutoffs, os_name="unix", wine=None,
-             verbose=False, grid_step=4, tag=None):
-    """Escribe MY_MODEL.OUT con `rows` y corre el barrido C7 (espectro 7) sobre
-    la rejilla reducida. Devuelve { (rc_gv, alt_km): rate_usvh }."""
+             verbose=False, rc_targets=None, tag=None):
+    """Escribe MY_MODEL.OUT con `rows` y corre CARI (campo C7) sobre un
+    subconjunto reducido de Rc x las 11 altitudes.
+
+    A diferencia de `run_spectrum` (que barre ~150 objetivos del eje, ~1350
+    puntos), las puertas de linealidad usan una rejilla PEQUENA fija
+    (`rc_targets`, por defecto 9 valores de Rc repartidos): la linealidad se
+    verifica por punto, no hace falta barrer todo el eje. Devuelve
+    { (rc_gv, alt_km): rate_usvh }."""
     _write_my_model(cari, rows)
-    rcmap_gate = _rcmap_gate(cutoffs, date, grid_step)
-    return run_spectrum(cari, binary, sep.SP_MYMODEL, date, os_name=os_name,
-                        wine=wine, rcmap=rcmap_gate, cutoffs=cutoffs,
-                        tag=tag, verbose=verbose)
+    if rc_targets is None:
+        rc_targets = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
+    from cari7_sep_gate import (_binpath, _run_cari, find_ans,
+                                _diagnose_missing_ans)
+    from cari7_make_input import write_default_inp, patch_cari_ini
+    from cari7_cutoffs import points_for_rc_targets
+    from cari7_parse_ans import parse_ans
+
+    epoch = epoch_file_for_year(int(date[:4]))
+    rcmap = load_cutoff_map(os.path.join(cutoffs, epoch))
+    picks = points_for_rc_targets(rcmap, rc_targets, tol=0.5)
+    if not picks:
+        raise SystemExit("ningun punto del mapa de %s casa con las Rc %s"
+                         % (epoch, rc_targets))
+    points = [(la, lo, alt) for (la, lo, _rc) in picks
+              for alt in sep.ALT_VALUES]
+
+    binpath = _binpath(cari, binary, os_name, wine)
+    env = None
+    prefix = []
+    if wine:
+        prefix = [wine]
+        env = dict(os.environ, WINEDEBUG="-all",
+                   WINEPREFIX=os.path.expanduser("~/.wine-cari7a"))
+    patch_cari_ini(os.path.join(cari, "CARI.INI"), cari, os_name)
+
+    name = "sep_lin.loc" if not tag else "sep_%s.loc" % tag
+    loc = os.path.join(cari, name)
+    with open(loc, "w") as f:
+        f.write("C, puertas de linealidad T5: C7 (MY_MODEL), fecha %s, D2\n"
+                % date)
+        f.write("START-------------------------------------------------\n")
+        for la, lo, alt in points:
+            f.write(sep.sep_loc_line(la, lo, alt, date, sep.SP_MYMODEL) + "\n")
+        f.write("STOP--------------------------------------------------------\n")
+    write_default_inp(0, cari, loc_name=os.path.basename(loc))
+    _run_cari(prefix + [binpath], cari, env, verbose)
+    stem = os.path.splitext(loc)[0]
+    ans = find_ans(cari, stem)
+    if ans is None:
+        _diagnose_missing_ans(cari, loc, stem + ".ans")
+        sys.exit("no se genero el .ANS del LOC %s (¿CARI fallo?)"
+                 % os.path.basename(loc))
+    return {(rc, alt): rate for rc, alt, _hp, rate in parse_ans(ans, 0)}
 
 
 def gate_scale(cari, binary, date, args):
     """dosis(k*F) == k*dosis(F) para k=10 y k=100 (tol 1 %)."""
     rows = power_law_rows(53)
     base = run_rows(cari, binary, rows, date, args.cutoffs, os_name=args.os,
-                    wine=args.wine, verbose=args.verbose,
-                    grid_step=args.grid_step)
+                    wine=args.wine, verbose=args.verbose)
     ok = True
     for k in (10.0, 100.0):
         scaled = run_rows(cari, binary, [(e, k * f) for (e, f) in rows], date,
                           args.cutoffs, os_name=args.os, wine=args.wine,
-                          verbose=args.verbose, grid_step=args.grid_step)
+                          verbose=args.verbose)
         n, mx, mn, minr, maxr, same = scale_metric(base, scaled, k)
         passed = summarize("escalado x%d: dosis(kF)/k vs dosis(F)" % int(k),
                            n, mx, mn, minr, maxr, same, TOL_SCALE)
@@ -273,14 +380,11 @@ def gate_superposition(cari, binary, date, args):
     band_a = band_rows(E_MIN_GEV, mid)
     band_b = band_rows(mid, E_MAX_GEV, include_lo=False)
     a = run_rows(cari, binary, band_a, date, args.cutoffs, os_name=args.os,
-                 wine=args.wine, verbose=args.verbose,
-                 grid_step=args.grid_step)
+                 wine=args.wine, verbose=args.verbose)
     b = run_rows(cari, binary, band_b, date, args.cutoffs, os_name=args.os,
-                 wine=args.wine, verbose=args.verbose,
-                 grid_step=args.grid_step)
+                 wine=args.wine, verbose=args.verbose)
     ab = run_rows(cari, binary, band_a + band_b, date, args.cutoffs,
-                  os_name=args.os, wine=args.wine, verbose=args.verbose,
-                  grid_step=args.grid_step)
+                  os_name=args.os, wine=args.wine, verbose=args.verbose)
     n, mx, mn, minr, maxr, same = superposition_metric(a, b, ab)
     passed = summarize("superposicion: dosis(A+B) vs dosis(A)+dosis(B)",
                        n, mx, mn, minr, maxr, same, TOL_SUPERPOSITION)
@@ -304,11 +408,9 @@ def gate_binning(cari, binary, date, args):
     rows_106 = (gle_rows_from_fixture(fixture, 106) if fixture
                 else power_law_rows(106))
     d53 = run_rows(cari, binary, rows_53, date, args.cutoffs,
-                   os_name=args.os, wine=args.wine, verbose=args.verbose,
-                   grid_step=args.grid_step)
+                   os_name=args.os, wine=args.wine, verbose=args.verbose)
     d106 = run_rows(cari, binary, rows_106, date, args.cutoffs,
-                    os_name=args.os, wine=args.wine, verbose=args.verbose,
-                    grid_step=args.grid_step)
+                    os_name=args.os, wine=args.wine, verbose=args.verbose)
     n, mx, mn, minr, maxr, same = compare_rate_maps(d106, d53)
     passed = summarize("convergencia de binning: 106 bins vs 53 bins"
                        " (espectro %s)"
@@ -361,10 +463,16 @@ def main():
     ap.add_argument("--cari-dir", required=True)
     ap.add_argument("--binary", required=True)
     ap.add_argument("--cutoffs", required=True)
-    ap.add_argument("--date", default="2000/01/00",
-                    help="fecha comun de los LOC (con MY_MODEL no modula)")
+    ap.add_argument("--date", default="2002/01/00",
+                    help="fecha comun de los LOC. La reproduccion C7-vs-C2 solo "
+                         "da ratio 1 en 2002/01/00 (condicion solar del snapshot "
+                         "del BO11_GCR.OUT distribuido; hallazgo de T4); con "
+                         "MY_MODEL la fecha no modula, pero la comparacion "
+                         "contra el camino nativo exige esa fecha.")
     ap.add_argument("--grid-step", type=int, default=4,
-                    help="muestrear el eje Rc cada N pasos (1 = rejilla completa)")
+                    help="muestrear el eje Rc cada N pasos en la puerta de "
+                         "reproduccion (1 = rejilla completa); las puertas 1-3 "
+                         "usan una rejilla fija pequena")
     ap.add_argument("--os", default="unix", choices=["unix", "win"])
     ap.add_argument("--wine", help="ruta a wine para ejecutar el .exe")
     ap.add_argument("--gle-fixture",
@@ -389,8 +497,8 @@ def main():
         if not os.path.exists(req):
             sys.exit("no existe %s (¿distribucion CARI-7A incompleta?)" % req)
 
-    print("### T5: puertas de linealidad (grid_step=%d, date=%s) ###"
-          % (args.grid_step, args.date))
+    print("### T5: puertas de linealidad (date=%s, repro grid_step=%d) ###"
+          % (args.date, args.grid_step))
     results = {}
     results["escalado"] = gate_scale(cari, args.binary, args.date, args)
     results["superposicion"] = gate_superposition(cari, args.binary, args.date,

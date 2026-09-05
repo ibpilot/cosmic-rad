@@ -9,7 +9,7 @@ sobre mapas sinteticos.
 
 Ejecutar desde tools/:  python3 -m unittest test_cari7_sep_linearity -v
 """
-import os, sys, unittest
+import os, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -150,6 +150,70 @@ class TestGleFixtureSpectrum(unittest.TestCase):
         # baseline (conteo de canales positivos coherente).
         rows = lin.gle_rows_from_fixture(FIXTURE_GLE73, 53)
         self.assertTrue(all(f > 0 for _, f in rows))
+
+
+def fake_cari_dir():
+    """Distribucion CARI-7A sintetica: un BO11_GCR.OUT con 100 filas de
+    Z=1..28 (0.01..10000 GeV en Z=1), para probar _write_my_model sin el
+    binario."""
+    d = tempfile.mkdtemp()
+    gcr = os.path.join(d, "GCR_MODELS")
+    os.makedirs(gcr)
+    with open(os.path.join(gcr, "BO11_GCR.OUT"), "w") as f:
+        f.write("2002.041096\n   Z       E            F\n")
+        for z in range(1, 29):
+            for i in range(100):
+                e = 0.01 * (1e6) ** (i / 99.0)   # 0.01 .. 10000 GeV
+                f.write("%4d %10.3E %12.3E\n" % (z, e, 1.0 if z == 1 else 0.0))
+    return d
+
+
+class TestWriteMyModelEstructura(unittest.TestCase):
+    def test_100_filas_por_z(self):
+        # Bug destapado por CI: un MY_MODEL.OUT con malla propia (53 filas en
+        # Z=1) se lee mal por CARI (tasas 0/NaN). La estructura debe ser la del
+        # BO11: 100 filas por Z=1..28.
+        import collections
+        cari = fake_cari_dir()
+        lin._write_my_model(cari, lin.power_law_rows(53))
+        out = os.path.join(cari, "GCR_MODELS", "MY_MODEL.OUT")
+        c = collections.Counter()
+        for line in open(out):
+            t = line.split()
+            if len(t) >= 3 and t[0].isdigit():
+                c[int(t[0])] += 1
+        self.assertEqual(len(c), 28)
+        self.assertTrue(all(v == 100 for v in c.values()),
+                        "cada Z debe tener 100 filas: %s" % dict(c))
+
+    def test_z2_a_28_cero(self):
+        cari = fake_cari_dir()
+        lin._write_my_model(cari, lin.power_law_rows(53))
+        out = os.path.join(cari, "GCR_MODELS", "MY_MODEL.OUT")
+        for line in open(out):
+            t = line.split()
+            if len(t) >= 3 and t[0].isdigit() and int(t[0]) > 1:
+                self.assertEqual(float(t[2]), 0.0)
+
+
+class TestProjectPowerlaw(unittest.TestCase):
+    def test_interpola_en_log_log(self):
+        import math
+        rows = [(0.1, 1.0), (1.0, 1e-3)]       # pendiente -3 en log-log
+        grid = [0.1, 0.316, 1.0]
+        proj = lin._project_powerlaw(rows, grid)
+        # En 0.316 (10^-0.5), F = 10^-0.5*3 = 10^-1.5
+        self.assertAlmostEqual(proj[1][1], 10 ** -1.5, places=3)
+
+    def test_extrapola_con_pendiente_no_plana(self):
+        # La malla del BO11 llega a 10000 GeV; una cola plana ahi daria una
+        # dosis absurda. La extrapolacion debe seguir la ley de potencia.
+        rows = [(0.1, 1e4), (1.0, 1.0)]        # E^-4
+        grid = [1.0, 10.0, 100.0]
+        proj = lin._project_powerlaw(rows, grid)
+        # E^-4: en 10 GeV -> 1e-4, en 100 GeV -> 1e-8
+        self.assertAlmostEqual(proj[1][1], 1e-4, places=6)
+        self.assertAlmostEqual(proj[2][1], 1e-8, places=10)
 
 
 if __name__ == "__main__":
