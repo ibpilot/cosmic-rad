@@ -39,7 +39,8 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  FAA_MVDATES_ZIP: https://www.faa.gov/sites/faa.gov/files/data_research/research/med_humanfacs/aeromedical/MV-DATES.zip
+  # El zip de CARI-7A (que ya incluye SOLARMOD/MV-DATES.L99) se descarga via
+  # la composite action setup-cari7a. La FAA ya no publica MV-DATES.zip suelto.
 
 jobs:
   selftest:
@@ -158,6 +159,8 @@ jobs:
 
   hp-months:
     # Refresco mensual del potencial heliocéntrico (MV-DATES.L99 de la FAA).
+    # La FAA ya no publica MV-DATES.zip suelto: el L99 viaja dentro del zip de
+    # CARI-7A (SOLARMOD/MV-DATES.L99), que setup-cari7a descarga y verifica.
     # needs: assemble — serializa la escritura de index.html. Si un dispatch
     # pide grid+hp a la vez, hp-months espera a que assemble haya commiteado la
     # rejilla; antes ambos jobs reescribían index.html en paralelo y uno pisaba
@@ -177,15 +180,20 @@ jobs:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      # S5: este job descomprime MV-DATES (terceros, sin checksum) y commitea;
-      # sin credenciales persistidas un RCE ahí no obtiene push a main gratis.
+      # S5: este job procesa MV-DATES (terceros, sin checksum propio) y
+      # commitea; sin credenciales persistidas un RCE ahí no obtiene push a
+      # main gratis. El SHA-256 del zip lo verifica setup-cari7a antes de
+      # descomprimir (S2), y update_hp_months.py sanea los valores (S5).
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
         with:
           persist-credentials: false
-      - name: Descargar MV-DATES (FAA)
-        run: curl -sfL -o mv.zip "$FAA_MVDATES_ZIP" && unzip -q mv.zip
+      - name: Setup CARI-7A (descarga + SHA-256, sin selftest)
+        id: cari
+        uses: ./.github/actions/setup-cari7a
+        with:
+          run-selftest: 'false'
       - name: Actualizar HP_MONTHS en index.html
-        run: python3 tools/update_hp_months.py --mv-dates MV-DATES.L99 --index index.html --since 2011
+        run: python3 tools/update_hp_months.py --mv-dates "${{ steps.cari.outputs.cari-dir }}/SOLARMOD/MV-DATES.L99" --index index.html --since 2011
       - name: Commit y push
         run: |
           git config user.name "cosmic-rad-bot"
