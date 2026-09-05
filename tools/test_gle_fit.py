@@ -125,6 +125,18 @@ class TestFitStep(unittest.TestCase):
     def test_umbral_de_estaciones_es_ocho(self):
         self.assertEqual(MIN_STATIONS, 8)
 
+    def test_sin_dependencia_de_la_rigidez_no_es_un_gle(self):
+        # Firma de Forbush: el mismo incremento a toda rigidez -> R0 enorme.
+        # GLE74 daba R0 = 681 GV en su primer paso por la tormenta de mayo 2024.
+        plano = [(rc, 5.0 + 0.001 * rc, 0.0) for rc in RCS]
+        self.assertIsNone(fit_step(plano))
+
+    def test_r0_dentro_del_rango_fisico_se_acepta(self):
+        from gle_fit import R0_MAX_GV
+        self.assertEqual(R0_MAX_GV, 10.0)
+        i0, r0, rms = fit_step(_synth(50.0, 4.0, RCS))
+        self.assertAlmostEqual(r0, 4.0, places=3)
+
 
 class TestStdev(unittest.TestCase):
     def test_serie_plana_no_tiene_ruido(self):

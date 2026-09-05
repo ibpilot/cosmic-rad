@@ -19,6 +19,7 @@ from gle_nmdb import STATIONS, fetch_nmdb
 STEP_MIN = 15
 WINDOW_H = 24.0
 PRE_H = 2.0
+MIN_STEPS = 2         # un perfil de un solo paso no sostiene una cifra de dosis
 
 
 def _t0_dt(t0_iso):
@@ -68,6 +69,7 @@ def build_event(n, t0_iso, series, step_min=STEP_MIN, window_h=WINDOW_H):
 
     steps = int(window_h * 60 // step_min)
     prof = []
+    first_k = None
     for k in range(steps):
         lo = t0 + datetime.timedelta(minutes=k * step_min)
         hi = lo + datetime.timedelta(minutes=step_min)
@@ -85,10 +87,15 @@ def build_event(n, t0_iso, series, step_min=STEP_MIN, window_h=WINDOW_H):
             if prof:
                 break   # el evento ya termino: se corta el perfil
             continue    # todavia no ha empezado
+        if first_k is None:
+            first_k = k
         prof.append([round(fit[0], 3), round(fit[1], 3), round(fit[2], 3)])
 
-    return {"n": n, "t0": t0_iso, "dt": step_min,
-            "q": "ajustado" if prof else "solo evento", "p": prof}
+    if len(prof) < MIN_STEPS:
+        return {"n": n, "t0": t0_iso, "dt": step_min, "q": "solo evento", "p": []}
+    real_t0 = t0 + datetime.timedelta(minutes=first_k * step_min)
+    return {"n": n, "t0": real_t0.strftime("%Y-%m-%dT%H:%MZ"), "dt": step_min,
+            "q": "ajustado", "p": prof}
 
 
 def main():

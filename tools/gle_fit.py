@@ -14,6 +14,8 @@ import math
 MIN_STATIONS = 8      # por debajo de esto el ajuste no es fiable
 MIN_PCT = 0.3         # suelo absoluto, por debajo de esto no hay sennal util
 NSIGMA = 3.0          # umbral en sigmas del ruido de la propia estacion
+R0_MAX_GV = 10.0      # por encima de esto no hay dependencia con la rigidez:
+                      # es un Forbush o ruido de fondo, no un GLE
 
 
 def _dt(iso):
@@ -82,6 +84,8 @@ def fit_step(samples):
 
     i0 = math.exp(intercept)
     r0 = -1.0 / slope
+    if r0 > R0_MAX_GV:
+        return None   # sin dependencia con la rigidez: no es un GLE
     resid = [y - (intercept + slope * x) for x, y in zip(xs, ys)]
     rms = math.sqrt(sum(r * r for r in resid) / n)
     return (i0, r0, rms)

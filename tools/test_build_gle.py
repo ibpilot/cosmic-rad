@@ -58,14 +58,15 @@ class TestBuildEvent(unittest.TestCase):
     def test_promedia_dentro_del_paso_no_coge_la_primera_muestra(self):
         # Paso de 15 min cuyo primer minuto vale la mitad: la media es P, la
         # primera muestra es 0.5P. Con datos de 1 min y un evento que sube
-        # rapido, coger la primera muestra falsea I0.
+        # rapido, coger la primera muestra falsea I0. El evento dura 2 pasos:
+        # con MIN_STEPS = 2, un solo paso ya no produce perfil ajustado.
         target, r0 = 50.0, 2.0
         ser = {}
         for st, rc in STATIONS.items():
             rows = [("2021-10-28 %02d:%02d:00" % (13 + m // 60, m % 60), 100.0)
                     for m in range(120)]
             p = target * math.exp(-rc / r0)
-            for m in range(15):
+            for m in range(30):
                 pct = 0.5 * p if m == 0 else p * (1.0 + 0.5 / 14.0)
                 rows.append(("2021-10-28 %02d:%02d:00" % (15 + (m // 60), m % 60),
                              100.0 * (1.0 + pct / 100.0)))
@@ -95,6 +96,31 @@ class TestBuildEvent(unittest.TestCase):
         for row in self.ev["p"]:
             for v in row:
                 self.assertEqual(v, round(v, 3))
+
+    def test_perfil_de_un_solo_paso_es_solo_evento(self):
+        from build_gle import MIN_STEPS
+        self.assertEqual(MIN_STEPS, 2)
+        ev = build_event(73, "2021-10-28T15:00Z", _series(50.0, 2.0, n_steps=1))
+        self.assertEqual(ev["q"], "solo evento")
+        self.assertEqual(ev["p"], [])
+
+    def test_t0_emitido_es_el_inicio_real_del_perfil(self):
+        # Serie que solo arranca 30 min despues del t0 nominal: el evento
+        # emitido debe declarar las 15:30, no las 15:00, o la app coloca la
+        # dosis 30 min antes de donde ocurrio.
+        i0, r0 = 50.0, 2.0
+        ser = {}
+        for st, rc in STATIONS.items():
+            pct = i0 * math.exp(-rc / r0)
+            rows = [("2021-10-28 %02d:%02d:00" % (13 + m // 60, m % 60), 100.0)
+                    for m in range(120)]
+            for m in range(120):
+                v = 100.0 if m < 30 else 100.0 * (1.0 + pct / 100.0)
+                rows.append(("2021-10-28 %02d:%02d:00" % (15 + (m // 60), m % 60), v))
+            ser[st] = rows
+        ev = build_event(73, "2021-10-28T15:00Z", ser)
+        self.assertEqual(ev["t0"], "2021-10-28T15:30Z")
+        self.assertGreaterEqual(len(ev["p"]), 2)
 
 
 class TestGleList(unittest.TestCase):
