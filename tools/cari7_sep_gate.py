@@ -287,19 +287,33 @@ def main():
                           % (date, n, minr, maxr, mx * 100))
 
             # --- diagnostico: normalizacion fluencia<->flujo SPE ---
-            shutil.copy(os.path.join(gcr, sep.FEB56_FILE), my_model)
-            r7p = run_points(cari, args.binary, sep.SP_MYMODEL, args.date, pts,
-                             os_name=args.os, wine=args.wine,
-                             verbose=args.verbose)
-            r5p = run_points(cari, args.binary, sep.SP_FEB56, args.date, pts,
-                             os_name=args.os, wine=args.wine,
-                             verbose=args.verbose)
-            n, mx, mn, minr, maxr, same = compare_rate_maps(r7p, r5p)
-            if n:
-                rmed = math.sqrt(minr * maxr)
-                print("RATIO_FEB56 = %.6g  (10^%s)  <- MY_MODEL=Feb56SPE.OUT (C7) / Feb56 nativo (C5); "
-                      "1/dur-efectiva si la copia es fluencia (cm-2) leida como flujo (m-2-s-1)"
-                      % (rmed, round(math.log10(rmed)) if rmed > 0 else "?"))
+            # Hallazgo (run T4): copiar Feb56SPE.OUT literal a MY_MODEL.OUT NO
+            # es legible por el lector de MY_MODEL (su linea 2 es un titulo,
+            # no la cabecera de columnas): CARI aborta con forrtl severe(64)
+            # input conversion error. La reproduccion de espectros incorporados
+            # solo es representable en el formato de 2 cabeceras de BO11_GCR.OUT,
+            # asi que este probe es informativo y nunca puede hacer fallar la
+            # puerta: se deja en try/except para no tapar el veredicto de BO'11.
+            try:
+                shutil.copy(os.path.join(gcr, sep.FEB56_FILE), my_model)
+                r7p = run_points(cari, args.binary, sep.SP_MYMODEL, args.date, pts,
+                                 os_name=args.os, wine=args.wine,
+                                 verbose=args.verbose)
+                r5p = run_points(cari, args.binary, sep.SP_FEB56, args.date, pts,
+                                 os_name=args.os, wine=args.wine,
+                                 verbose=args.verbose)
+                n, mx, mn, minr, maxr, same = compare_rate_maps(r7p, r5p)
+                if n:
+                    rmed = math.sqrt(minr * maxr)
+                    print("RATIO_FEB56 = %.6g  (10^%s)  <- MY_MODEL=Feb56SPE.OUT (C7) / Feb56 nativo (C5); "
+                          "1/dur-efectiva si la copia es fluencia (cm-2) leida como flujo (m-2-s-1)"
+                          % (rmed, round(math.log10(rmed)) if rmed > 0 else "?"))
+            except SystemExit as e:
+                print("[feb56] diagnostico no disponible: %s" % e)
+                print("[feb56] hallazgo: CARI no lee Feb56SPE.OUT copiado a MY_MODEL.OUT "
+                      "(linea de titulo en la cabecera); la reproduccion valida es con BO11")
+            except Exception as e:  # pragma: no cover - proteccion frente a cuelgues
+                print("[feb56] diagnostico no disponible (excepcion): %r" % (e,))
     finally:
         if backup:
             shutil.copy(backup, my_model)
