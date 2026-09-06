@@ -21,13 +21,20 @@ este script la incluye para poder correrse autonomo, y el workflow puede
 saltarla con `--skip-reproduction` cuando el gate de T4 ya corrio en el mismo
 job (el plan T5 dice: "El ratio de T4 se reutiliza como primera puerta").
 
-HALLAZGO del run de T5 en CI: el lector de CARI-7A exige que MY_MODEL.OUT
-tenga EXACTAMENTE la estructura del BO11_GCR.OUT (100 filas por Z=1..28, con
-la malla de energia del propio BO11). Un MY_MODEL.OUT con una malla propia de
-53 puntos en Z=1 se lee mal: CARI produce tasas 0/NaN y las puertas fallan con
-ratios nan. Por eso los espectros arbitrarios se PROYECTAN sobre la malla Z=1
-del BO11 antes de escribir el fichero (ver `_write_my_model`). La fecha de la
-reproduccion C7-vs-C2 debe ser 2002/01/00 (snapshot solar del BO11).
+HALLAZGOS de los runs de T5 en CI (los tres hacen falta para que CARI lea un
+MY_MODEL.OUT no-verbatim y devuelva dosis no-cero):
+  1. Estructura: MY_MODEL.OUT debe tener la estructura del BO11_GCR.OUT (100
+     filas por Z=1..28 con la malla de energia del propio BO11). Una malla
+     propia de 53 puntos en Z=1 se lee mal.
+  2. Formato de columnas: cada linea debe tener 26 chars con las columnas del
+     BO11 (Z cols 0-3, E cols 6-14, F cols 17-25). El formato "%4d %10.3E
+     %12.3E" (28 chars) desplaza las columnas y CARI lee el espectro mal.
+  3. Escala: un espectro de prueba que diverge en baja energia (ley de potencia
+     pura proyectada a la malla del BO11, que baja a 0.01 GeV, da ~1e11) satura
+     el transporte y CARI devuelve dosis 0. El espectro base es la forma REAL
+     del GLE73 (fixture de T2) reescalada al regimen del BO11 (max ~400).
+La fecha de la reproduccion C7-vs-C2 debe ser 2002/01/00 (snapshot solar del
+BO11); en otras fechas el camino nativo modula y el ratio deriva.
 
 Uso (CI, con la distribucion CARI-7A ya descargada por setup-cari7a):
     python3 tools/cari7_sep_linearity.py --cari-dir CARI_7A_DVD \
@@ -50,46 +57,49 @@ TOL_REPRODUCTION = 0.05     # 5 % (arrastra el ruido del selftest existente)
 E_MIN_GEV = 0.05
 E_MAX_GEV = 20.0
 
-# Ley de potencia de prueba: F(E) = A * E^-gamma (nucleos/(m2-sr-s-GeV), E GeV).
-# A y gamma en el rango de un GLE real cerca del pico. El valor absoluto no
-# importa: las puertas verifican la LINEALIDAD del transporte, no la dosis.
-BASE_A = 1.0e4
-BASE_GAMMA = 3.5
+# Espectro base de las puertas: la FORMA del GLE73 medida por GOES (fixture de
+# T2), reescalada a la magnitud del espectro GCR que CARI maneja. Una ley de
+# potencia pura (F = A*E^-gamma) DIVERGE en baja energia: proyectada a la malla
+# del BO11 (que baja a 0.01 GeV) da valores ~1e11 que saturan el transporte y
+# CARI devuelve dosis 0 (destapado en CI). La forma real de un GLE tiene pico y
+# no diverge; su escala absoluta no importa para la linealidad, asi que se
+# reescala al orden del BO11 (max ~400) para que el transporte este en el
+# regimen que CARI ya maneja (validado por el selftest y la reproduccion).
+GLE_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                           "fixtures", "goes", "g16_2021-10-28.json")
+REF_FMAX = 400.0            # escala objetivo: ~max del BO11 en Z=1
 
 
-def log_rows(e_lo, e_hi, n_bins, flux_at, include_lo=True, include_hi=True):
-    """Muestrea `flux_at(E)` en n_bins LOGARITMICOS entre e_lo y e_hi (GeV) ->
-    filas (E, F) listas para MY_MODEL.OUT. Si n_bins == 1, un solo punto medio.
-
-    `include_lo`/`include_hi` permiten excluir un extremo: util para concatenar
-    dos bandas contiguas sin duplicar el borde compartido (superposicion)."""
-    if n_bins <= 1:
-        e = math.sqrt(e_lo * e_hi)
-        return [(e, flux_at(e))]
-    lmin, lmax = math.log(e_lo), math.log(e_hi)
-    idxs = [i for i in range(n_bins)
-            if (include_lo or i > 0) and (include_hi or i < n_bins - 1)]
-    return [(math.exp(lmin + (lmax - lmin) * i / (n_bins - 1)),
-             flux_at(math.exp(lmin + (lmax - lmin) * i / (n_bins - 1))))
-            for i in idxs]
-
-
-def power_law(e):
-    return BASE_A * math.pow(e, -BASE_GAMMA)
+def _fixture_shape(n_bins):
+    """Forma del GLE73 (exceso sobre el baseline del dia previo) en n_bins,
+    reescalada para que su maximo sea ~REF_FMAX (regimen del BO11)."""
+    rows = gle_rows_from_fixture(GLE_FIXTURE, n_bins)
+    fmax = max(f for _, f in rows if f > 0)
+    return [(e, f * REF_FMAX / fmax) for e, f in rows]
 
 
 def power_law_rows(n_bins):
-    """Espectro de prueba de ancho completo (ley de potencia) en n_bins log."""
-    return log_rows(E_MIN_GEV, E_MAX_GEV, n_bins, power_law)
+    """Espectro base de ancho completo en n_bins log: la forma del GLE73
+    reescalada (ver REF_FMAX). No es una ley de potencia pura: la forma real no
+    diverge en baja energia y no satura a CARI."""
+    return _fixture_shape(n_bins)
 
 
-def band_rows(e_lo, e_hi, n_bins=8, include_lo=True, include_hi=True):
-    """Ley de potencia confinada a [e_lo, e_hi]: la componente espectral A o B
-    de la superposicion. Fuera de la banda el espectro es cero (no se escribe).
-    `include_hi=False` excluye el borde superior (para que A no duplique el
-    borde compartido con B)."""
-    return log_rows(e_lo, e_hi, n_bins, power_law,
-                    include_lo=include_lo, include_hi=include_hi)
+def band_rows(e_lo, e_hi, n_bins=200, include_lo=True, include_hi=True):
+    """Fraccion espectral A o B de la superposicion: el espectro base confinado
+    a [e_lo, e_hi]. Fuera de la banda el espectro es cero (no se escribe).
+    `include_lo=False` / `include_hi=False` excluyen el borde (para que A y B
+    contiguas no dupliquen el borde compartido)."""
+    full = power_law_rows(n_bins)      # forma fina de referencia
+    out = []
+    for e, f in full:
+        if not include_lo and e <= e_lo:
+            continue
+        if not include_hi and e >= e_hi:
+            continue
+        if e_lo <= e <= e_hi:
+            out.append((e, f))
+    return out
 
 
 def gle_rows_from_fixture(fixture_path, n_bins, baseline_path=None):
@@ -162,8 +172,15 @@ def gle_rows_from_fixture(fixture_path, n_bins, baseline_path=None):
         rows.append((e_gev, float(v) * 1e-2))
     if len(rows) < 5:
         raise SystemExit("fixture GLE con muy pocos canales positivos en el pico")
-    return log_rows(E_MIN_GEV, E_MAX_GEV, n_bins,
-                    _interp_from_rows(rows))
+    # Muestrear la forma interpolada en n_bins log entre E_MIN y E_MAX.
+    flux_at = _interp_from_rows(rows)
+    if n_bins <= 1:
+        return [(math.sqrt(E_MIN_GEV * E_MAX_GEV),
+                 flux_at(math.sqrt(E_MIN_GEV * E_MAX_GEV)))]
+    lmin, lmax = math.log(E_MIN_GEV), math.log(E_MAX_GEV)
+    return [(math.exp(lmin + (lmax - lmin) * i / (n_bins - 1)),
+             flux_at(math.exp(lmin + (lmax - lmin) * i / (n_bins - 1))))
+            for i in range(n_bins)]
 
 
 def _interp_from_rows(rows):
@@ -354,7 +371,15 @@ def run_rows(cari, binary, rows, date, cutoffs, os_name="unix", wine=None,
         _diagnose_missing_ans(cari, loc, stem + ".ans")
         sys.exit("no se genero el .ANS del LOC %s (¿CARI fallo?)"
                  % os.path.basename(loc))
-    return {(rc, alt): rate for rc, alt, _hp, rate in parse_ans(ans, 0)}
+    rates = {}
+    for rc, alt, _hp, rate in parse_ans(ans, 0):
+        rates[(rc, alt)] = rate
+    if verbose and rates:
+        print("[diagnostico] %s: %d puntos; primeras tasas:"
+              % (os.path.basename(ans), len(rates)))
+        for k in sorted(rates)[:5]:
+            print("    Rc=%.2f alt=%.1f -> %s" % (k[0], k[1], rates[k]))
+    return rates
 
 
 def gate_scale(cari, binary, date, args):
@@ -402,24 +427,17 @@ def gate_superposition(cari, binary, date, args):
 def gate_binning(cari, binary, date, args):
     """dosis(53 bins) == dosis(106 bins) sobre un espectro GLE real (tol 1 %).
 
-    El espectro es la FORMA del GLE73 medida por GOES (pico del fixture de T2):
-    si la cuadratura en energia no convergiera al duplicar el numero de bins, el
-    kernel de 53 bins estaria mintiendo justo en el caso que importa."""
-    fixture = args.gle_fixture
-    if fixture and not os.path.exists(fixture):
-        sys.exit("no existe el fixture GLE %s" % fixture)
-    rows_53 = (gle_rows_from_fixture(fixture, 53) if fixture
-               else power_law_rows(53))
-    rows_106 = (gle_rows_from_fixture(fixture, 106) if fixture
-                else power_law_rows(106))
-    d53 = run_rows(cari, binary, rows_53, date, args.cutoffs,
+    El espectro es la FORMA del GLE73 medida por GOES (la misma que usan las
+    otras puertas, reescalada al regimen del BO11): si representar el espectro
+    con 53 muestras no bastara (frente a 106), el kernel de 53 bins estaria
+    mintiendo justo en el caso que importa."""
+    d53 = run_rows(cari, binary, power_law_rows(53), date, args.cutoffs,
                    os_name=args.os, wine=args.wine, verbose=args.verbose)
-    d106 = run_rows(cari, binary, rows_106, date, args.cutoffs,
+    d106 = run_rows(cari, binary, power_law_rows(106), date, args.cutoffs,
                     os_name=args.os, wine=args.wine, verbose=args.verbose)
     n, mx, mn, minr, maxr, same = compare_rate_maps(d106, d53)
     passed = summarize("convergencia de binning: 106 bins vs 53 bins"
-                       " (espectro %s)"
-                       % ("GLE73 fixture" if fixture else "ley de potencia"),
+                       " (espectro GLE73)",
                        n, mx, mn, minr, maxr, same, TOL_BINNING)
     rmed = math.sqrt(minr * maxr) if minr * maxr > 0 else 0.0
     print("BINNING_RATIO = %.6g  (desv max %.4f%%, umbral 1%%)"
@@ -480,13 +498,6 @@ def main():
                          "usan una rejilla fija pequena")
     ap.add_argument("--os", default="unix", choices=["unix", "win"])
     ap.add_argument("--wine", help="ruta a wine para ejecutar el .exe")
-    ap.add_argument("--gle-fixture",
-                    default=os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                         "fixtures", "goes",
-                                         "g16_2021-10-28.json"),
-                    help="fixture GOES del GLE73 (T2) para la forma espectral "
-                         "de la puerta de binning; vacio para usar la ley de "
-                         "potencia sintetica")
     ap.add_argument("--skip-reproduction", action="store_true",
                     help="saltar la puerta 4 (ya la corrio cari7_sep_gate.py "
                          "en el mismo job)")

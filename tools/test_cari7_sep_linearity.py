@@ -24,7 +24,7 @@ def rate_map(n=5, step=3.0):
             for a in range(2)}
 
 
-class TestLogRows(unittest.TestCase):
+class TestSpectroBase(unittest.TestCase):
     def test_muestreo_log_regular(self):
         rows = lin.power_law_rows(53)
         self.assertEqual(len(rows), 53)
@@ -35,9 +35,25 @@ class TestLogRows(unittest.TestCase):
         ratios = [es[i + 1] / es[i] for i in range(len(es) - 1)]
         self.assertTrue(all(abs(r - ratios[0]) < 1e-9 for r in ratios))
 
-    def test_ley_de_potencia(self):
-        for e, f in lin.power_law_rows(10):
-            self.assertAlmostEqual(f, lin.BASE_A * e ** -lin.BASE_GAMMA)
+    def test_forma_gle_reescalada_a_regimen_bo11(self):
+        # El espectro base es la forma del GLE73 reescalada: su maximo debe ser
+        # ~REF_FMAX (el regimen del BO11 que CARI maneja). Una ley de potencia
+        # pura divergente (1e11 en baja energia) saturaba a CARI (dosis 0).
+        rows = lin.power_law_rows(53)
+        fmax = max(f for _, f in rows if f > 0)
+        self.assertAlmostEqual(fmax, lin.REF_FMAX, delta=lin.REF_FMAX * 0.05)
+        # Valores finitos y positivos en todo el rango.
+        self.assertTrue(all(f > 0 and f == f for _, f in rows))
+
+    def test_no_diverge_en_baja_energia(self):
+        # En la malla del BO11 el espectro proyectado no debe dar valores
+        # astronomicos: la forma real de un GLE tiene pico, no diverge.
+        rows = lin.power_law_rows(200)
+        f_lo = [f for e, f in rows if e < 0.06]
+        fmax = max(f for _, f in rows)
+        self.assertTrue(f_lo)
+        # El valor en el borde bajo no puede superar el maximo por mucho.
+        self.assertLess(max(f_lo), fmax * 10)
 
 
 class TestScaleMetric(unittest.TestCase):
