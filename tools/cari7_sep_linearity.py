@@ -511,8 +511,21 @@ def run_sep_net(cari, binary, date, args, rows, tag=None, _gcr_cache=None):
     total = run_rows(cari, binary, rows, date, args.cutoffs, os_name=args.os,
                      wine=args.wine, verbose=args.verbose, tag=tag)
     gcr = _gcr_cache["gcr"]
-    return {k: total[k] - gcr.get(k, 0.0) for k in total
-            if k in gcr and total[k] == total[k] and gcr[k] == gcr[k]}
+    net = {}
+    for k in total:
+        if k not in gcr:
+            continue
+        t, g = total[k], gcr[k]
+        if t != t or g != g:
+            continue          # NaN: punto no medible
+        n = t - g
+        # El neto debe ser positivo y no despreciable frente al total: donde el
+        # SEP aporta <1 % de la dosis, la resta pierde por cancelacion y el
+        # punto no informa sobre la linealidad del SEP (lo descartamos, no es
+        # "no lineal").
+        if n > 0 and n > 0.01 * t:
+            net[k] = n
+    return net
 
 
 def gate_scale(cari, binary, date, args, gcr_cache=None):
