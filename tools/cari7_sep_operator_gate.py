@@ -223,7 +223,7 @@ def _reference_background(cari_dir, binary, cutoffs, date, rcmap):
         full_nodes = common.read_bo11_z1_nodes(bo11)
         write_my_model_z1(bo11, my_model, [0.0] * len(full_nodes))
         return run_spectrum(cari_dir, binary, sep_input.SP_MYMODEL, date,
-                            os_name="unix", wine=None, chunk=150, tag="sep2-bg-g4",
+                            os_name="unix", wine=None, chunk=150, tag="bg",
                             rcmap=rcmap, cutoffs=cutoffs)
     finally:
         if backup:
@@ -251,11 +251,12 @@ def run_gate(args) -> dict:
               "cases": [], "offgrid_cases": [], "g7_cases": []}
 
     if not args.offgrid_only:
+        case_tags = {"gle73": "g4a", "power-law-e-2": "g4b", "broken-law": "g4c", "nodal-seeded": "g4d"}
         for name, spectrum in cases.items():
             _write_my_model_for_rows(cari_dir, energies, spectrum["rows"])
             direct_total = run_spectrum(cari_dir, args.binary, sep_input.SP_MYMODEL, args.date,
                                         os_name="unix", wine=None, chunk=150,
-                                        tag=f"sep2-g4-{name}", rcmap=rcmap, cutoffs=cutoffs)
+                                        tag=case_tags[name], rcmap=rcmap, cutoffs=cutoffs)
             direct = {key: value - background[key] for key, value in direct_total.items()
                       if key in background}
             points = [key for key in direct if key[0] <= common.RC_TARGETS[-1]]
