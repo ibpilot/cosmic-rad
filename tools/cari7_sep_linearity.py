@@ -317,17 +317,16 @@ def _write_my_model(cari, rows):
     return dst
 
 
-def run_rows(cari, binary, rows, date, cutoffs, os_name="unix", wine=None,
-             verbose=False, rc_targets=None, tag=None):
-    """Escribe MY_MODEL.OUT con `rows` y corre CARI (campo C7) sobre un
-    subconjunto reducido de Rc x las 11 altitudes.
+def _run_current_my_model(cari, binary, date, cutoffs, os_name="unix",
+                          wine=None, verbose=False, rc_targets=None, tag=None):
+    """Corre CARI (campo C7 = MY_MODEL.OUT, en su estado actual) sobre un
+    subconjunto reducido de Rc x las 11 altitudes. Devuelve
+    { (rc_gv, alt_km): rate_usvh }.
 
     A diferencia de `run_spectrum` (que barre ~150 objetivos del eje, ~1350
     puntos), las puertas de linealidad usan una rejilla PEQUENA fija
     (`rc_targets`, por defecto 9 valores de Rc repartidos): la linealidad se
-    verifica por punto, no hace falta barrer todo el eje. Devuelve
-    { (rc_gv, alt_km): rate_usvh }."""
-    _write_my_model(cari, rows)
+    verifica por punto, no hace falta barrer todo el eje."""
     if rc_targets is None:
         rc_targets = [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0]
     from cari7_sep_gate import (_binpath, _run_cari, find_ans,
@@ -380,6 +379,47 @@ def run_rows(cari, binary, rows, date, cutoffs, os_name="unix", wine=None,
         for k in sorted(rates)[:5]:
             print("    Rc=%.2f alt=%.1f -> %s" % (k[0], k[1], rates[k]))
     return rates
+
+
+def run_rows(cari, binary, rows, date, cutoffs, os_name="unix", wine=None,
+             verbose=False, rc_targets=None, tag=None):
+    """Escribe MY_MODEL.OUT con `rows` y corre CARI (campo C7) sobre la rejilla
+    reducida. Devuelve { (rc_gv, alt_km): rate_usvh }."""
+    _write_my_model(cari, rows)
+    return _run_current_my_model(cari, binary, date, cutoffs, os_name=os_name,
+                                 wine=wine, verbose=verbose,
+                                 rc_targets=rc_targets, tag=tag)
+
+
+def control_bo11(cari, binary, date, args):
+    """Sonda de diagnostico: corre por el MISMO camino que las puertas 1-3
+    (run_rows / _run_current_my_model) un MY_MODEL.OUT = copia literal del
+    BO11_GCR.OUT. La reproduccion (puerta 4) demuestra que ese espectro da
+    dosis normales por `run_spectrum`; si este control diera 0, el bug estaria
+    en el LOC/parseo de las puertas 1-3, no en el espectro arbitrario."""
+    gcr = os.path.join(cari, "GCR_MODELS")
+    my_model = os.path.join(gcr, sep.MY_MODEL_NAME)
+    backup = None
+    if os.path.exists(my_model):
+        backup = my_model + ".bak_ctrl"
+        shutil.copy(my_model, backup)
+    try:
+        shutil.copy(os.path.join(gcr, sep.BO11_FILE), my_model)
+        rates = _run_current_my_model(cari, binary, date, args.cutoffs,
+                                      os_name=args.os, wine=args.wine,
+                                      verbose=args.verbose)
+        nz = sum(1 for v in rates.values() if v and v == v)
+        print("[control] MY_MODEL=BO11 literal por el camino de puertas 1-3: "
+              "%d puntos, %d no-cero" % (len(rates), nz))
+        if rates:
+            k = sorted(rates)[0]
+            print("[control] primera tasa: Rc=%.2f alt=%.1f -> %s"
+                  % (k[0], k[1], rates[k]))
+        return nz > 0
+    finally:
+        if backup:
+            shutil.copy(backup, my_model)
+            os.remove(backup)
 
 
 def gate_scale(cari, binary, date, args):
@@ -501,6 +541,9 @@ def main():
     ap.add_argument("--skip-reproduction", action="store_true",
                     help="saltar la puerta 4 (ya la corrio cari7_sep_gate.py "
                          "en el mismo job)")
+    ap.add_argument("--skip-control", action="store_true",
+                    help="saltar la sonda de diagnostico (MY_MODEL=BO11 por el "
+                         "camino de las puertas 1-3)")
     ap.add_argument("--verbose", action="store_true",
                     help="mostrar el stdout/stderr completo del binario CARI")
     args = ap.parse_args()
@@ -515,6 +558,13 @@ def main():
 
     print("### T5: puertas de linealidad (date=%s, repro grid_step=%d) ###"
           % (args.date, args.grid_step))
+    # Sonda: MY_MODEL=BO11 literal por el camino de las puertas 1-3. Si diera 0,
+    # el bug estaria en ese camino (LOC/parseo), no en el espectro arbitrario.
+    if not args.skip_control:
+        try:
+            control_bo11(cari, args.binary, args.date, args)
+        except SystemExit as e:
+            print("[control] fallo: %s" % e)
     results = {}
     results["escalado"] = gate_scale(cari, args.binary, args.date, args)
     results["superposicion"] = gate_superposition(cari, args.binary, args.date,
