@@ -189,6 +189,22 @@ def read_measurement_files(paths: Iterable[str], *, expected_kind: str | None = 
     return rows
 
 
+def _output_resolution(rate: float, fallback: float = common.OUTPUT_RESOLUTION_USVH) -> float:
+    """Cuantización real de la última cifra que CARI escribe en el .ANS.
+
+    CARI imprime la tasa con cinco cifras significativas (p. ej. 2.1036E+00),
+    así que para un valor ~2 µSv/h la última cifra vale 1e-4, no 1e-6.  Usar la
+    constante 1e-6 como resolución subestima el ruido de cuantización ~100x y
+    hace que celdas débiles pero resolubles parezcan no lineales entre
+    amplitudes.  La resolución derivada es la que la spec 7.2 pide medir.
+    """
+    if not math.isfinite(rate) or rate <= 0:
+        return fallback
+    exponent = math.floor(math.log10(rate))
+    # Cinco cifras significativas: el último dígito cae en 10^(exponente-4).
+    return max(10.0 ** (exponent - 4), fallback)
+
+
 def write_measurements(
     path: str,
     rates: Mapping[tuple[float, float], float],
@@ -215,7 +231,8 @@ def write_measurements(
                 "rc_gv": _format_float(rc),
                 "altitude_km": _format_float(altitude),
                 "total_rate_usvh": _format_float(rate),
-                "output_resolution_usvh": _format_float(output_resolution_usvh),
+                "output_resolution_usvh": _format_float(
+                    _output_resolution(rate, output_resolution_usvh)),
             }
             writer.writerow(values)
 

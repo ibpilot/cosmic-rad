@@ -393,5 +393,25 @@ class TestArtifactSerialization(unittest.TestCase):
         self.assertEqual(values, unpacked)
 
 
+class TestOutputResolution(unittest.TestCase):
+    def test_five_significant_digits_resolution(self):
+        # CARI escribe 5 cifras significativas (2.1036E+00): la última cifra de
+        # un valor ~2 uSv/h vale 1e-4. Usar 1e-6 subestima la cuantización 100x.
+        self.assertEqual(operator._output_resolution(2.1036), 1e-4)
+        self.assertEqual(operator._output_resolution(6.3485), 1e-4)
+        self.assertEqual(operator._output_resolution(0.5), 1e-5)
+        self.assertEqual(operator._output_resolution(100.0), 1e-2)
+
+    def test_non_positive_rates_fall_back(self):
+        self.assertEqual(operator._output_resolution(0.0), common.OUTPUT_RESOLUTION_USVH)
+        self.assertEqual(operator._output_resolution(-1.0), common.OUTPUT_RESOLUTION_USVH)
+        self.assertEqual(operator._output_resolution(float("inf")), common.OUTPUT_RESOLUTION_USVH)
+
+    def test_fallback_resolution_caps_low_rates(self):
+        # Un valor diminuto no puede afirmar una resolución mejor que el suelo
+        # configurado: la cota nunca baja de OUTPUT_RESOLUTION_USVH.
+        self.assertEqual(operator._output_resolution(1e-9), common.OUTPUT_RESOLUTION_USVH)
+
+
 if __name__ == "__main__":
     unittest.main()
