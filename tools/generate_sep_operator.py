@@ -283,9 +283,15 @@ def _run_cari_grid(cari: str, binary: str, cutoffs: str, date: str,
         targets = {round(0.25 * i, 2) for i in range(len(common.RC_TARGETS)) if i % 8 == 0}
         rcmap = {key: value for key, value in rcmap.items()
                  if any(abs(value - target) <= 0.25 for target in targets)}
-    return run_spectrum(cari, binary, sep.SP_MYMODEL, date, os_name="unix",
-                        wine=None, chunk=150, tag=tag, rcmap=rcmap,
-                        cutoffs=cutoffs, verbose=verbose)
+    rates = run_spectrum(cari, binary, sep.SP_MYMODEL, date, os_name="unix",
+                         wine=None, chunk=150, tag=tag, rcmap=rcmap,
+                         cutoffs=cutoffs, verbose=verbose)
+    # The IGRF2010 cutoff map exceeds the artefact domain (up to ~17.64 GV),
+    # so the raw sweep can return points above RC_TARGETS[-1].  Those rows are
+    # not part of the sep-2 contract; the strict CSV parser rejects them, so
+    # drop them here instead of failing the whole column.
+    max_rc = common.RC_TARGETS[-1]
+    return {key: value for key, value in rates.items() if key[0] <= max_rc}
 
 
 def _linear_interpolation_bound(points: Sequence[Measurement], hi: int) -> float:
