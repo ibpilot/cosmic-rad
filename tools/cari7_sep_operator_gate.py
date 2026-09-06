@@ -34,9 +34,17 @@ FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 def _spectrum_cases(energies):
+    from cari7_sep_linearity import REF_E_GEV, REF_FSEP
+
     gle_rows = gle_rows_from_fixture(FIXTURE, max(64, len(energies)))
     gle_flux = _interp_from_rows(gle_rows)
-    gle = [(float(energy), float(gle_flux(energy))) for energy in energies]
+    # La forma cruda del fixture (exceso GOES en pfu) es ~1e-9 en 1 GeV: 11
+    # ordenes por debajo del regimen dosimetrico. Sin reescala, la dosis SEP
+    # directa de CARI cae en el ruido de la resta total-fondo y G4 no puede
+    # comparar al 5 %. Se ancla en F(REF_E_GEV)=REF_FSEP (la misma convencion
+    # documentada en cari7_sep_linearity para que el SEP compita con el GCR).
+    scale = REF_FSEP / gle_flux(REF_E_GEV)
+    gle = [(float(energy), float(gle_flux(energy)) * scale) for energy in energies]
     power = [(float(energy), 100.0 * float(energy) ** -2.0) for energy in energies]
     broken = [(float(energy), 100.0 * (float(energy) ** -1.2 if energy <= 1.0
                                       else 1.0 ** -1.2 * (float(energy) / 1.0) ** -5.0))
@@ -44,7 +52,7 @@ def _spectrum_cases(energies):
     rng = random.Random(20260906)
     nodal = [(float(energy), 25.0 + 150.0 * rng.random()) for energy in energies]
     return {
-        "gle73": {"type": "gle", "rows": gle},
+        "gle73": {"type": "gle", "scale": scale, "rows": gle},
         "power-law-e-2": {"type": "power", "scale": 100.0, "rows": power},
         "broken-law": {"type": "broken", "scale": 100.0, "pivot": 1.0, "rows": broken},
         "nodal-seeded": {"type": "nodal", "rows": nodal},
