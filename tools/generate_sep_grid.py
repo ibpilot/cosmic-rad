@@ -32,7 +32,7 @@ backtesting, donde compara el kernel contra la corrida directa de CARI.
 
 Uso (CI, distro CARI-7A de setup-cari7a):
     # un job por columna del kernel (53 en paralelo) + un job de fondo:
-    python3 tools/generate_sep_grid.py column --bin 12 --amp 10 \
+    python3 tools/generate_sep_grid.py column --bin 12 --amp 1000 \
         --cari-dir CARI_7A_DVD --binary "cari7a_4.2.0(intel_linux)" \
         --cutoffs CARI_7A_DVD/CUTOFFS --out rates_k12.csv
     python3 tools/generate_sep_grid.py bg \
@@ -40,7 +40,7 @@ Uso (CI, distro CARI-7A de setup-cari7a):
         --cutoffs CARI_7A_DVD/CUTOFFS --out rates_bg.csv
     # ensamblado (sin CARI); --amp debe coincidir con el de las columnas:
     python3 tools/generate_sep_grid.py assemble --rates "rates_k*.csv" \
-        --bg rates_bg.csv --amp 10 --out sep_grid.js
+        --bg rates_bg.csv --amp 1000 --out sep_grid.js
 """
 import argparse, base64, math, os, struct, sys
 
@@ -309,6 +309,13 @@ def assemble_kernel(column_csvs, bg_rows, amp,
             continue
         base = j * n_rc * n_alt
         for i, v in enumerate(floats):
+            # La interpolacion entre un neto ~0 y un residuo negativo de la
+            # resta total-fondo (ruido float ~1e-16) puede dejar valores
+            # negativos diminutos. No son fisica: la celda del kernel es una
+            # dosis por pfu, que no puede ser negativa. Se saturan a 0 (el
+            # punto queda como 'no medido').
+            if v != v or v < 0:
+                v = 0.0
             kernel[base + i] = v
             if v <= 0:
                 nulos += 1
@@ -353,8 +360,10 @@ def main():
 
     p_col = sub.add_parser("column", help="correr la columna del kernel de un bin")
     p_col.add_argument("--bin", type=int, required=True)
-    p_col.add_argument("--amp", type=float, default=10.0,
-                       help="pfu integrados del espectro base (escala de medida)")
+    p_col.add_argument("--amp", type=float, default=1000.0,
+                       help="pfu integrados del espectro base (escala de "
+                            "medida; alta para que el neto domine sobre el "
+                            "ruido de la resta total-fondo)")
     p_col.add_argument("--cari-dir", required=True)
     p_col.add_argument("--binary", required=True)
     p_col.add_argument("--cutoffs", required=True)
@@ -376,7 +385,7 @@ def main():
     p_as.add_argument("--rates", required=True,
                       help="patron glob de los CSV de columnas")
     p_as.add_argument("--bg", required=True, help="CSV del fondo GCR")
-    p_as.add_argument("--amp", type=float, default=10.0,
+    p_as.add_argument("--amp", type=float, default=1000.0,
                       help="pfu integrados de cada base (debe coincidir con "
                            "el --amp de las columnas)")
     p_as.add_argument("--out", required=True)

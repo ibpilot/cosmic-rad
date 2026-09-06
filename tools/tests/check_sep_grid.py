@@ -112,37 +112,64 @@ def main():
     if n_neg:
         sys.exit("%d negativos en el kernel" % n_neg)
 
-    # --- monotonía esperada (por columna E, misma posicion) ---
-    # Orden: E-major -> Rc -> alt. Para una columna fija j, el bloque de
-    # n_rc*n_alt va rc-major -> alt.
+    # --- monotonía esperada (sobre ESPECTROS reconstruidos) ---
+    # El plan T6: "a igual espectro, más altitud => más dosis; más Rc => menos
+    # dosis". Esa propiedad se pide al kernel cuando reconstruye un espectro
+    # de ancho completo (lo que el runtime hace), no a cada columna
+    # monoenergetica por separado: la respuesta de un protón de baja energia
+    # (~60-300 MeV) no es monotona con la altitud (se frena en la atmosfera y
+    # su deposito tiene estructura), asi que exigir monotonia columna a
+    # columna daria falsos fallos. Se prueban 3 espectros fisicos (ley de
+    # potencia E^-gamma, gamma=1,2,4: blando, medio, duro) y se integran
+    # contra el kernel; la dosis resultante debe subir con la altitud y bajar
+    # con la Rc en todo el dominio.
+    import math
+    n_rcx = n_rc * n_alt
+
+    def dosis_espectro(gamma):
+        """Dosis en cada (rc, alt) del espectro E^-gamma integrado por bins.
+        Devuelve {ri: [dosis por alt]} (73 x 11)."""
+        # Los centros e[] son geometricos (razon q constante entre bins); el
+        # borde entre el bin j y j+1 es sqrt(e[j]*e[j+1]) y los extremos se
+        # extrapolan con la misma razon.
+        q = e[1] / e[0]
+        out = [[0.0] * n_alt for _ in range(n_rc)]
+        for j in range(n_e):
+            a = e[j] / math.sqrt(q) if j == 0 else math.sqrt(e[j - 1] * e[j])
+            b = e[j] * math.sqrt(q) if j == n_e - 1 else math.sqrt(e[j] * e[j + 1])
+            # flujo integrado del bin (E^-gamma dE)
+            if gamma == 1.0:
+                flujo = math.log(b / a)
+            else:
+                flujo = (b ** (1 - gamma) - a ** (1 - gamma)) / (1 - gamma)
+            base = j * n_rcx
+            for ri in range(n_rc):
+                for ai in range(n_alt):
+                    out[ri][ai] += flujo * floats[base + ri * n_alt + ai]
+        return out
+
     bad = 0
-    n_alt_good = n_alt_bad = 0
-    for j in range(n_e):
-        base = j * n_rc * n_alt
+    for gamma in (1.0, 2.0, 4.0):
+        d = dosis_espectro(gamma)
+        # mas altitud -> mas dosis (en cada Rc)
         for ri in range(n_rc):
-            slice_alt = [floats[base + ri * n_alt + ai] for ai in range(n_alt)]
-            # mas altitud -> mas o igual dosis
             for ai in range(n_alt - 1):
-                if slice_alt[ai + 1] < slice_alt[ai]:
-                    # tolerancia: ruido de CARI en la cola (~0.1 %) o punto
-                    # geomagneticamente nulo (0) puede dar un escalon tiny
-                    if slice_alt[ai] > 0 and \
-                       (slice_alt[ai] - slice_alt[ai + 1]) > 0.01 * slice_alt[ai]:
-                        bad += 1
-            # mas Rc -> menos o igual dosis (por columna alt)
+                a, b = d[ri][ai], d[ri][ai + 1]
+                if a > 0 and (b - a) < -0.01 * a:
+                    bad += 1
+        # mas Rc -> menos dosis (en cada altitud)
         for ai in range(n_alt):
-            slice_rc = [floats[base + ri * n_alt + ai] for ri in range(n_rc)]
             for ri in range(n_rc - 1):
-                if slice_rc[ri + 1] > slice_rc[ri]:
-                    if slice_rc[ri] > 0 and \
-                       (slice_rc[ri + 1] - slice_rc[ri]) > 0.01 * slice_rc[ri]:
-                        bad += 1
+                a, b = d[ri][ai], d[ri + 1][ai]
+                if a > 0 and (b - a) > 0.01 * a:
+                    bad += 1
     if bad:
-        sys.exit("%d violaciones de monotonia (>1 %%)" % bad)
+        sys.exit("%d violaciones de monotonia sobre espectros reconstruidos "
+                 "(>1 %%)" % bad)
 
     n_zero = sum(1 for v in floats if v == 0)
-    print("CHECK SEP GRID OK: %dx%dx%dx%d, version %s, %d zeros, monotonia OK"
-          % (n_e, n_rc, n_alt, n_q, version, n_zero))
+    print("CHECK SEP GRID OK: %dx%dx%dx%d, version %s, %d zeros, monotonia OK "
+          "(3 espectros E^-1/E^-2/E^-4)" % (n_e, n_rc, n_alt, n_q, version, n_zero))
 
 
 if __name__ == "__main__":
