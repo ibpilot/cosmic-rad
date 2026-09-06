@@ -196,5 +196,21 @@ ok("tormenta (>=10 pfu) da su nivel", (function () {
   return st.level === "S3" && st.quiet === false && st.kind === "storm";
 })());
 
+console.log("swpcAgeText");
+ok("90 s es 1 min", ctx.swpcAgeText(90000) === "1 min");
+ok("119999 ms es 1 min (piso, no redondeo)", ctx.swpcAgeText(119999) === "1 min");
+ok("marca de tiempo futura es cadena vacia", ctx.swpcAgeText(-1000) === "");
+ok("60 min justos es 1 h", ctx.swpcAgeText(3600000) === "1 h");
+ok("100 min es 1 h (piso, no redondeo)", ctx.swpcAgeText(6000000) === "1 h");
+
+console.log("swpcAgeLabel");
+ok("ES compone hace delante del valor", ctx.swpcAgeLabel("hace {age}", 90000) === "hace 1 min");
+ok("EN compone ago detras del valor", ctx.swpcAgeLabel("{age} ago", 90000) === "1 min ago");
+ok("marca de tiempo futura compone cadena vacia", ctx.swpcAgeLabel("hace {age}", -1000) === "");
+ok("las plantillas ES y EN llevan el hueco {age}", (function () {
+  const es = ctx.LANG.es.gleRtAge, en = ctx.LANG.en.gleRtAge;
+  return String(es).indexOf("{age}") !== -1 && String(en).indexOf("{age}") !== -1;
+})());
+
 console.log("\n" + pass + " pass, " + fail + " fail");
 process.exit(fail ? 1 : 0);
