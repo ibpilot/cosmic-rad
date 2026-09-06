@@ -416,7 +416,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.11";
+var APP_VERSION = "1.12";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -1461,6 +1461,13 @@ function _loadOpenFlights() {
           lines = text.split("\n");
           extended = _objectSpread({}, AIRPORTS); // keep local overrides
           newIcao = Object.create(null); // S5: claves ICAO de terceros, null-proto
+          // OpenFlights conserva algunos ICAO obsoletos (Lima figura como SPIM).
+          // Sembrar primero los aliases curados evita perder SPJC al sustituir
+          // el mapa tras la descarga; los códigos antiguos siguen entrando como aliases.
+          Object.entries(AIRPORTS).forEach(function (_ref3) {
+            var _ref4 = _slicedToArray(_ref3, 2), iata = _ref4[0], airport = _ref4[1];
+            if (airport.icao) newIcao[airport.icao] = iata;
+          });
           added = 0;
           _iterator = _createForOfIteratorHelper(lines);
           _context.p = 4;

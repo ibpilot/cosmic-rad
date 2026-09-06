@@ -592,5 +592,43 @@ console.log("\nS5/B3 — el textarea de la ruta tiene tope");
   ok("maxLength 4000 en el textarea", /maxLength: 4000,/.test(html));
 }
 
-console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");
-process.exit(fail === 0 ? 0 : 1);
+async function testRouteImportKeepsCuratedIcaoAliases() {
+  console.log("\nB28 — importar FPL sin origen conserva el ICAO curado tras cargar OpenFlights");
+
+  // OpenFlights todavía publica Lima como SPIM. La app usa el ICAO vigente
+  // SPJC en su base curada, que debe seguir resolviéndose tras la carga remota.
+  ctx.fetch = async function () {
+    return {
+      ok: true,
+      text: async function () {
+        return [
+          '1,"Jorge Chavez International Airport","Lima","Peru","LIM","SPIM",-12.0219,-77.1143',
+          '2,"Barcelona International Airport","Barcelona","Spain","BCN","LEBL",41.2971,2.07846'
+        ].join("\n");
+      }
+    };
+  };
+  await new Promise(function (resolve) { ctx.loadOpenFlights(resolve); });
+  ctx.FIXES = ctx.sanitizeFixes(JSON.parse(fs.readFileSync(path.join(REPO, "fixes.json"), "utf8")));
+
+  const route = "SPJC16L.LIMA5F.OPROS.UL306.VADOS.UM527.SIGOB.UM527.DALIV..VUKEB. " +
+    "UM527.UMREM.UM527.TRAPP..10N055W.15N050W..PAPSE..20N045W.24N040W. " +
+    "28N035W.31N030W.3530N02000W..KOMUT..DIRMA..ADORO..FITSE..DGO.N725. " +
+    "YAKXU..ELSAP..VAKIN.N725.DIRMU..LOBAR.LOBAR2W.LEBL24R";
+  const parsed = ctx.parseRouteString(route, "", "", "F350");
+  const calculated = ctx.calcTrack(parsed.track, 650, null);
+
+  ok("SPJC se detecta como LIM con los campos vacíos", parsed.routeOrig === "LIM", parsed.routeOrig);
+  ok("LEBL se detecta como BCN", parsed.routeDest === "BCN", parsed.routeDest);
+  ok("la ruta queda anclada en Lima (27 puntos)", parsed.resolved === 27, parsed.resolved);
+  ok("la distancia es 10.100 km, no 13.499 km", calculated && calculated.distKm === 10100,
+     calculated && calculated.distKm);
+}
+
+testRouteImportKeepsCuratedIcaoAliases().then(function () {
+  console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");
+  process.exit(fail === 0 ? 0 : 1);
+}).catch(function (err) {
+  console.error(err);
+  process.exit(1);
+});
