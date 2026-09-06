@@ -36,23 +36,27 @@ class TestSpectroBase(unittest.TestCase):
         self.assertTrue(all(abs(r - ratios[0]) < 1e-9 for r in ratios))
 
     def test_forma_gle_reescalada_a_regimen_bo11(self):
-        # El espectro base es la forma del GLE73 reescalada: su maximo debe ser
-        # ~REF_FMAX (el regimen del BO11 que CARI maneja). Una ley de potencia
-        # pura divergente (1e11 en baja energia) saturaba a CARI (dosis 0).
+        # El espectro base es la forma del GLE73 reescalada para que F(1 GeV) ~
+        # REF_FSEP: ahi compite con el GCR del BO11 (que en Z=1 vale ~400) y el
+        # cambio de dosis es medible. Normalizar al maximo (a ~80 MeV, donde el
+        # GCR contribuye poco) dejaba el SEP despreciable en las energias que
+        # dominan la dosis (puntos=0 al filtrar netos <1 %).
         rows = lin.power_law_rows(53)
-        fmax = max(f for _, f in rows if f > 0)
-        self.assertAlmostEqual(fmax, lin.REF_FMAX, delta=lin.REF_FMAX * 0.05)
+        f_1gev = next(f for e, f in rows if e >= lin.REF_E_GEV)
+        self.assertAlmostEqual(f_1gev, lin.REF_FSEP, delta=lin.REF_FSEP * 0.05)
         # Valores finitos y positivos en todo el rango.
         self.assertTrue(all(f > 0 and f == f for _, f in rows))
 
     def test_no_diverge_en_baja_energia(self):
         # En la malla del BO11 el espectro proyectado no debe dar valores
-        # astronomicos: la forma real de un GLE tiene pico, no diverge.
+        # astronomicos (1e11 saturaba a CARI): la forma real de un GLE tiene
+        # pico finito (~2.6e5 a 80 MeV, orden de un GLE intenso) y no diverge.
         rows = lin.power_law_rows(200)
-        f_lo = [f for e, f in rows if e < 0.06]
         fmax = max(f for _, f in rows)
+        self.assertTrue(fmax < 1e7, "pico del SEP demasiado alto: %g" % fmax)
+        # El borde bajo (0.05 GeV) tiene el pico o menos, nunca lo supera mucho.
+        f_lo = [f for e, f in rows if e < 0.06]
         self.assertTrue(f_lo)
-        # El valor en el borde bajo no puede superar el maximo por mucho.
         self.assertLess(max(f_lo), fmax * 10)
 
 

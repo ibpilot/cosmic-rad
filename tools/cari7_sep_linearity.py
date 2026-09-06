@@ -58,29 +58,35 @@ E_MIN_GEV = 0.05
 E_MAX_GEV = 20.0
 
 # Espectro base de las puertas: la FORMA del GLE73 medida por GOES (fixture de
-# T2), reescalada a la magnitud del espectro GCR que CARI maneja. Una ley de
-# potencia pura (F = A*E^-gamma) DIVERGE en baja energia: proyectada a la malla
-# del BO11 (que baja a 0.01 GeV) da valores ~1e11 que saturan el transporte y
-# CARI devuelve dosis 0 (destapado en CI). La forma real de un GLE tiene pico y
-# no diverge; su escala absoluta no importa para la linealidad, asi que se
-# reescala al orden del BO11 (max ~400) para que el transporte este en el
-# regimen que CARI ya maneja (validado por el selftest y la reproduccion).
+# T2), reescalada para que sea dosimetricamente relevante frente al GCR. Una
+# ley de potencia pura (F = A*E^-gamma) DIVERGE en baja energia: proyectada a la
+# malla del BO11 (que baja a 0.01 GeV) da valores ~1e11 que saturan el
+# transporte y CARI devuelve dosis 0 (destapado en CI). La forma real de un GLE
+# tiene pico y no diverge.
+#
+# Escala: normalizar al MAXIMO de la forma (que esta a ~80 MeV, donde el GCR
+# contribuye poco a la dosis) hace que el SEP sea despreciable frente al GCR en
+# las energias que dominan la dosis (~0.1-1 GeV) y las puertas no miden nada
+# (puntos=0 al filtrar netos <1 % del total). Se normaliza para que el SEP valga
+# REF_FSEP en 1 GeV: ahi compite con el GCR del BO11 (~400 en Z=1) y el cambio
+# de dosis es medible. La escala absoluta no importa para la linealidad.
 GLE_FIXTURE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "fixtures", "goes", "g16_2021-10-28.json")
-REF_FMAX = 400.0            # escala objetivo: ~max del BO11 en Z=1
+REF_FSEP = 400.0           # F_SEP(1 GeV): compite con el GCR (~400 en Z=1)
+REF_E_GEV = 1.0
 
 
 def _fixture_shape(n_bins):
     """Forma del GLE73 (exceso sobre el baseline del dia previo) en n_bins,
-    reescalada para que su maximo sea ~REF_FMAX (regimen del BO11)."""
+    reescalada para que F(REF_E_GEV) ~ REF_FSEP (regimen del GCR a 1 GeV)."""
     rows = gle_rows_from_fixture(GLE_FIXTURE, n_bins)
-    fmax = max(f for _, f in rows if f > 0)
-    return [(e, f * REF_FMAX / fmax) for e, f in rows]
+    f_ref = next(f for e, f in rows if e >= REF_E_GEV)
+    return [(e, f * REF_FSEP / f_ref) for e, f in rows]
 
 
 def power_law_rows(n_bins):
     """Espectro base de ancho completo en n_bins log: la forma del GLE73
-    reescalada (ver REF_FMAX). No es una ley de potencia pura: la forma real no
+    reescalada (ver REF_FSEP). No es una ley de potencia pura: la forma real no
     diverge en baja energia y no satura a CARI."""
     return _fixture_shape(n_bins)
 
