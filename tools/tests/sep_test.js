@@ -183,5 +183,18 @@ ok("S4 en 10000 pfu", ctx.swpcLevel(10000) === "S4");
 ok("S5 en 100000 pfu", ctx.swpcLevel(100000) === "S5");
 ok("flujo invalido no pinta nada", ctx.swpcLevel(NaN) === "");
 
+console.log("swpcCardState");
+ok("sin datos (null) es nodata", ctx.swpcCardState(null).kind === "nodata");
+ok("flujo no finito es nodata",
+   ctx.swpcCardState({fluxPfu: Infinity, fetchedMs: 0}).kind === "nodata");
+ok("tranquilo (<10 pfu) es S0 quiet", (function () {
+  const st = ctx.swpcCardState({fluxPfu: 0.76, fetchedMs: 0});
+  return st.level === "S0" && st.quiet === true && st.kind === "quiet";
+})());
+ok("tormenta (>=10 pfu) da su nivel", (function () {
+  const st = ctx.swpcCardState({fluxPfu: 5000, fetchedMs: 0});
+  return st.level === "S3" && st.quiet === false && st.kind === "storm";
+})());
+
 console.log("\n" + pass + " pass, " + fail + " fail");
 process.exit(fail ? 1 : 0);
