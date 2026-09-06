@@ -220,7 +220,7 @@ jobs:
           python3 tools/tests/check_sep_operator.py --index index.html --require-43
           python3 tools/embed_sep_runtime.py --check
           node tools/tests/sep_operator_test.js
-          node -e 'const fs=require("fs"),vm=require("vm"),h=fs.readFileSync("index.html","utf8");let n=0;for(const s of h.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)){if(!s[0].includes("src=")){n++;new vm.Script(s[1]);}}console.log("SYNTAX OK ("+n+")")'
+          node -e 'const fs=require("fs"),vm=require("vm"),h=fs.readFileSync("index.html","utf8");let n=0;for(const s of h.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)){if(!s[0].includes("src=")){n++;new vm.Script(s[1]);}}if(n===0){throw new Error("ningun script inline encontrado")};console.log("SYNTAX OK ("+n+")")'
           python3 -m unittest tools.test_cari7_sep_operator -v
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
