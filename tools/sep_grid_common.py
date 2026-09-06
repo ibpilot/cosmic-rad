@@ -34,6 +34,12 @@ QUANTITIES = ["D2"]
 RATE_UNIT = "uSv/h per pfu"
 FLUX_UNIT = "nuclei/(m2-sr-s-GeV)"
 
+# Un pfu (particle flux unit, GOES) = 1 proton/(cm2-sr-s). MY_MODEL.OUT usa
+# m2 (HELP.TXT 3.D: nuclei/(m2-sr-s-GeV)), asi que 1 pfu = 1e4 unidades m2.
+# El kernel se normaliza a uSv/h POR PFU (Q88): la base de cada bin integra a
+# AMP pfu = AMP*PFU_TO_M2 unidades m2, y el ensamblado divide por AMP.
+PFU_TO_M2 = 1e4
+
 
 def bin_edges(n_bins=N_E_BINS, e_min=E_MIN_GEV, e_max=E_MAX_GEV):
     """Bordes de n_bins logaritmicos en [e_min, e_max]: lista de n_bins+1."""

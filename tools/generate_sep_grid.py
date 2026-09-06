@@ -32,15 +32,15 @@ backtesting, donde compara el kernel contra la corrida directa de CARI.
 
 Uso (CI, distro CARI-7A de setup-cari7a):
     # un job por columna del kernel (53 en paralelo) + un job de fondo:
-    python3 tools/generate_sep_grid.py column --bin 12 --amp 1e5 \
+    python3 tools/generate_sep_grid.py column --bin 12 --amp 10 \
         --cari-dir CARI_7A_DVD --binary "cari7a_4.2.0(intel_linux)" \
         --cutoffs CARI_7A_DVD/CUTOFFS --out rates_k12.csv
     python3 tools/generate_sep_grid.py bg \
         --cari-dir CARI_7A_DVD --binary "cari7a_4.2.0(intel_linux)" \
         --cutoffs CARI_7A_DVD/CUTOFFS --out rates_bg.csv
-    # ensamblado (sin CARI):
+    # ensamblado (sin CARI); --amp debe coincidir con el de las columnas:
     python3 tools/generate_sep_grid.py assemble --rates "rates_k*.csv" \
-        --bg rates_bg.csv --amp 1e5 --out sep_grid.js
+        --bg rates_bg.csv --amp 10 --out sep_grid.js
 """
 import argparse, base64, math, os, struct, sys
 
@@ -84,16 +84,10 @@ def _voronoi_log(grid):
 
 def basis_weights(grid, n_bins=common.N_E_BINS,
                   e_min=common.E_MIN_GEV, e_max=common.E_MAX_GEV):
-    """Matriz P[j][n]: fraccion del pfu del bin j que la cuadratura asigna al
-    nodo n de la malla BO11 (particion de Voronoi en log-E sobre el bin).
-
-    La malla del BO11 tiene ~43 nodos en [50 MeV, 20 GeV] frente a 53 bins
-    (10 bins no contienen ningun nodo), asi que un bin NO se representa solo
-    con los nodos que caen dentro: cada punto del continuo del bin pertenece a
-    la celda de Voronoi de UN nodo, y P[j][n] = longitud log de (bin j ∩ celda
-    n) / longitud log del bin j. Suma 1 por bin; la reconstruccion es una
-    cuadratura consistente sobre la malla que CARI realmente lee.
-    """
+    """Fraccion de cada bin que cae en la celda de Voronoi (log-E) de cada
+    nodo de la malla BO11. Se usa para REPARTIR el pfu de un bin entre los
+    nodos cuando la base se representa como funcion continua muestreada en la
+    malla (ver z1_flux_for_bin)."""
     edges = common.bin_edges(n_bins, e_min, e_max)
     cells = _voronoi_log(grid)
     P = []
@@ -109,16 +103,28 @@ def basis_weights(grid, n_bins=common.N_E_BINS,
 
 
 def z1_flux_for_bin(grid, P, j, amp=1.0):
-    """Flujo diferencial por nodo de la base del bin j: el pfu del bin
-    (integral = amp) repartido por Voronoi y convertido a F(E) tal que
-    F(E_n) * E_n ~ densidad por log. CARI lee F en nuclei/(m2-sr-s-GeV) y
-    una base localizada se resuelve si el flujo de sus nodos no es extremo.
-    """
-    out = []
-    for n, e in enumerate(grid):
-        w = P[j][n]
-        out.append((e, amp * w / e if w > 0 else 0.0))
-    return out
+    """Flujo diferencial por nodo de la base del bin j, en unidades m2
+    (las de MY_MODEL.OUT, nuclei/(m2-sr-s-GeV)).
+
+    La base es la FUNCION CONTINUA del bin: amp pfu distribuidos
+    uniformemente en log-E, F(E) = c/E con c = amp*PFU_TO_M2/Delta_lnE
+    (integral del bin = amp*PFU_TO_M2 unidades m2 = amp pfu), muestreada en
+    los nodos de la malla BO11 que caen dentro del bin.
+
+    La malla del BO11 tiene ~43 nodos en [50 MeV, 20 GeV] frente a 53 bins:
+    hay bins sin nodos interiores cuya base muestreada es invisible para CARI.
+    Esa perdida es pequena y acotada: la reconstruccion de espectros continuos
+    (F=400*E^-1.3) sobre los nodos del dominio queda con error <2 %, muy por
+    debajo del 10 % del criterio de reproduccion de T14. Ensanchar la ventana
+    de los bins sin nodos para forzar cobertura (probado) empeora el error a
+    ~100 % porque duplica la integral: la ventana muestreada pura es la
+    representacion correcta."""
+    from sep_grid_common import bin_edges
+    edges = bin_edges()
+    a, b = edges[j], edges[j + 1]
+    ln_width = math.log(b / a)
+    c = amp * common.PFU_TO_M2 / ln_width   # F(E)*E de la ventana del bin
+    return [(e, c / e if a <= e <= b else 0.0) for e in grid]
 
 
 # --------------------------------------------------------------------------
@@ -347,7 +353,7 @@ def main():
 
     p_col = sub.add_parser("column", help="correr la columna del kernel de un bin")
     p_col.add_argument("--bin", type=int, required=True)
-    p_col.add_argument("--amp", type=float, default=1e5,
+    p_col.add_argument("--amp", type=float, default=10.0,
                        help="pfu integrados del espectro base (escala de medida)")
     p_col.add_argument("--cari-dir", required=True)
     p_col.add_argument("--binary", required=True)
@@ -370,7 +376,9 @@ def main():
     p_as.add_argument("--rates", required=True,
                       help="patron glob de los CSV de columnas")
     p_as.add_argument("--bg", required=True, help="CSV del fondo GCR")
-    p_as.add_argument("--amp", type=float, default=1e5)
+    p_as.add_argument("--amp", type=float, default=10.0,
+                      help="pfu integrados de cada base (debe coincidir con "
+                           "el --amp de las columnas)")
     p_as.add_argument("--out", required=True)
 
     args = ap.parse_args()

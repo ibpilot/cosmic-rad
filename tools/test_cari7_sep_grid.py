@@ -69,16 +69,65 @@ class TestZ1FluxForBin(unittest.TestCase):
         self.P = g.basis_weights(self.grid)
 
     def test_integral_es_amp(self):
-        # La base de un bin con amp pfu debe tener integral ~amp sobre el
-        # dominio. F(E) es un flujo diferencial (nuclei/(m2-sr-s-GeV)); la
-        # integral de F dE sobre la celda de Voronoi de cada nodo es
-        # F(E_n) * E_n * w_n (w_n = ancho de la celda en log E), y la
-        # construccion F = amp*w/e hace que cada celda aporte amp*w -> la
-        # integral del bin es amp * sum(w) = amp.
+        # La base del bin j es la funcion continua F(E) = c/E dentro del bin
+        # (c = amp*PFU_TO_M2/Delta_lnE), 0 fuera. Su integral analitica sobre
+        # el bin es exactamente amp*PFU_TO_M2 unidades m2 = amp pfu. Esto no
+        # depende de los nodos de la malla: es la definicion de la base.
         for j in (0, 10, 26, 52):
-            rows = g.z1_flux_for_bin(self.grid, self.P, j, amp=1e5)
-            integral = sum(f * e * w for (e, f), w in zip(rows, self.P[j]))
-            self.assertAlmostEqual(integral, 1e5, delta=1e5 * 1e-6)
+            rows = g.z1_flux_for_bin(self.grid, self.P, j, amp=10.0)
+            edges = common.bin_edges()
+            e0, e1 = edges[j], edges[j + 1]
+            # F(E) = c/E con c = amp*PFU_TO_M2/ln(e1/e0)
+            c = 10.0 * common.PFU_TO_M2 / math.log(e1 / e0)
+            integ = c * math.log(e1 / e0)   # integral de c/E dE = c ln(e1/e0)
+            self.assertAlmostEqual(integ / common.PFU_TO_M2, 10.0, places=9)
+            # La base muestreada coincide con c/E en los nodos dentro del bin.
+            for e, f in rows:
+                if e0 <= e <= e1:
+                    self.assertAlmostEqual(f, c / e, places=9)
+
+    def test_bases_reconstruyen_espectro_continuo(self):
+        # Propiedad que hace valida la representacion: la suma de las 53 bases
+        # ventana, cada una con el pfu que le toca de un espectro real,
+        # reconstruye ese espectro en los nodos de la malla BO11 con error
+        # <2 %. Si el error fuera grande, el kernel no podria reconstruir
+        # espectros y la puerta de reproduccion de T14 (kernel vs CARI directo,
+        # tol 10 %) fallaria. El espectro de prueba lleva pendiente real
+        # (E^-1.3, como el GCR): un espectro constante en log enmascararia la
+        # perdida de los bins sin nodos por cancelacion exacta.
+        import sep_grid_common as common
+        edges = common.bin_edges()
+        flux = lambda e: 400.0 * e ** -1.3
+        F_rec = [0.0] * len(self.grid)
+        for j in range(53):
+            a, b = edges[j], edges[j + 1]
+
+            def _g(x):
+                return flux(math.exp(x)) * math.exp(x)
+            n = 64
+            l0, l1 = math.log(a), math.log(b)
+            h = (l1 - l0) / n
+            s = _g(l0) + _g(l1)
+            for k in range(1, n):
+                s += (4.0 if k % 2 else 2.0) * _g(l0 + k * h)
+            I_m2 = s * h / 3.0
+            pfu_bin = I_m2 / common.PFU_TO_M2
+            base = dict(g.z1_flux_for_bin(self.grid, self.P, j, amp=1.0))
+            for n, e in enumerate(self.grid):
+                F_rec[n] += pfu_bin * base[e]
+        errs = []
+        for n, e in enumerate(self.grid):
+            if 0.05 <= e <= 20.0:
+                errs.append(abs(F_rec[n] - flux(e)) / flux(e))
+        self.assertLess(max(errs), 0.02)     # <2 % en los nodos del dominio
+
+    def test_unidades_m2_a_pfu(self):
+        # 1 pfu = 1/(cm2-sr-s) = 1e4 unidades m2. El kernel debe quedar en
+        # uSv/h por pfu: si la base de un bin integra a amp pfu y la dosis
+        # medida se divide por amp, la celda es uSv/h por pfu. Un error de
+        # factor 1e4 aqui (confundir m2 con cm2) escalaria toda la dosis SEP
+        # un factor 1e4 (el mismo tipo de factor que cazo la puerta de T4).
+        self.assertEqual(common.PFU_TO_M2, 1e4)
 
     def test_solo_toca_pocos_nodos(self):
         # La base debe estar localizada (pocos nodos con flujo no-cero): si

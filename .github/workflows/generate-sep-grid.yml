@@ -124,6 +124,7 @@ jobs:
         run: |
           python3 tools/generate_sep_grid.py column \
             --bin ${{ matrix.bin }} \
+            --amp 10 \
             --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
             --binary "${{ steps.cari.outputs.binary }}" \
             --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
@@ -188,7 +189,7 @@ jobs:
           python3 tools/generate_sep_grid.py assemble \
             --rates "rates/sep-col-*/rates_k*.csv" \
             --bg rates/sep-col-bg/rates_bg.csv \
-            --amp 100000 --out sep_grid.js
+            --amp 10 --out sep_grid.js
       - name: Embeber en index.html
         run: |
           python3 tools/embed_sep_grid.py --grid sep_grid.js --index index.html
