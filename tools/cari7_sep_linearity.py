@@ -128,24 +128,12 @@ def band_rows(e_lo, e_hi, n_bins=200, include_lo=True, include_hi=True):
     return sorted(out)
 
 
-def gle_rows_from_fixture(fixture_path, n_bins, baseline_path=None):
-    """Espectro de prueba con la FORMA real del exceso SEP de un GLE.
-
-    Lee el fixture GOES de T2 (GLE73: tools/fixtures/goes/g16_2021-10-28.json),
-    toma la muestra de pico del canal integral >=500 MeV y construye el espectro
-    diferencial del EVENTO (no del fondo): al flujo de la muestra de pico se le
-    resta el baseline de un dia tranquilo (por defecto el 2021-10-27, el dia
-    previo al GLE73, que viaja como fixture justo para esto).
-
-    El exceso (E_medio_GeV, dF/dE) se proyecta luego sobre n_bins logaritmicos
-    entre 50 MeV y 20 GeV. Los canales cuyo exceso no es positivo (fondo >=
-    senal) se descartan: un flujo diferencial negativo no es fisico y ensuciaria
-    la forma.
-
-    La magnitud es arbitraria (la puerta verifica la CONVERGENCIA al duplicar
-    los bins, no la dosis absoluta), pero la FORMA es la del evento real con su
-    rodilla y su cola dura, que es justo donde una cuadratura de 53 bins podria
-    no converger si el kernel no es lineal."""
+def _gle_channel_rows(fixture_path, baseline_path=None):
+    """Canales del exceso SEP (E_medio_GeV, dF/dE) del fixture en el pico del
+    integral >=500 MeV, con el baseline de un dia tranquilo restado (por
+    defecto el 2021-10-27, el dia previo al GLE73, que viaja como fixture justo
+    para esto). Es la forma DISCRETA medida por GOES; la forma continua se
+    obtiene interpolando en log-log (_interp_from_rows)."""
     import json
     def _load(p):
         with open(p) as fh:
@@ -198,15 +186,67 @@ def gle_rows_from_fixture(fixture_path, n_bins, baseline_path=None):
         rows.append((e_gev, float(v) * 1e-2))
     if len(rows) < 5:
         raise SystemExit("fixture GLE con muy pocos canales positivos en el pico")
-    # Muestrear la forma interpolada en n_bins log entre E_MIN y E_MAX.
-    flux_at = _interp_from_rows(rows)
+    return rows
+
+
+def gle_rows_from_fixture(fixture_path, n_bins, baseline_path=None):
+    """Espectro de prueba con la FORMA real del exceso SEP de un GLE.
+
+    Lee el fixture GOES de T2 (GLE73: tools/fixtures/goes/g16_2021-10-28.json),
+    toma la muestra de pico del canal integral >=500 MeV y construye el espectro
+    diferencial del EVENTO (no del fondo): al flujo de la muestra de pico se le
+    resta el baseline de un dia tranquilo (por defecto el 2021-10-27, el dia
+    previo al GLE73, que viaja como fixture justo para esto).
+
+    El exceso (E_medio_GeV, dF/dE) se proyecta luego sobre n_bins logaritmicos
+    entre 50 MeV y 20 GeV. Cada bin lleva su flujo MEDIO (la integral de la
+    forma continua sobre el bin, dividida por su ancho), NO el valor puntual en
+    el centro: en la rodilla del GLE73 (pendiente espectral dura ~E^-3..E^-5)
+    el valor puntual en el centro de un bin ancho sesga la integral del bin, y
+    ese sesgo depende de N (las puertas de binning median ~8 % en CI y no
+    convergian al refinar 53 vs 106). Con la media integrada, la representacion
+    conserva la integral del espectro para cualquier N.
+
+    Los canales cuyo exceso no es positivo (fondo >= senal) se descartan: un
+    flujo diferencial negativo no es fisico y ensuciaria la forma.
+
+    La magnitud es arbitraria (la puerta verifica la CONVERGENCIA al duplicar
+    los bins, no la dosis absoluta), pero la FORMA es la del evento real con su
+    rodilla y su cola dura, que es justo donde una cuadratura de 53 bins podria
+    no converger si el kernel no es lineal."""
+    flux_at = _interp_from_rows(_gle_channel_rows(fixture_path, baseline_path))
     if n_bins <= 1:
         return [(math.sqrt(E_MIN_GEV * E_MAX_GEV),
                  flux_at(math.sqrt(E_MIN_GEV * E_MAX_GEV)))]
+    return _bin_mean_rows(flux_at, n_bins)
+
+
+def _bin_mean_rows(flux_at, n_bins, n_sub=64):
+    """Representa la forma continua flux_at en n_bins logaritmicos entre
+    E_MIN_GEV y E_MAX_GEV como (centro_geometrico, flujo MEDIO del bin).
+
+    La integral de cada bin se calcula por cuadratura (Simpson compuesto en
+    log-E: int F dE = int F(e^x) e^x dx), no muestreando flux_at en el centro.
+    En una pendiente espectral dura, el valor puntual en el centro de un bin
+    ancho NO representa la integral del bin (por eso el muestreo puntual
+    sesgaba la rodilla del GLE73 y la puerta de binning median ~8 % en CI sin
+    converger al refinar)."""
     lmin, lmax = math.log(E_MIN_GEV), math.log(E_MAX_GEV)
-    return [(math.exp(lmin + (lmax - lmin) * i / (n_bins - 1)),
-             flux_at(math.exp(lmin + (lmax - lmin) * i / (n_bins - 1))))
-            for i in range(n_bins)]
+    out = []
+    for i in range(n_bins):
+        x0 = lmin + (lmax - lmin) * i / n_bins
+        x1 = lmin + (lmax - lmin) * (i + 1) / n_bins
+        e0, e1 = math.exp(x0), math.exp(x1)
+        # Simpson compuesto en x = ln E sobre el bin.
+        h = (x1 - x0) / n_sub
+        s = flux_at(e0) * e0 + flux_at(e1) * e1
+        for k in range(1, n_sub):
+            x = x0 + k * h
+            ex = math.exp(x)
+            s += (4.0 if k % 2 else 2.0) * flux_at(ex) * ex
+        integral = s * h / 3.0
+        out.append((math.sqrt(e0 * e1), integral / (e1 - e0)))
+    return out
 
 
 def _interp_from_rows(rows):

@@ -9,6 +9,7 @@ sobre mapas sinteticos.
 
 Ejecutar desde tools/:  python3 -m unittest test_cari7_sep_linearity -v
 """
+import math
 import os, sys, tempfile, unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -26,14 +27,38 @@ def rate_map(n=5, step=3.0):
 
 class TestSpectroBase(unittest.TestCase):
     def test_muestreo_log_regular(self):
+        # Cada fila es (centro geometrico del bin, flujo MEDIO del bin); los
+        # centros caen en la malla log con la misma razon constante entre
+        # muestras consecutivas (E_MAX/E_MIN)^(1/N).
         rows = lin.power_law_rows(53)
         self.assertEqual(len(rows), 53)
         es = [e for e, _ in rows]
-        self.assertAlmostEqual(es[0], lin.E_MIN_GEV, places=12)
-        self.assertAlmostEqual(es[-1], lin.E_MAX_GEV, places=12)
-        # Razon logaritmica constante entre muestras consecutivas.
+        self.assertGreater(es[0], lin.E_MIN_GEV)
+        self.assertLess(es[-1], lin.E_MAX_GEV)
+        # La razon logaritmica es constante entre centros consecutivos.
         ratios = [es[i + 1] / es[i] for i in range(len(es) - 1)]
         self.assertTrue(all(abs(r - ratios[0]) < 1e-9 for r in ratios))
+
+    def test_media_integrada_por_bin(self):
+        # Cada bin lleva la media de la forma continua sobre el bin, no el valor
+        # puntual en el centro. Sobre F = E^-3 (ley de potencia pura) la media
+        # integrada debe reproducir la integral exacta del bin dividida por su
+        # ancho; el valor puntual en el centro geometrico NO es esa media (por
+        # eso el muestreo puntual sesgaba la rodilla del GLE73).
+        import math
+        e_min, e_max = lin.E_MIN_GEV, lin.E_MAX_GEV
+        n = 8
+        flux = lambda e: e ** -3.0
+        rows = lin._bin_mean_rows(flux, n)
+        lmin, lmax = math.log(e_min), math.log(e_max)
+        for i, (c, f) in enumerate(rows):
+            x0 = lmin + (lmax - lmin) * i / n
+            x1 = lmin + (lmax - lmin) * (i + 1) / n
+            e0, e1 = math.exp(x0), math.exp(x1)
+            self.assertAlmostEqual(c, math.sqrt(e0 * e1), places=12)
+            exact = (e0 ** -2 - e1 ** -2) / 2.0    # integral de E^-3 en [e0,e1]
+            self.assertAlmostEqual(f * (e1 - e0), exact, delta=exact * 1e-6)
+            self.assertNotAlmostEqual(f, flux(c), delta=flux(c) * 1e-3)
 
     def test_forma_gle_reescalada_a_regimen_bo11(self):
         # El espectro base es la forma del GLE73 reescalada para que F(1 GeV) ~
@@ -111,6 +136,51 @@ class TestBinningMetric(unittest.TestCase):
         n, mx, mn, lo, hi, same = compare_rate_maps(d106, d53)
         self.assertGreater(mx, lin.TOL_BINNING)
 
+    def test_cuadratura_converge_con_n(self):
+        # El fix del binning: cada bin lleva la media integrada de la forma
+        # continua. La integral total del espectro (suma de flujo_medio * ancho
+        # de bin) debe converger al refinar N sin el sesgo del muestreo puntual
+        # en la rodilla del GLE73 (que median ~8 % en CI y no convergian).
+        import math
+        e_min, e_max = lin.E_MIN_GEV, lin.E_MAX_GEV
+        # Forma con una rodilla dura: E^-3 de 0.05 a 0.3, E^-5 de 0.3 a 20.
+        def flux(e):
+            return e ** -3.0 if e < 0.3 else (0.3 ** 2.0) * e ** -5.0
+        ref = _integral_exacta(flux, e_min, e_max)
+        for n in (53, 106, 400):
+            rows = lin._bin_mean_rows(flux, n)
+            total = sum(f * (b - a) for (a, b), (_, f) in
+                        zip(_bordes(e_min, e_max, n), rows))
+            self.assertAlmostEqual(total, ref, delta=ref * 1e-4)
+
+
+def _centros(e_min, e_max, n):
+    lmin, lmax = math.log(e_min), math.log(e_max)
+    return [math.exp(lmin + (lmax - lmin) * (i + 0.5) / n) for i in range(n)]
+
+
+def _bordes(e_min, e_max, n):
+    lmin, lmax = math.log(e_min), math.log(e_max)
+    xs = [lmin + (lmax - lmin) * i / n for i in range(n + 1)]
+    return list(zip([math.exp(x) for x in xs[:-1]],
+                    [math.exp(x) for x in xs[1:]]))
+
+
+def _integral_exacta(flux, e_min, e_max):
+    import math
+    # Regla de Simpson compuesta en x = ln E, muy fina (la "forma continua").
+    def g(x):
+        ex = math.exp(x)
+        return flux(ex) * ex
+    n = 20000
+    a, b = math.log(e_min), math.log(e_max)
+    h = (b - a) / n
+    s = g(a) + g(b)
+    for k in range(1, n):
+        x = a + k * h
+        s += (4.0 if k % 2 else 2.0) * g(x)
+    return s * h / 3.0
+
 
 class TestReproductionMetric(unittest.TestCase):
     def test_reproduccion_exacta_pasa(self):
@@ -157,11 +227,9 @@ class TestGleFixtureSpectrum(unittest.TestCase):
         # Monotona decreciente en log-log (forma fisica de un espectro SEP).
         for i in range(len(lrs) - 1):
             self.assertLessEqual(lrs[i + 1][1], lrs[i][1] + 1e-9)
-        # La cola hasta 20 GeV debe caer (extrapolacion con pendiente, no plana).
-        f_hi = [f for e, f in rows if e > 19.0]
-        f_lo = [f for e, f in rows if e < 0.06]
-        self.assertTrue(f_hi and f_lo)
-        self.assertLess(f_hi[0], f_lo[0] * 1e-3)
+        # La cola hasta 20 GeV debe caer (extrapolacion con pendiente, no plana):
+        # el ultimo bin (cerca de 20 GeV) vale mucho menos que el primero.
+        self.assertLess(rows[-1][1], rows[0][1] * 1e-3)
 
     def test_baseline_descarta_fondo(self):
         # Sin restar el fondo, el espectro en canales bajos esta contaminado por
