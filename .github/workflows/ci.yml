@@ -45,3 +45,7 @@ jobs:
         run: |
           cd tools
           python3 -m unittest test_cari7_sep_linearity -v
+      - name: Tests de la logica pura del kernel SEP (T6)
+        run: |
+          cd tools
+          python3 -m unittest test_cari7_sep_grid -v

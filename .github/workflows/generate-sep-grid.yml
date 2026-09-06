@@ -18,14 +18,20 @@ name: SEP response grid
 # lineal miente mas cuanto mas duro es el evento. Si T5 falla de verdad, el
 # bloque T4-T6 se rehace sobre AniMAIRE (riesgo declarado en el plan).
 #
-# T6 anade aqui el barrido de 53 bins x 73 Rc x 11 alt y el ensamblado/embebido.
+# T6 (este fichero): barrido del kernel SEP_RESPONSE_GRID. Un job matrix por
+# bin (53 columnas, cada una = espectro base de 1 bin SUMADO al GCR de Z=1,
+# sobre la rejilla Rc x alt) + un job de fondo (Z=1 = GCR del BO11 sin SEP) +
+# un job que ensambla (resta fondo, divide por escala, remuestrea a la rejilla
+# exacta), embebe el bloque en index.html, verifica sintaxis y
+# dimensiones/monotonia y commitea. tools/generate_sep_grid.py; verify
+# tools/tests/check_sep_grid.py.
 #
 # `gate-unidades` (T4) y `linearity` (T5) corren el MISMO setup de CARI-7A en
 # jobs separados porque el runner es efimero. El job `linearity` ejecuta las
 # cuatro puertas COMPLETAS (incluida la reproduccion de T4, puerta 4): el plan
 # exige que el job imprima las cuatro metricas con su margen. La reproduccion
-# duplicada (~4 min) es el coste de que el job de T5 sea autonomo y su veredicto
-# no dependa de leer la salida de otro job.
+# duplicada (~4 min) es el coste de que el job de T5 sea autonomo y su
+# veredicto no dependa de leer la salida de otro job.
 
 on:
   workflow_dispatch:
@@ -36,6 +42,10 @@ on:
         default: false
       skip_linearity:
         description: 'Saltar las puertas de linealidad (T5) — solo diagnostico'
+        type: boolean
+        default: false
+      skip_sweep:
+        description: 'Saltar el barrido del kernel (T6) — solo diagnostico'
         type: boolean
         default: false
 
@@ -88,3 +98,113 @@ jobs:
             --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
             --skip-control \
             ${{ github.event.inputs.verbose == 'true' && '--verbose' || '' }}
+
+  kernel-column:
+    # T6: una columna del kernel por bin de energia (53 en paralelo). Cada una
+    # escribe MY_MODEL.OUT con la base del bin (1 pfu integrado * AMP) y corre
+    # CARI sobre la rejilla completa Rc 0:18:0.25 x alt 8.0:13.0:0.5.
+    needs: [gate-unidades, linearity]
+    if: |
+      !cancelled()
+      && needs.gate-unidades.result == 'success'
+      && (needs.linearity.result == 'success' || needs.linearity.result == 'skipped')
+      && github.event.inputs.skip_sweep != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        bin: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
+      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
+        id: cari
+        uses: ./.github/actions/setup-cari7a
+      - name: Columna del kernel (bin ${{ matrix.bin }})
+        run: |
+          python3 tools/generate_sep_grid.py column \
+            --bin ${{ matrix.bin }} \
+            --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
+            --binary "${{ steps.cari.outputs.binary }}" \
+            --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
+            --out rates_k${{ matrix.bin }}.csv \
+            ${{ github.event.inputs.verbose == 'true' && '--verbose' || '' }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (pin S2)
+        with:
+          name: sep-col-${{ matrix.bin }}
+          path: rates_k${{ matrix.bin }}.csv
+
+  kernel-bg:
+    # T6: dosis del fondo GCR (Z=1 del BO11 SIN el espectro SEP) sobre la misma
+    # rejilla. Cada columna del kernel se mide como (total - fondo)/AMP; el
+    # fondo incluye los iones Z>=2 (que CARI exige) y el GCR de protones, que
+    # MY_MODEL siempre lleva: la resta aísla la dosis del espectro SEP puro.
+    needs: [gate-unidades, linearity]
+    if: |
+      !cancelled()
+      && needs.gate-unidades.result == 'success'
+      && (needs.linearity.result == 'success' || needs.linearity.result == 'skipped')
+      && github.event.inputs.skip_sweep != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
+      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
+        id: cari
+        uses: ./.github/actions/setup-cari7a
+      - name: Fondo GCR (Z=1 del BO11 sin SEP)
+        run: |
+          python3 tools/generate_sep_grid.py bg \
+            --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
+            --binary "${{ steps.cari.outputs.binary }}" \
+            --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
+            --out rates_bg.csv \
+            ${{ github.event.inputs.verbose == 'true' && '--verbose' || '' }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (pin S2)
+        with:
+          name: sep-col-bg
+          path: rates_bg.csv
+
+  assemble:
+    # T6: ensambla el kernel (53 columnas + fondo), embebe SEP_RESPONSE_GRID en
+    # index.html, verifica sintaxis y dimensiones/monotonia y commitea.
+    needs: [kernel-column, kernel-bg]
+    if: |
+      !cancelled() && needs.kernel-column.result == 'success'
+      && needs.kernel-bg.result == 'success'
+    # Unico job que commitea el resultado: necesita write.
+    permissions:
+      contents: write
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4 (pin S2)
+        with:
+          path: rates
+      - name: Ensamblar kernel SEP_RESPONSE_GRID
+        run: |
+          python3 tools/generate_sep_grid.py assemble \
+            --rates "rates/sep-col-*/rates_k*.csv" \
+            --bg rates/sep-col-bg/rates_bg.csv \
+            --amp 100000 --out sep_grid.js
+      - name: Embeber en index.html
+        run: |
+          python3 tools/embed_sep_grid.py --grid sep_grid.js --index index.html
+      - name: Verificar dimensiones y monotonia (check_sep_grid)
+        run: python3 tools/tests/check_sep_grid.py --index index.html
+      - name: Commit y push
+        env:
+          TOKEN: ${{ github.token }}
+        run: |
+          git config user.name "cosmic-rad-bot"
+          git config user.email "cosmic-rad-bot@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "Sin cambios en index.html; no hay commit."
+          else
+            git commit -m "chore(sep): regenerate SEP_RESPONSE_GRID kernel (CARI-7A)"
+            git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          fi
