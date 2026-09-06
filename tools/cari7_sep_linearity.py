@@ -422,6 +422,60 @@ def control_bo11(cari, binary, date, args):
             os.remove(backup)
 
 
+def _write_bo11_iones_cero(cari, dst):
+    """Escribe en `dst` el BO11_GCR.OUT literal pero con los bloques Z>=2 a
+    cero (solo protones). Conserva formato, mallas y cabecera."""
+    src = os.path.join(cari, "GCR_MODELS", sep.BO11_FILE)
+    with open(src) as fh:
+        lines = fh.read().splitlines()
+    out = []
+    for i, l in enumerate(lines):
+        if i < 2:
+            out.append(l)
+            continue
+        t = l.split()
+        if len(t) >= 3 and t[0].isdigit():
+            z = int(t[0])
+            if z == 1:
+                out.append(l)
+            else:
+                out.append("%4d  %9.3E  %9.3E" % (z, float(t[1]), 0.0))
+        else:
+            out.append(l)
+    with open(dst, "w") as f:
+        f.write("\n".join(out) + "\n")
+    return dst
+
+
+def control_solo_protones(cari, binary, date, args):
+    """Sonda: MY_MODEL = BO11 literal con Z>=2 a cero (solo protones). Aisla si
+    CARI necesita los iones Z>=2 para dar dosis D2 no-cero (hipotesis de por que
+    los espectros arbitrarios, que solo tienen Z=1, dan tasas 0)."""
+    gcr = os.path.join(cari, "GCR_MODELS")
+    my_model = os.path.join(gcr, sep.MY_MODEL_NAME)
+    backup = None
+    if os.path.exists(my_model):
+        backup = my_model + ".bak_ctrl2"
+        shutil.copy(my_model, backup)
+    try:
+        _write_bo11_iones_cero(cari, my_model)
+        rates = _run_current_my_model(cari, binary, date, args.cutoffs,
+                                      os_name=args.os, wine=args.wine,
+                                      verbose=args.verbose)
+        nz = sum(1 for v in rates.values() if v and v == v)
+        print("[control] MY_MODEL=BO11 con Z>=2 a cero (solo protones): "
+              "%d puntos, %d no-cero" % (len(rates), nz))
+        if rates:
+            k = sorted(rates)[0]
+            print("[control] primera tasa: Rc=%.2f alt=%.1f -> %s"
+                  % (k[0], k[1], rates[k]))
+        return nz > 0
+    finally:
+        if backup:
+            shutil.copy(backup, my_model)
+            os.remove(backup)
+
+
 def gate_scale(cari, binary, date, args):
     """dosis(k*F) == k*dosis(F) para k=10 y k=100 (tol 1 %)."""
     rows = power_law_rows(53)
@@ -558,13 +612,18 @@ def main():
 
     print("### T5: puertas de linealidad (date=%s, repro grid_step=%d) ###"
           % (args.date, args.grid_step))
-    # Sonda: MY_MODEL=BO11 literal por el camino de las puertas 1-3. Si diera 0,
-    # el bug estaria en ese camino (LOC/parseo), no en el espectro arbitrario.
+    # Sondas: MY_MODEL=BO11 literal y solo-protones por el camino de las puertas
+    # 1-3. Aislan si el bug esta en ese camino (LOC/parseo), en los iones Z>=2,
+    # o en el espectro arbitrario de _write_my_model.
     if not args.skip_control:
         try:
             control_bo11(cari, args.binary, args.date, args)
         except SystemExit as e:
             print("[control] fallo: %s" % e)
+        try:
+            control_solo_protones(cari, args.binary, args.date, args)
+        except SystemExit as e:
+            print("[control solo-protones] fallo: %s" % e)
     results = {}
     results["escalado"] = gate_scale(cari, args.binary, args.date, args)
     results["superposicion"] = gate_superposition(cari, args.binary, args.date,
