@@ -63,12 +63,15 @@ class TestSpectroBase(unittest.TestCase):
     def test_forma_gle_reescalada_a_regimen_bo11(self):
         # El espectro base es la forma del GLE73 reescalada para que F(1 GeV) ~
         # REF_FSEP: ahi compite con el GCR del BO11 (que en Z=1 vale ~400) y el
-        # cambio de dosis es medible. Normalizar al maximo (a ~80 MeV, donde el
-        # GCR contribuye poco) dejaba el SEP despreciable en las energias que
+        # cambio de dosis es medible. La reescala ancla la FORMA CONTINUA en
+        # 1 GeV (no el primer centro de bin >=1 GeV, que depende de N y hacia
+        # que 53 y 106 bins describieran espectros distintos por un factor
+        # global ~0.79). Normalizar al maximo (a ~80 MeV, donde el GCR
+        # contribuye poco) dejaba el SEP despreciable en las energias que
         # dominan la dosis (puntos=0 al filtrar netos <1 %).
         rows = lin.power_law_rows(53)
-        f_1gev = next(f for e, f in rows if e >= lin.REF_E_GEV)
-        self.assertAlmostEqual(f_1gev, lin.REF_FSEP, delta=lin.REF_FSEP * 0.05)
+        f_1gev = lin._interp_from_rows(rows)(lin.REF_E_GEV)
+        self.assertAlmostEqual(f_1gev, lin.REF_FSEP, delta=lin.REF_FSEP * 0.01)
         # Valores finitos y positivos en todo el rango.
         self.assertTrue(all(f > 0 and f == f for _, f in rows))
 
@@ -83,6 +86,29 @@ class TestSpectroBase(unittest.TestCase):
         f_lo = [f for e, f in rows if e < 0.06]
         self.assertTrue(f_lo)
         self.assertLess(max(f_lo), fmax * 10)
+
+    def test_reescala_no_depende_del_numero_de_bins(self):
+        # La forma reescalada debe ser la misma representacion del MISMO
+        # espectro para cualquier n_bins: la integral total (suma de
+        # flujo_medio * ancho de bin) debe coincidir entre 53 y 106 bins.
+        # Antes, la reescala anclaba en el primer centro >=1 GeV (1.12 GeV en
+        # 53 bins vs 1.03 GeV en 106) y las representaciones diferian por un
+        # factor global ~0.79 (medido en CI: binning 106/53 = 0.786).
+        r53 = lin.power_law_rows(53)
+        r106 = lin.power_law_rows(106)
+        i53 = sum(f * (b - a)
+                  for (e, f), (a, b) in zip(r53, _bordes_log(53)))
+        i106 = sum(f * (b - a)
+                   for (e, f), (a, b) in zip(r106, _bordes_log(106)))
+        self.assertAlmostEqual(i53 / i106, 1.0, delta=0.01)
+
+
+def _bordes_log(n):
+    """Bordes de n bins logaritmicos en [E_MIN, E_MAX] (extremos incluidos)."""
+    import math
+    lmin, lmax = math.log(lin.E_MIN_GEV), math.log(lin.E_MAX_GEV)
+    xs = [lmin + (lmax - lmin) * i / n for i in range(n + 1)]
+    return [(math.exp(xs[i]), math.exp(xs[i + 1])) for i in range(n)]
 
 
 class TestScaleMetric(unittest.TestCase):

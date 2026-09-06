@@ -76,12 +76,26 @@ REF_FSEP = 400.0           # F_SEP(1 GeV): compite con el GCR (~400 en Z=1)
 REF_E_GEV = 1.0
 
 
+_FIXTURE_SHAPE_CACHE = {}
+
+
 def _fixture_shape(n_bins):
     """Forma del GLE73 (exceso sobre el baseline del dia previo) en n_bins,
-    reescalada para que F(REF_E_GEV) ~ REF_FSEP (regimen del GCR a 1 GeV)."""
-    rows = gle_rows_from_fixture(GLE_FIXTURE, n_bins)
-    f_ref = next(f for e, f in rows if e >= REF_E_GEV)
-    return [(e, f * REF_FSEP / f_ref) for e, f in rows]
+    reescalada para que F(REF_E_GEV) ~ REF_FSEP (regimen del GCR a 1 GeV).
+
+    La reescala usa el valor de la FORMA CONTINUA en REF_E_GEV (1 GeV), no el
+    valor de un centro de bin: la normalizacion debe ser la misma para cualquier
+    n_bins. Si se normalizara con `next(e,f for ... if e>=1.0)` (el primer
+    centro >=1 GeV), el punto de anclaje caeria en 1.12 GeV (n=53) vs 1.03 GeV
+    (n=106) y las dos representaciones del MISMO espectro diferirian por un
+    factor global ~0.79 (medido en CI: binning 106/53 = 0.786)."""
+    if n_bins not in _FIXTURE_SHAPE_CACHE:
+        rows = gle_rows_from_fixture(GLE_FIXTURE, n_bins)
+        flux_at = _interp_from_rows(rows)
+        f_ref = flux_at(REF_E_GEV)
+        _FIXTURE_SHAPE_CACHE[n_bins] = [
+            (e, f * REF_FSEP / f_ref) for e, f in rows]
+    return _FIXTURE_SHAPE_CACHE[n_bins]
 
 
 def power_law_rows(n_bins):
