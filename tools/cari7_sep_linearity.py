@@ -279,16 +279,19 @@ def _project_powerlaw(rows, grid):
 
 
 def _write_my_model(cari, rows):
-    """Escribe GCR_MODELS/MY_MODEL.OUT con un espectro de protones arbitrario.
+    """Escribe GCR_MODELS/MY_MODEL.OUT: el espectro GCR de fondo (BO11) con la
+    componente de protones (Z=1) sustituida por `rows` (el espectro SEP).
 
-    El lector de CARI-7A espera EXACTAMENTE la estructura del BO11_GCR.OUT:
-    100 filas por Z, Z=1..28, con la malla de energia del propio BO11
-    (0.01..10000 GeV para Z=1). Un MY_MODEL.OUT con menos filas en Z=1 (p. ej.
-    una malla propia de 53 puntos) NO se lee bien: CARI produce tasas 0/NaN
-    (destapado por el run de T5 en CI). Por eso el espectro arbitrario se
-    PROYECTA sobre la malla Z=1 del BO11 (interpolacion log-log con cola de ley
-    de potencia fuera del rango) y los bloques Z=2..28 se escriben a cero con
-    su malla original.
+    Tres hallazgos de los runs de T5 en CI, los tres necesarios para que CARI
+    devuelva dosis no-cero:
+      1. Estructura: MY_MODEL.OUT debe tener la estructura del BO11_GCR.OUT
+         (100 filas por Z=1..28 con la malla de energia del propio BO11).
+      2. Formato: cada linea debe tener 26 chars con las columnas del BO11.
+      3. IONES: CARI exige las especies Z>=2 para dar dosis D2 no-cero (una
+         sonda con BO11 y Z>=2 a cero devolvio 0/nan en los 99 puntos). El
+         HELP.TXT lo dice: MY_MODEL.OUT "is assumed to have GCR flux units" --
+         es el espectro GCR COMPLETO, y un SEP solo modifica los protones. Los
+         bloques Z=2..28 se conservan del BO11 real, NO se ponen a cero.
     """
     gcr = os.path.join(cari, "GCR_MODELS")
     dst = os.path.join(gcr, sep.MY_MODEL_NAME)
@@ -296,24 +299,21 @@ def _write_my_model(cari, rows):
     z1_grid = grids.get(1)
     if not z1_grid:
         raise SystemExit("no hay malla Z=1 en BO11_GCR.OUT (¿distro incompleta?)")
-    # Proyectar el espectro sobre la malla fija de Z=1 del BO11.
+    # Proyectar el espectro SEP sobre la malla fija de Z=1 del BO11.
     proj = _project_powerlaw(rows, z1_grid)
-    epoch = "2002.041096"          # epoca del BO11_GCR.OUT distribuido
-    # Formato EXACTO de las lineas del BO11_GCR.OUT distribuido (medido):
-    # 26 chars, columnas fijas: Z cols 0-3, 2 espacios, E cols 6-14 (9 chars,
-    # sin signo en el exponente de 2 cifras), 2 espacios, F cols 17-25.
-    # El formato de write_my_model de T4 (%4d %10.3E %12.3E, 28 chars) desplaza
-    # las columnas y CARI lee el espectro mal (tasas 0/NaN): destapado por T5.
     with open(dst, "w") as f:
-        f.write(epoch + "\n")
+        f.write("2002.041096\n")           # epoca del BO11_GCR.OUT distribuido
         f.write("   Z       E            F\n")
+        # Z=1: el espectro SEP proyectado. Z=2..28: los valores GCR del BO11
+        # real (formato exacto de 26 chars, columnas del BO11).
+        with open(os.path.join(gcr, sep.BO11_FILE)) as src:
+            src_lines = src.read().splitlines()
         for e, fl in proj:
             f.write("%4d  %9.3E  %9.3E\n" % (1, e, fl))
-        for z in sorted(grids):
-            if z == 1:
-                continue
-            for e in grids[z]:
-                f.write("%4d  %9.3E  %9.3E\n" % (z, e, 0.0))
+        for l in src_lines[2:]:
+            t = l.split()
+            if len(t) >= 3 and t[0].isdigit() and int(t[0]) > 1:
+                f.write(l.rstrip("\n") + "\n")
     return dst
 
 
@@ -476,16 +476,54 @@ def control_solo_protones(cari, binary, date, args):
             os.remove(backup)
 
 
-def gate_scale(cari, binary, date, args):
-    """dosis(k*F) == k*dosis(F) para k=10 y k=100 (tol 1 %)."""
+def run_sep_net(cari, binary, date, args, rows, tag=None, _gcr_cache=None):
+    """Dosis SEP NETA de un espectro de protones: corre MY_MODEL (= GCR del BO11
+    + SEP en Z=1) y le resta la dosis del fondo GCR puro (BO11 sin modificar).
+
+    MY_MODEL.OUT es el espectro GCR COMPLETO (el HELP.TXT: "assumed to have GCR
+    flux units"); CARI exige las especies Z>=2 y devuelve dosis 0/nan si se
+    ponen a cero (sonda verificada en CI). Por eso el espectro SEP se SUMA al
+    GCR de fondo en Z=1, y la dosis SEP neta es la diferencia contra el fondo.
+    Sin restar, las puertas de linealidad medirian el fondo (que no escala) y
+    fallarian aunque el transporte SEP sea lineal."""
+    if _gcr_cache is None:
+        _gcr_cache = {}
+    if "gcr" not in _gcr_cache:
+        gcr_file = os.path.join(cari, "GCR_MODELS", sep.MY_MODEL_NAME)
+        backup = None
+        if os.path.exists(gcr_file):
+            backup = gcr_file + ".bak_gcr"
+            shutil.copy(gcr_file, backup)
+        try:
+            shutil.copy(os.path.join(cari, "GCR_MODELS", sep.BO11_FILE),
+                        gcr_file)
+            _gcr_cache["gcr"] = _run_current_my_model(
+                cari, binary, date, args.cutoffs, os_name=args.os,
+                wine=args.wine, verbose=args.verbose, tag="gcr")
+        finally:
+            if backup:
+                shutil.copy(backup, gcr_file)
+                os.remove(backup)
+    total = run_rows(cari, binary, rows, date, args.cutoffs, os_name=args.os,
+                     wine=args.wine, verbose=args.verbose, tag=tag)
+    gcr = _gcr_cache["gcr"]
+    return {k: total[k] - gcr.get(k, 0.0) for k in total
+            if k in gcr and total[k] == total[k] and gcr[k] == gcr[k]}
+
+
+def gate_scale(cari, binary, date, args, gcr_cache=None):
+    """dosis(k*F) == k*dosis(F) para k=10 y k=100 (tol 1 %), sobre la dosis SEP
+    NETA (espectro con fondo GCR restado)."""
+    if gcr_cache is None:
+        gcr_cache = {}
     rows = power_law_rows(53)
-    base = run_rows(cari, binary, rows, date, args.cutoffs, os_name=args.os,
-                    wine=args.wine, verbose=args.verbose)
+    base = run_sep_net(cari, binary, date, args, rows, tag="s1",
+                       _gcr_cache=gcr_cache)
     ok = True
     for k in (10.0, 100.0):
-        scaled = run_rows(cari, binary, [(e, k * f) for (e, f) in rows], date,
-                          args.cutoffs, os_name=args.os, wine=args.wine,
-                          verbose=args.verbose)
+        scaled = run_sep_net(cari, binary, date, args,
+                             [(e, k * f) for (e, f) in rows], tag="s%d" % int(k),
+                             _gcr_cache=gcr_cache)
         n, mx, mn, minr, maxr, same = scale_metric(base, scaled, k)
         passed = summarize("escalado x%d: dosis(kF)/k vs dosis(F)" % int(k),
                            n, mx, mn, minr, maxr, same, TOL_SCALE)
@@ -496,19 +534,22 @@ def gate_scale(cari, binary, date, args):
     return ok
 
 
-def gate_superposition(cari, binary, date, args):
-    """dosis(A+B) == dosis(A)+dosis(B) (tol 1 %). A y B son las dos mitades del
-    dominio (baja y alta); juntas reconstruyen el espectro de ancho completo."""
+def gate_superposition(cari, binary, date, args, gcr_cache=None):
+    """dosis(A+B) == dosis(A)+dosis(B) (tol 1 %), sobre la dosis SEP NETA. A y B
+    son las dos mitades del dominio (baja y alta); juntas reconstruyen el
+    espectro de ancho completo."""
+    if gcr_cache is None:
+        gcr_cache = {}
     mid = math.sqrt(E_MIN_GEV * E_MAX_GEV)
     # A cubre [E_MIN, mid], B cubre (mid, E_MAX]: sin duplicar el borde `mid`.
     band_a = band_rows(E_MIN_GEV, mid)
     band_b = band_rows(mid, E_MAX_GEV, include_lo=False)
-    a = run_rows(cari, binary, band_a, date, args.cutoffs, os_name=args.os,
-                 wine=args.wine, verbose=args.verbose)
-    b = run_rows(cari, binary, band_b, date, args.cutoffs, os_name=args.os,
-                 wine=args.wine, verbose=args.verbose)
-    ab = run_rows(cari, binary, band_a + band_b, date, args.cutoffs,
-                  os_name=args.os, wine=args.wine, verbose=args.verbose)
+    a = run_sep_net(cari, binary, date, args, band_a, tag="sa",
+                    _gcr_cache=gcr_cache)
+    b = run_sep_net(cari, binary, date, args, band_b, tag="sb",
+                    _gcr_cache=gcr_cache)
+    ab = run_sep_net(cari, binary, date, args, band_a + band_b, tag="sab",
+                     _gcr_cache=gcr_cache)
     n, mx, mn, minr, maxr, same = superposition_metric(a, b, ab)
     passed = summarize("superposicion: dosis(A+B) vs dosis(A)+dosis(B)",
                        n, mx, mn, minr, maxr, same, TOL_SUPERPOSITION)
@@ -518,17 +559,19 @@ def gate_superposition(cari, binary, date, args):
     return passed
 
 
-def gate_binning(cari, binary, date, args):
+def gate_binning(cari, binary, date, args, gcr_cache=None):
     """dosis(53 bins) == dosis(106 bins) sobre un espectro GLE real (tol 1 %).
 
     El espectro es la FORMA del GLE73 medida por GOES (la misma que usan las
     otras puertas, reescalada al regimen del BO11): si representar el espectro
     con 53 muestras no bastara (frente a 106), el kernel de 53 bins estaria
     mintiendo justo en el caso que importa."""
-    d53 = run_rows(cari, binary, power_law_rows(53), date, args.cutoffs,
-                   os_name=args.os, wine=args.wine, verbose=args.verbose)
-    d106 = run_rows(cari, binary, power_law_rows(106), date, args.cutoffs,
-                    os_name=args.os, wine=args.wine, verbose=args.verbose)
+    if gcr_cache is None:
+        gcr_cache = {}
+    d53 = run_sep_net(cari, binary, date, args, power_law_rows(53), tag="b53",
+                      _gcr_cache=gcr_cache)
+    d106 = run_sep_net(cari, binary, date, args, power_law_rows(106), tag="b106",
+                       _gcr_cache=gcr_cache)
     n, mx, mn, minr, maxr, same = compare_rate_maps(d106, d53)
     passed = summarize("convergencia de binning: 106 bins vs 53 bins"
                        " (espectro GLE73)",
@@ -612,9 +655,8 @@ def main():
 
     print("### T5: puertas de linealidad (date=%s, repro grid_step=%d) ###"
           % (args.date, args.grid_step))
-    # Sondas: MY_MODEL=BO11 literal y solo-protones por el camino de las puertas
-    # 1-3. Aislan si el bug esta en ese camino (LOC/parseo), en los iones Z>=2,
-    # o en el espectro arbitrario de _write_my_model.
+    # Sondas de diagnostico (resueltas; se dejan detras de --skip-control para
+    # no pagar su coste en el run normal del workflow).
     if not args.skip_control:
         try:
             control_bo11(cari, args.binary, args.date, args)
@@ -624,12 +666,15 @@ def main():
             control_solo_protones(cari, args.binary, args.date, args)
         except SystemExit as e:
             print("[control solo-protones] fallo: %s" % e)
+    gcr_cache = {}       # fondo GCR compartido por las puertas 1-3
     results = {}
-    results["escalado"] = gate_scale(cari, args.binary, args.date, args)
+    results["escalado"] = gate_scale(cari, args.binary, args.date, args,
+                                     gcr_cache)
     results["superposicion"] = gate_superposition(cari, args.binary, args.date,
-                                                  args)
+                                                  args, gcr_cache)
     results["convergencia de binning"] = gate_binning(cari, args.binary,
-                                                      args.date, args)
+                                                      args.date, args,
+                                                      gcr_cache)
     if not args.skip_reproduction:
         results["reproduccion"] = gate_reproduction(cari, args.binary,
                                                     args.date, args)

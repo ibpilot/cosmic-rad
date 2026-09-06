@@ -86,4 +86,5 @@ jobs:
             --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
             --binary "${{ steps.cari.outputs.binary }}" \
             --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
+            --skip-control \
             ${{ github.event.inputs.verbose == 'true' && '--verbose' || '' }}

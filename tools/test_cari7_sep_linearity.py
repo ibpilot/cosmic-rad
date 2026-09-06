@@ -170,8 +170,8 @@ class TestGleFixtureSpectrum(unittest.TestCase):
 
 def fake_cari_dir():
     """Distribucion CARI-7A sintetica: un BO11_GCR.OUT con 100 filas de
-    Z=1..28 (0.01..10000 GeV en Z=1), para probar _write_my_model sin el
-    binario."""
+    Z=1..28 (0.01..10000 GeV en Z=1) en el formato real de 26 chars, para
+    probar _write_my_model sin el binario."""
     d = tempfile.mkdtemp()
     gcr = os.path.join(d, "GCR_MODELS")
     os.makedirs(gcr)
@@ -180,7 +180,7 @@ def fake_cari_dir():
         for z in range(1, 29):
             for i in range(100):
                 e = 0.01 * (1e6) ** (i / 99.0)   # 0.01 .. 10000 GeV
-                f.write("%4d %10.3E %12.3E\n" % (z, e, 1.0 if z == 1 else 0.0))
+                f.write("%4d  %9.3E  %9.3E\n" % (z, e, float(z)))
     return d
 
 
@@ -219,15 +219,22 @@ class TestWriteMyModelEstructura(unittest.TestCase):
             self.assertEqual(len(l.rstrip("\n")), 26,
                              "linea con ancho != 26: %r" % l)
 
-    def test_z2_a_28_cero(self):
+    def test_z2_conserva_iones_gcr(self):
+        # Hallazgo de la sonda en CI: CARI exige las especies Z>=2 para dar
+        # dosis D2 no-cero (BO11 con Z>=2 a cero -> 0/nan en 99 puntos). El
+        # espectro SEP solo sustituye Z=1; los iones GCR del BO11 se conservan.
         cari = fake_cari_dir()
         lin._write_my_model(cari, lin.power_law_rows(53))
         out = os.path.join(cari, "GCR_MODELS", "MY_MODEL.OUT")
+        # En el fake, Z>=2 vale float(z); debe conservarse en MY_MODEL.
         with open(out) as fh:
             for line in fh:
                 t = line.split()
-                if len(t) >= 3 and t[0].isdigit() and int(t[0]) > 1:
-                    self.assertEqual(float(t[2]), 0.0)
+                if len(t) >= 3 and t[0].isdigit():
+                    z = int(t[0])
+                    if z > 1:
+                        self.assertEqual(float(t[2]), float(z),
+                                         "Z=%d debe conservar el GCR del BO11" % z)
 
 
 class TestProjectPowerlaw(unittest.TestCase):
