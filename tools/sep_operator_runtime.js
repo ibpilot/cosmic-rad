@@ -34,7 +34,7 @@
   };
   var RC_EXPECTED = [];
   var ALT_EXPECTED = [];
-  for (var ri = 0; ri < 73; ri++) RC_EXPECTED.push(ri * 0.25);
+  for (var ri = 0; ri < 71; ri++) RC_EXPECTED.push(ri * 0.25);
   for (var ai = 0; ai < 11; ai++) ALT_EXPECTED.push(8 + ai * 0.5);
   var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 

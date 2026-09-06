@@ -71,7 +71,7 @@ class TestStrictAssembly(unittest.TestCase):
         nodes, bg = self._measurements()
         result = operator.assemble_strict(nodes, bg, self.energies,
                                            amplitudes_by_node=self.amplitudes)
-        self.assertEqual(len(result.response), 2 * 73 * 11)
+        self.assertEqual(len(result.response), 2 * len(common.RC_TARGETS) * 11)
         self.assertEqual(len(result.error), len(result.response))
         self.assertGreater(result.response[0], 2.0)
         self.assertTrue(all(value >= 0 and math.isfinite(value) for value in result.error))
@@ -231,7 +231,7 @@ class TestStrictAssembly(unittest.TestCase):
                             2.0 + amplitude * coefficient, res))
         result = operator.assemble_strict(nodes, bg, self.energies,
                                            amplitudes_by_node=self.amplitudes)
-        self.assertEqual(len(result.response), 2 * 73 * 11)
+        self.assertEqual(len(result.response), 2 * len(common.RC_TARGETS) * 11)
         self.assertEqual(len(result.error), len(result.response))
         self.assertTrue(all(error > 1e-9 for error in result.error),
                         "cada cota debe cubrir el hueco Float32 de la pendiente cruda")

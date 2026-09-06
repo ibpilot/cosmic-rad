@@ -280,7 +280,7 @@ def _run_cari_grid(cari: str, binary: str, cutoffs: str, date: str,
     epoch = epoch_file_for_year(int(date[:4]))
     rcmap = load_cutoff_map(os.path.join(cutoffs, epoch))
     if probe:
-        targets = {round(0.25 * i, 2) for i in range(73) if i % 8 == 0}
+        targets = {round(0.25 * i, 2) for i in range(len(common.RC_TARGETS)) if i % 8 == 0}
         rcmap = {key: value for key, value in rcmap.items()
                  if any(abs(value - target) <= 0.25 for target in targets)}
     return run_spectrum(cari, binary, sep.SP_MYMODEL, date, os_name="unix",

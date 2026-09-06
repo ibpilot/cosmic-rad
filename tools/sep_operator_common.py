@@ -32,9 +32,14 @@ TAIL_FROM_GEV = 10.0
 
 E_MIN_GEV = 0.05
 E_MAX_GEV = 20.0
-RC_TARGETS = [round(0.25 * i, 2) for i in range(73)]
+# Rc axis limited to 0--17.5 GV: the IGRF2010 cutoff maps distributed with
+# CARI-7A top out at ~17.64 GV, so 17.75--18.0 are not physically reachable by
+# the sweep.  Extending the axis would force flat extrapolation, which the
+# sep-2 contract forbids.
+RC_TARGETS = [round(0.25 * i, 2) for i in range(71)]
 ALT_VALUES = [8.0 + 0.5 * i for i in range(11)]
 EXPECTED_ACTIVE_NODE_COUNT = 43
+EXPECTED_RC_COUNT = len(RC_TARGETS)
 
 # CARI's MY_MODEL.OUT uses m² in the differential flux column.  The public
 # runtime contract uses pfu/cm², so every offline perturbation crosses this
@@ -257,6 +262,6 @@ def expected_tensor_length(energies: Sequence[float], rc_axis=RC_TARGETS, alt_ax
 
 def validate_axes(rc_axis: Sequence[float], alt_axis: Sequence[float]) -> None:
     if list(rc_axis) != RC_TARGETS:
-        raise OperatorContractError("eje Rc no coincide con 0..18 cada 0.25 GV")
+        raise OperatorContractError("eje Rc no coincide con 0..17.5 cada 0.25 GV")
     if list(alt_axis) != ALT_VALUES:
         raise OperatorContractError("eje de altitud no coincide con 8..13 cada 0.5 km")

@@ -10,7 +10,7 @@ function f32(values) {
 
 function artifact(makeResponse, makeError) {
   const energy = [0.1, 10];
-  const rc = Array.from({ length: 73 }, (_, i) => i * 0.25);
+  const rc = Array.from({ length: 71 }, (_, i) => i * 0.25);
   const altitude = Array.from({ length: 11 }, (_, i) => 8 + i * 0.5);
   const values = [];
   const errors = [];

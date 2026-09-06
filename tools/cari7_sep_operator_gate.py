@@ -81,8 +81,9 @@ def _run_node(artifact, spectrum, points):
 
 def _choose_offgrid_points(rcmap, count=15):
     candidates = []
+    max_rc = common.RC_TARGETS[-1]
     for (lat, lon), rc in sorted(rcmap.items()):
-        if not (0 <= rc <= 18) or abs(rc * 4.0 - round(rc * 4.0)) < 1e-8:
+        if not (0 <= rc <= max_rc) or abs(rc * 4.0 - round(rc * 4.0)) < 1e-8:
             continue
         # Fixed latitude bands cover polar, middle and equatorial regions.
         band = 0 if abs(lat) >= 60 else (1 if abs(lat) >= 20 else 2)
@@ -249,7 +250,8 @@ def run_gate(args) -> dict:
                                         tag=f"sep2-g4-{name}", rcmap=rcmap, cutoffs=cutoffs)
             direct = {key: value - background[key] for key, value in direct_total.items()
                       if key in background}
-            points = list(direct)
+            points = [key for key in direct if key[0] <= common.RC_TARGETS[-1]]
+            direct = {key: value for key, value in direct.items() if key[0] <= common.RC_TARGETS[-1]}
             node = _run_node(artifact, spectrum, points)
             report["cases"].append(_metrics(name, direct, node))
             report["g7_cases"].append(_monotonicity_metrics(name, direct, node))
