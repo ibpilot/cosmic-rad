@@ -18,9 +18,11 @@ import re
 import struct
 import sys
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if ROOT not in sys.path:
-    sys.path.insert(0, ROOT)
+# tools/tests/check_sep_operator.py vive en tools/tests, asi que la raiz de
+# este fichero es <repo>/tools (no la raiz del repositorio).
+TOOLS_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if TOOLS_DIR not in sys.path:
+    sys.path.insert(0, TOOLS_DIR)
 import sep_operator_common as common
 
 BEGIN = "// BEGIN SEP_RESPONSE_OPERATOR"
@@ -133,7 +135,7 @@ def check(text: str, *, bo11_path: str | None = None, require_node_count: bool =
 
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--index", default=os.path.join(os.path.dirname(ROOT), "index.html"))
+    parser.add_argument("--index", default=os.path.join(os.path.dirname(TOOLS_DIR), "index.html"))
     parser.add_argument("--operator", "--grid", dest="operator")
     parser.add_argument("--bo11")
     parser.add_argument("--require-43", action="store_true")

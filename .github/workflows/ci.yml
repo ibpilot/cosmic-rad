@@ -31,6 +31,8 @@ jobs:
         run: |
           python3 -m py_compile tools/*.py tools/tests/*.py
           find tools -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: El runtime SEP-2 embebido coincide con su fuente
+        run: python3 tools/embed_sep_runtime.py --check
       - name: Suite de regresión (bugs)
         run: node tools/tests/bugs_test.js
       - name: Suite de la rejilla de dosis

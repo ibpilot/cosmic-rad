@@ -209,7 +209,10 @@ def _reference_background(cari_dir, binary, cutoffs, date, rcmap):
         backup = my_model + ".sep2-backup"
         shutil.copy(my_model, backup)
     try:
-        shutil.copy(bo11, my_model)
+        from generate_sep_operator import write_my_model_z1
+
+        full_nodes = common.read_bo11_z1_nodes(bo11)
+        write_my_model_z1(bo11, my_model, [0.0] * len(full_nodes))
         return run_spectrum(cari_dir, binary, sep_input.SP_MYMODEL, date,
                             os_name="unix", wine=None, chunk=150, tag="sep2-bg-g4",
                             rcmap=rcmap, cutoffs=cutoffs)
@@ -232,8 +235,10 @@ def run_gate(args) -> dict:
     cases = _spectrum_cases(energies)
     rcmap = load_cutoff_map(os.path.join(cutoffs, epoch_file_for_year(int(args.date[:4]))))
     background = _reference_background(cari_dir, args.binary, cutoffs, args.date, rcmap)
-    report = {"validation_run_id": args.validation_run_id, "g4": {"ok": True},
-              "g5": {"ok": True}, "g7": {"ok": True},
+    report = {"validation_run_id": args.validation_run_id,
+              "g4": {"ok": False, "skipped": True},
+              "g5": {"ok": False, "skipped": True},
+              "g7": {"ok": False, "skipped": True},
               "cases": [], "offgrid_cases": [], "g7_cases": []}
 
     if not args.offgrid_only:

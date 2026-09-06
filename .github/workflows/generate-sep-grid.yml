@@ -7,10 +7,6 @@ name: SEP response operator
 on:
   workflow_dispatch:
     inputs:
-      diagnostics_only:
-        description: "Ejecutar sondas diagnósticas sin publicar"
-        type: boolean
-        default: false
       verbose:
         description: "Vierte stdout/stderr completo de CARI"
         type: boolean
@@ -28,7 +24,6 @@ env:
 
 jobs:
   setup-unit:
-    if: ${{ inputs.diagnostics_only != true }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -223,6 +218,7 @@ jobs:
       - name: Puertas G6/G7, Node y sintaxis HTML
         run: |
           python3 tools/tests/check_sep_operator.py --index index.html --require-43
+          python3 tools/embed_sep_runtime.py --check
           node tools/tests/sep_operator_test.js
           node -e 'const fs=require("fs"),vm=require("vm"),h=fs.readFileSync("index.html","utf8");let n=0;for(const s of h.matchAll(/<script[^>]*>([\\s\\S]*?)<\\/script>/g)){if(!s[0].includes("src=")){n++;new vm.Script(s[1]);}}console.log("SYNTAX OK ("+n+")")'
           python3 -m unittest tools.test_cari7_sep_operator -v

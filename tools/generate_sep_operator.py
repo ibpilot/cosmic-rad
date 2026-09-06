@@ -19,7 +19,7 @@ import re
 import struct
 import sys
 from dataclasses import dataclass
-from statistics import pstdev
+from statistics import stdev
 from typing import Iterable, Mapping, Sequence
 
 import sep_operator_common as common
@@ -103,6 +103,12 @@ def _float32_ceiling(value: float) -> float:
     if bits >= 0x7F7FFFFF:
         raise AssemblyError("cota de error fuera del rango Float32")
     return struct.unpack("<f", struct.pack("<I", bits + 1))[0]
+
+
+def _quantise_error_bounds(error_raw: Sequence[float]) -> list[float]:
+    """Cuantiza las cotas a Float32 sin que ninguna baje por debajo de su valor."""
+
+    return [_float32_ceiling(value) for value in error_raw]
 
 
 def _format_float(value: float) -> str:
@@ -239,6 +245,7 @@ def write_my_model_z1(bo11_path: str, dst_path: str, z1_values_m2: Sequence[floa
     for line in source_lines[2:]:
         fields = line.split()
         if len(fields) < 3 or not fields[0].isdigit():
+            out.append(line.rstrip("\n"))
             continue
         if int(fields[0]) != 1:
             out.append(line.rstrip("\n"))
@@ -281,6 +288,35 @@ def _run_cari_grid(cari: str, binary: str, cutoffs: str, date: str,
                         cutoffs=cutoffs, verbose=verbose)
 
 
+def _linear_interpolation_bound(points: Sequence[Measurement], hi: int) -> float:
+    """Cota del error de interpolación lineal en el intervalo [hi-1, hi].
+
+    Usa la segunda diferencia dividida de Newton sobre las ternas disponibles que
+    contienen el intervalo: |f''| ~ 2*|f[x0,x1,x2]| y el error de la recta secante
+    está acotado por |f''| h^2 / 8.  Con menos de tres puntos se cae al salto
+    completo entre extremos, que es trivialmente conservador.
+    """
+
+    left, right = points[hi - 1], points[hi]
+    h = right.rc_gv - left.rc_gv
+    triples = []
+    if hi - 2 >= 0:
+        triples.append((points[hi - 2], left, right))
+    if hi + 1 < len(points):
+        triples.append((left, right, points[hi + 1]))
+    if not triples:
+        return abs(right.total_rate_usvh - left.total_rate_usvh)
+    worst = 0.0
+    for a, b, c in triples:
+        first_ab = (b.total_rate_usvh - a.total_rate_usvh) / (b.rc_gv - a.rc_gv)
+        first_bc = (c.total_rate_usvh - b.total_rate_usvh) / (c.rc_gv - b.rc_gv)
+        second = abs(first_bc - first_ab) / (c.rc_gv - a.rc_gv)
+        worst = max(worst, 2.0 * second * h * h / 8.0)
+    if not math.isfinite(worst):
+        raise AssemblyError("cota de interpolación Rc no finita")
+    return worst
+
+
 def _strict_grid(
     rows: Sequence[Measurement],
     rc_axis: Sequence[float],
@@ -317,7 +353,8 @@ def _strict_grid(
             left, right = points[hi - 1], points[hi]
             fraction = (target - left.rc_gv) / (right.rc_gv - left.rc_gv)
             rate = left.total_rate_usvh + fraction * (right.total_rate_usvh - left.total_rate_usvh)
-            resolution = max(left.output_resolution_usvh, right.output_resolution_usvh)
+            resolution = max(left.output_resolution_usvh, right.output_resolution_usvh) \
+                + _linear_interpolation_bound(points, hi)
             out[(round(float(target), 9), round(float(altitude), 9))] = Measurement(
                 left.kind, left.node_index, left.amplitude_factor, left.amplitude,
                 left.input_repeat, float(target), float(altitude), rate, resolution,
@@ -342,7 +379,7 @@ def _background_grid(rows: Sequence[Measurement], rc_axis, altitude_axis):
     for key in sorted(keys):
         values = [grid[key].total_rate_usvh for grid in grids]
         resolutions = [grid[key].output_resolution_usvh for grid in grids]
-        result[key] = (sum(values) / len(values), pstdev(values), max(resolutions))
+        result[key] = (sum(values) / len(values), stdev(values), max(resolutions))
     return result
 
 
@@ -355,6 +392,7 @@ def _fit_cell(
 ) -> tuple[float, float, float, bool]:
     nets = [total - background_mean for total in totals]
     max_amplitude = max(amplitudes)
+    min_amplitude = min(amplitudes)
     noise_floor = max(5.0 * background_sigma, output_resolution)
     normal = sum(amplitude * net for amplitude, net in zip(amplitudes, nets))
     denominator = sum(amplitude * amplitude for amplitude in amplitudes)
@@ -370,13 +408,16 @@ def _fit_cell(
         raise AssemblyError(f"pendiente nodal significativamente negativa: {slope}")
     if any(net < -noise_floor for net in nets):
         raise AssemblyError("neto total-fondo negativo fuera del suelo de ruido")
-    normalized = [net / amplitude for net, amplitude in zip(nets, amplitudes)]
-    normalized_spread = max(normalized) - min(normalized)
-    if normalized_spread > common.LINEARITY_TOLERANCE * max(abs(slope), error):
-        raise AssemblyError("variación normalizada entre amplitudes superior al 1 %")
     unresolved = max(abs(net) for net in nets) <= noise_floor
     if unresolved:
         return 0.0, max(error, noise_floor / max_amplitude), 0.0, True
+    normalized = [net / amplitude for net, amplitude in zip(nets, amplitudes)]
+    normalized_spread = max(normalized) - min(normalized)
+    # La cuantización de la salida de CARI produce por sí sola una dispersión
+    # normalizada de hasta noise_floor/min_amplitude; no es no-linealidad.
+    allowance = noise_floor / min_amplitude
+    if normalized_spread > common.LINEARITY_TOLERANCE * max(abs(slope), error) + allowance:
+        raise AssemblyError("variación normalizada entre amplitudes superior al 1 %")
     if slope < 0:
         # A negative residual within the measured error is not a physical
         # negative coefficient; preserving the error bound is the honest zero.
@@ -468,7 +509,7 @@ def assemble_strict(
     response_f32 = [_float32(value) for value in response_raw]
     for index, (raw, quantized, error) in enumerate(zip(response_raw, response_f32, error_raw)):
         error_raw[index] = max(error, abs(raw - quantized))
-    error_f32 = [_float32_ceiling(value) for value in error_raw]
+    error_f32 = _quantise_error_bounds(error_raw)
     if any(value < 0 or not math.isfinite(value) for value in response_f32 + error_f32):
         raise AssemblyError("tensor o round-trip Float32 inválido")
     linearity_errors.sort()

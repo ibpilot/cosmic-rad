@@ -55,10 +55,22 @@ ok("exact nodal product, tail, error and one call per energy", () => {
 });
 
 ok("bilinear interpolation at an off-grid point", () => {
-  const model = new SepDoseOperator(artifact((ei, rc, alt) => ei + rc + alt, () => 0.5));
-  const result = model.rate({ spectrumAtGeV: () => 1, rcGV: 0.125, altitudeKm: 8.25 });
+  // Respuesta asimétrica en Rc (ei + 100*rc + alt): el valor esperado se
+  // calcula con la fórmula bilineal correcta sobre rc=0.1, alt=8.4.
+  const model = new SepDoseOperator(artifact((ei, rc, alt) => ei + 100 * rc + alt, () => 0.5));
+  const result = model.rate({ spectrumAtGeV: () => 1, rcGV: 0.1, altitudeKm: 8.4 });
+  const e0 = 0 + 100 * 0 + 8, e1 = 1 + 100 * 0 + 8;
+  const f0 = 0 + 100 * 0.25 + 8, f1 = 1 + 100 * 0.25 + 8;
+  const fa = 0.4 / 0.5;
+  const fr = 0.1 / 0.25;
+  const p00 = e0, p01 = 0 + 100 * 0 + 8.5, p10 = f0, p11 = 0 + 100 * 0.25 + 8.5;
+  const q00 = e1, q01 = 1 + 100 * 0 + 8.5, q10 = f1, q11 = 1 + 100 * 0.25 + 8.5;
+  const b0 = p00 + (p10 - p00) * fr + (p01 - p00 + (p11 - p10 - p01 + p00) * fr) * fa;
+  const b1 = q00 + (q10 - q00) * fr + (q01 - q00 + (q11 - q10 - q01 + q00) * fr) * fa;
+  const expected = b0 + b1;
   assert.strictEqual(result.ok, true);
-  assert(Math.abs(result.rateUsvH - ((0 + 0.125 + 8.25) + (1 + 0.125 + 8.25))) < 1e-6);
+  assert(Math.abs(result.rateUsvH - expected) < 1e-6,
+    `got ${result.rateUsvH}, expected ${expected}`);
   assert(Math.abs(result.numericalErrorUsvH - 1) < 1e-6);
 });
 

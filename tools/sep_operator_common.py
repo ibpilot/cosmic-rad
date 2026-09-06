@@ -78,8 +78,10 @@ def read_bo11_z1_nodes(path: str) -> list[float]:
     with open(path, errors="replace") as handle:
         for line_no, line in enumerate(handle, 1):
             fields = line.split()
-            if len(fields) < 3 or fields[0] != "1":
+            if not fields or fields[0] != "1":
                 continue
+            if len(fields) < 3:
+                raise OperatorContractError(f"fila Z=1 BO11 incompleta en línea {line_no}")
             try:
                 energy = float(fields[1])
             except ValueError as exc:
