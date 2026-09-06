@@ -221,8 +221,8 @@ class TestWriteMyModelEstructura(unittest.TestCase):
 
     def test_z2_conserva_iones_gcr(self):
         # Hallazgo de la sonda en CI: CARI exige las especies Z>=2 para dar
-        # dosis D2 no-cero (BO11 con Z>=2 a cero -> 0/nan en 99 puntos). El
-        # espectro SEP solo sustituye Z=1; los iones GCR del BO11 se conservan.
+        # dosis D2 no-cero (BO11 con Z>=2 a cero -> 0/nan en 99 puntos). Los
+        # iones GCR del BO11 se conservan; el SEP solo toca Z=1.
         cari = fake_cari_dir()
         lin._write_my_model(cari, lin.power_law_rows(53))
         out = os.path.join(cari, "GCR_MODELS", "MY_MODEL.OUT")
@@ -235,6 +235,21 @@ class TestWriteMyModelEstructura(unittest.TestCase):
                     if z > 1:
                         self.assertEqual(float(t[2]), float(z),
                                          "Z=%d debe conservar el GCR del BO11" % z)
+
+    def test_sep_se_suma_al_gcr_en_z1(self):
+        # MY_MODEL es GCR + SEP: en Z=1 el flujo debe ser el del BO11 (fake: 1.0)
+        # MAS el espectro SEP. Reemplazar (como hacia el codigo antes del fix)
+        # hacia que la dosis neta no escalara (ratios 1/k medidos en CI).
+        cari = fake_cari_dir()
+        rows = [(0.1, 5.0), (1.0, 5.0), (10.0, 5.0)]   # SEP constante 5.0
+        lin._write_my_model(cari, rows)
+        out = os.path.join(cari, "GCR_MODELS", "MY_MODEL.OUT")
+        with open(out) as fh:
+            for line in fh:
+                t = line.split()
+                if len(t) >= 3 and t[0].isdigit() and int(t[0]) == 1:
+                    # GCR del fake (1.0) + SEP proyectado (5.0 en este rango).
+                    self.assertAlmostEqual(float(t[2]), 6.0, places=1)
 
 
 class TestProjectPowerlaw(unittest.TestCase):

@@ -279,19 +279,20 @@ def _project_powerlaw(rows, grid):
 
 
 def _write_my_model(cari, rows):
-    """Escribe GCR_MODELS/MY_MODEL.OUT: el espectro GCR de fondo (BO11) con la
-    componente de protones (Z=1) sustituida por `rows` (el espectro SEP).
+    """Escribe GCR_MODELS/MY_MODEL.OUT: el espectro GCR de fondo (BO11) MAS el
+    espectro SEP `rows` SUMADO a la componente de protones (Z=1).
 
-    Tres hallazgos de los runs de T5 en CI, los tres necesarios para que CARI
-    devuelva dosis no-cero:
-      1. Estructura: MY_MODEL.OUT debe tener la estructura del BO11_GCR.OUT
-         (100 filas por Z=1..28 con la malla de energia del propio BO11).
-      2. Formato: cada linea debe tener 26 chars con las columnas del BO11.
-      3. IONES: CARI exige las especies Z>=2 para dar dosis D2 no-cero (una
-         sonda con BO11 y Z>=2 a cero devolvio 0/nan en los 99 puntos). El
-         HELP.TXT lo dice: MY_MODEL.OUT "is assumed to have GCR flux units" --
-         es el espectro GCR COMPLETO, y un SEP solo modifica los protones. Los
-         bloques Z=2..28 se conservan del BO11 real, NO se ponen a cero.
+    MY_MODEL.OUT es el espectro primario TOTAL (el HELP.TXT: "is assumed to
+    have GCR flux units"). Para modelar GCR + evento solar hay que SUMAR los
+    flujos de protones: F_Z1(E) = F_GCR_Z1(E) + F_SEP(E). Reemplazar Z=1 por el
+    SEP (como hacia antes) hace que la dosis neta (total - fondo) sea
+    dosis(SEP) - dosis(GCR_Z1): el termino GCR fijo no escala y las puertas de
+    linealidad fallan con ratios 1/k (medido en CI: x10 -> 0.1, x100 -> 0.01).
+
+    Hallazgos previos que siguen vigentes:
+      1. Estructura: 100 filas por Z=1..28 con la malla del BO11.
+      2. Formato: lineas de 26 chars con las columnas del BO11.
+      3. Iones: CARI exige Z>=2 (dosis 0/nan si van a cero); se conservan.
     """
     gcr = os.path.join(cari, "GCR_MODELS")
     dst = os.path.join(gcr, sep.MY_MODEL_NAME)
@@ -299,20 +300,23 @@ def _write_my_model(cari, rows):
     z1_grid = grids.get(1)
     if not z1_grid:
         raise SystemExit("no hay malla Z=1 en BO11_GCR.OUT (¿distro incompleta?)")
-    # Proyectar el espectro SEP sobre la malla fija de Z=1 del BO11.
-    proj = _project_powerlaw(rows, z1_grid)
+    # Espectro SEP proyectado sobre la malla fija de Z=1 del BO11.
+    sep_proj = dict(_project_powerlaw(rows, z1_grid))
     with open(dst, "w") as f:
         f.write("2002.041096\n")           # epoca del BO11_GCR.OUT distribuido
         f.write("   Z       E            F\n")
-        # Z=1: el espectro SEP proyectado. Z=2..28: los valores GCR del BO11
-        # real (formato exacto de 26 chars, columnas del BO11).
         with open(os.path.join(gcr, sep.BO11_FILE)) as src:
             src_lines = src.read().splitlines()
-        for e, fl in proj:
-            f.write("%4d  %9.3E  %9.3E\n" % (1, e, fl))
         for l in src_lines[2:]:
             t = l.split()
-            if len(t) >= 3 and t[0].isdigit() and int(t[0]) > 1:
+            if len(t) < 3 or not t[0].isdigit():
+                continue
+            z = int(t[0])
+            e = float(t[1])
+            if z == 1:
+                f.write("%4d  %9.3E  %9.3E\n" % (1, e,
+                                                 float(t[2]) + sep_proj.get(e, 0.0)))
+            else:
                 f.write(l.rstrip("\n") + "\n")
     return dst
 
