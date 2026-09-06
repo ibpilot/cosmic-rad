@@ -27,6 +27,10 @@ jobs:
           let n=0;for(const s of h.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)){n++;
           try{new vm.Script(s[1])}catch(e){console.log("FAIL "+n+": "+e.message);process.exit(1)}}
           console.log("SYNTAX OK ("+n+")")'
+      - name: Sintaxis de todos los scripts del operador
+        run: |
+          python3 -m py_compile tools/*.py tools/tests/*.py
+          find tools -name '*.js' -print0 | xargs -0 -n1 node --check
       - name: Suite de regresión (bugs)
         run: node tools/tests/bugs_test.js
       - name: Suite de la rejilla de dosis
@@ -49,3 +53,7 @@ jobs:
         run: |
           cd tools
           python3 -m unittest test_cari7_sep_grid -v
+      - name: Tests del operador nodal SEP-2 (Python)
+        run: python3 -m unittest tools.test_cari7_sep_operator -v
+      - name: Tests del Module runtime SEP-2 (Node)
+        run: node tools/tests/sep_operator_test.js

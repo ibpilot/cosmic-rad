@@ -1,51 +1,18 @@
-name: SEP response grid
+name: SEP response operator
 
-# Rejilla de respuesta SEP (MY_MODEL.OUT -> CARI-7A). El kernel es estatico,
-# asi que el workflow es SOLO `workflow_dispatch`: no lleva cron ni schedule.
-#
-# T4 (este fichero): puerta de unidades cm2/m2 bloqueante. Reproduce con
-# MY_MODEL.OUT un espectro incorporado de CARI-7A (BO'11 GCR) y falla si el
-# ratio contra el camino nativo se sale del 5 %. El job imprime el ratio
-# medido (no solo OK/FAIL): un factor silencioso 10^4 (ambiguedad cm^2/m^2 de
-# la documentacion FAA) aparece ahi como ratio ~1e-4/1e4 y aborta el run.
-#
-# T5 (este fichero): cuatro puertas de linealidad ANTES de generar el kernel:
-#   - escalado x10/x100 (tol 1 %)
-#   - superposicion dosis(A+B) vs dosis(A)+dosis(B) (tol 1 %)
-#   - convergencia de binning 53 vs 106 bins (tol 1 %)
-#   - reproduccion de un espectro incorporado (tol 5 %, el ratio de T4)
-# Fallar cualquiera aborta el run: no hay kernel parcheado; un kernel no
-# lineal miente mas cuanto mas duro es el evento. Si T5 falla de verdad, el
-# bloque T4-T6 se rehace sobre AniMAIRE (riesgo declarado en el plan).
-#
-# T6 (este fichero): barrido del kernel SEP_RESPONSE_GRID. Un job matrix por
-# bin (53 columnas, cada una = espectro base de 1 bin SUMADO al GCR de Z=1,
-# sobre la rejilla Rc x alt) + un job de fondo (Z=1 = GCR del BO11 sin SEP) +
-# un job que ensambla (resta fondo, divide por escala, remuestrea a la rejilla
-# exacta), embebe el bloque en index.html, verifica sintaxis y
-# dimensiones/monotonia y commitea. tools/generate_sep_grid.py; verify
-# tools/tests/check_sep_grid.py.
-#
-# `gate-unidades` (T4) y `linearity` (T5) corren el MISMO setup de CARI-7A en
-# jobs separados porque el runner es efimero. El job `linearity` ejecuta las
-# cuatro puertas COMPLETAS (incluida la reproduccion de T4, puerta 4): el plan
-# exige que el job imprima las cuatro metricas con su margen. La reproduccion
-# duplicada (~4 min) es el coste de que el job de T5 sea autonomo y su
-# veredicto no dependa de leer la salida de otro job.
-
+# The dispatch-only workflow is deliberately fail-closed.  Diagnostics may
+# collect CARI outputs, but no diagnostic path has a dependency edge to
+# embed/publish.  The existing sep-1 block remains untouched unless the full
+# nodal generation and every G1--G7 gate succeeds.
 on:
   workflow_dispatch:
     inputs:
+      diagnostics_only:
+        description: "Ejecutar sondas diagnósticas sin publicar"
+        type: boolean
+        default: false
       verbose:
-        description: 'Vierte el stdout/stderr completo del binario CARI (diagnostico)'
-        type: boolean
-        default: false
-      skip_linearity:
-        description: 'Saltar las puertas de linealidad (T5) — solo diagnostico'
-        type: boolean
-        default: false
-      skip_sweep:
-        description: 'Saltar el barrido del kernel (T6) — solo diagnostico'
+        description: "Vierte stdout/stderr completo de CARI"
         type: boolean
         default: false
 
@@ -53,159 +20,244 @@ permissions:
   contents: read
 
 concurrency:
-  group: sep-grid
+  group: sep-operator
   cancel-in-progress: true
 
+env:
+  PYTHONPATH: tools
+
 jobs:
-  gate-unidades:
-    # Puerta bloqueante de T4 (y puerta 4 de T5): MY_MODEL.OUT debe reproducir
-    # un espectro incorporado dentro del 5 %. Sin esto no hay kernel SEP que
-    # valga.
+  setup-unit:
+    if: ${{ inputs.diagnostics_only != true }}
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
-      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
-        id: cari
-        uses: ./.github/actions/setup-cari7a
-      - name: Puerta de unidades (reproduccion del espectro incorporado)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Sintaxis y contrato puro
         run: |
-          python3 tools/cari7_sep_gate.py \
-            --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
-            --binary "${{ steps.cari.outputs.binary }}" \
-            --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
-            ${{ github.event.inputs.verbose == 'true' && '--verbose' || '' }}
+          python3 -m py_compile tools/sep_operator_common.py tools/generate_sep_operator.py tools/cari7_sep_operator_gate.py
+          python3 -m unittest tools.test_cari7_sep_operator -v
+          node --check tools/sep_operator_runtime.js
+          node --check tools/run_sep_operator_node.js
+          node tools/tests/sep_operator_test.js
 
-  linearity:
-    # T5: las cuatro puertas de linealidad (escalado, superposicion, binning,
-    # reproduccion) sobre el MISMO CARI-7A. Corre completo (sin
-    # --skip-reproduction) para que el job imprima las cuatro metricas con su
-    # margen; la reproduccion duplicada es el coste de la autonomia del job.
-    needs: gate-unidades
-    if: github.event.inputs.skip_linearity != 'true'
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
-      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
-        id: cari
-        uses: ./.github/actions/setup-cari7a
-      - name: Puertas de linealidad (T5)
-        run: |
-          python3 tools/cari7_sep_linearity.py \
-            --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
-            --binary "${{ steps.cari.outputs.binary }}" \
-            --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
-            --skip-control \
-            ${{ github.event.inputs.verbose == 'true' && '--verbose' || '' }}
-
-  kernel-column:
-    # T6: una columna del kernel por bin de energia (53 en paralelo). Cada una
-    # escribe MY_MODEL.OUT con la base del bin (1 pfu integrado * AMP) y corre
-    # CARI sobre la rejilla completa Rc 0:18:0.25 x alt 8.0:13.0:0.5.
-    needs: [gate-unidades, linearity]
-    if: |
-      !cancelled()
-      && needs.gate-unidades.result == 'success'
-      && (needs.linearity.result == 'success' || needs.linearity.result == 'skipped')
-      && github.event.inputs.skip_sweep != 'true'
+  background:
+    needs: setup-unit
+    if: ${{ needs.setup-unit.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix:
-        bin: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52]
+        repeat: [0, 1, 2]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup CARI-7A (descarga + SHA-256 + selftest)
         id: cari
         uses: ./.github/actions/setup-cari7a
-      - name: Columna del kernel (bin ${{ matrix.bin }})
+      - name: Fondo repetido ${{ matrix.repeat }}
         run: |
-          python3 tools/generate_sep_grid.py column \
-            --bin ${{ matrix.bin }} \
-            --amp 1000 \
+          python3 tools/generate_sep_operator.py background \
+            --repeat ${{ matrix.repeat }} \
             --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
             --binary "${{ steps.cari.outputs.binary }}" \
             --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
-            --out rates_k${{ matrix.bin }}.csv \
-            ${{ github.event.inputs.verbose == 'true' && '--verbose' || '' }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (pin S2)
+            --out "rates_bg_${{ matrix.repeat }}.csv" \
+            ${{ inputs.verbose && '--verbose' || '' }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sep-col-${{ matrix.bin }}
-          path: rates_k${{ matrix.bin }}.csv
+          name: sep-operator-background-${{ matrix.repeat }}
+          path: rates_bg_${{ matrix.repeat }}.csv
 
-  kernel-bg:
-    # T6: dosis del fondo GCR (Z=1 del BO11 SIN el espectro SEP) sobre la misma
-    # rejilla. Cada columna del kernel se mide como (total - fondo)/AMP; el
-    # fondo incluye los iones Z>=2 (que CARI exige) y el GCR de protones, que
-    # MY_MODEL siempre lleva: la resta aísla la dosis del espectro SEP puro.
-    needs: [gate-unidades, linearity]
-    if: |
-      !cancelled()
-      && needs.gate-unidades.result == 'success'
-      && (needs.linearity.result == 'success' || needs.linearity.result == 'skipped')
-      && github.event.inputs.skip_sweep != 'true'
+  nodal-sweep:
+    needs: setup-unit
+    if: ${{ needs.setup-unit.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        node_index: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Setup CARI-7A (descarga + SHA-256 + selftest)
         id: cari
         uses: ./.github/actions/setup-cari7a
-      - name: Fondo GCR (Z=1 del BO11 sin SEP)
+      - name: Nodo ${{ matrix.node_index }} y tres amplitudes
         run: |
-          python3 tools/generate_sep_grid.py bg \
+          python3 tools/generate_sep_operator.py node \
+            --node-index ${{ matrix.node_index }} \
             --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
             --binary "${{ steps.cari.outputs.binary }}" \
             --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
-            --out rates_bg.csv \
-            ${{ github.event.inputs.verbose == 'true' && '--verbose' || '' }}
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4 (pin S2)
+            --out "rates_node_${{ matrix.node_index }}.csv" \
+            ${{ inputs.verbose && '--verbose' || '' }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
-          name: sep-col-bg
-          path: rates_bg.csv
+          name: sep-operator-node-${{ matrix.node_index }}
+          path: rates_node_${{ matrix.node_index }}_a*.csv
 
   assemble:
-    # T6: ensambla el kernel (53 columnas + fondo), embebe SEP_RESPONSE_GRID en
-    # index.html, verifica sintaxis y dimensiones/monotonia y commitea.
-    needs: [kernel-column, kernel-bg]
-    if: |
-      !cancelled() && needs.kernel-column.result == 'success'
-      && needs.kernel-bg.result == 'success'
-    # Unico job que commitea el resultado: necesita write.
+    needs: [background, nodal-sweep]
+    if: ${{ needs.background.result == 'success' && needs.nodal-sweep.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          path: rates
+          pattern: sep-operator-*
+          merge-multiple: true
+      - name: Setup CARI-7A para hash y BO11 literal
+        id: cari
+        uses: ./.github/actions/setup-cari7a
+      - name: Ensamblado estricto y G1/G2/G3
+        run: |
+          python3 tools/generate_sep_operator.py assemble \
+            --measurements 'rates/rates_node_*_a*.csv' \
+            --background 'rates/rates_bg_*.csv' \
+            --bo11 "${{ steps.cari.outputs.cari-dir }}/GCR_MODELS/BO11_GCR.OUT" \
+            --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
+            --validation-run-id "${GITHUB_RUN_ID}" \
+            --out sep_operator.js
+          python3 tools/tests/check_sep_operator.py --operator sep_operator.js --require-43
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sep-operator-assembled
+          path: sep_operator.js
+
+  g4-reproduction:
+    needs: assemble
+    if: ${{ needs.assemble.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sep-operator-assembled
+      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
+        id: cari
+        uses: ./.github/actions/setup-cari7a
+      - name: G4 operador JS real contra CARI (rejilla completa)
+        run: |
+          python3 tools/cari7_sep_operator_gate.py \
+            --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
+            --binary "${{ steps.cari.outputs.binary }}" \
+            --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
+            --artifact sep_operator.js \
+            --report g4.json \
+            --validation-run-id "${GITHUB_RUN_ID}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sep-operator-g4
+          path: g4.json
+
+  g5-offgrid:
+    needs: g4-reproduction
+    if: ${{ needs.g4-reproduction.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sep-operator-assembled
+      - name: Setup CARI-7A (descarga + SHA-256 + selftest)
+        id: cari
+        uses: ./.github/actions/setup-cari7a
+      - name: G5 Rc/altitud off-grid contra CARI
+        run: |
+          python3 tools/cari7_sep_operator_gate.py \
+            --offgrid-only \
+            --cari-dir "${{ steps.cari.outputs.cari-dir }}" \
+            --binary "${{ steps.cari.outputs.binary }}" \
+            --cutoffs "${{ steps.cari.outputs.cari-dir }}/CUTOFFS" \
+            --artifact sep_operator.js \
+            --report g5.json \
+            --validation-run-id "${GITHUB_RUN_ID}"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sep-operator-g5
+          path: g5.json
+
+  embed-and-test:
+    needs: [g4-reproduction, g5-offgrid]
+    if: ${{ needs.g4-reproduction.result == 'success' && needs.g5-offgrid.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sep-operator-assembled
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sep-operator-g4
+          path: reports
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: sep-operator-g5
+          path: reports
+      - name: Consolidar informe G4/G5 y anotar artefacto
+        run: |
+          python3 - <<'PY'
+          import json
+          g4=json.load(open('reports/g4.json')); g5=json.load(open('reports/g5.json'))
+          if (g4.get('g4',{}).get('ok') is not True or
+              g4.get('g7',{}).get('ok') is not True or
+              g5.get('g5',{}).get('ok') is not True):
+              raise SystemExit('G4/G5/G7 no pasan; no se embebe')
+          report={
+            'validation_run_id': g4['validation_run_id'],
+            'validation_max_grid_relative_error': g4['validation_max_grid_relative_error'],
+            'validation_max_offgrid_relative_error': g5['validation_max_offgrid_relative_error'],
+            'g4': g4['g4'], 'g5': g5['g5'], 'g7': g4['g7']}
+          json.dump(report, open('reports/validation.json','w'), indent=2, sort_keys=True)
+          PY
+          python3 tools/generate_sep_operator.py annotate --artifact sep_operator.js \
+            --report reports/validation.json --out sep_operator_validated.js
+      - name: Embeber solo por marcadores
+        run: python3 tools/embed_sep_operator.py --operator sep_operator_validated.js --index index.html
+      - name: Puertas G6/G7, Node y sintaxis HTML
+        run: |
+          python3 tools/tests/check_sep_operator.py --index index.html --require-43
+          node tools/tests/sep_operator_test.js
+          node -e 'const fs=require("fs"),vm=require("vm"),h=fs.readFileSync("index.html","utf8");let n=0;for(const s of h.matchAll(/<script[^>]*>([\\s\\S]*?)<\\/script>/g)){if(!s[0].includes("src=")){n++;new vm.Script(s[1]);}}console.log("SYNTAX OK ("+n+")")'
+          python3 -m unittest tools.test_cari7_sep_operator -v
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: sep-operator-validation
+          path: |
+            reports/validation.json
+            index.html
+
+  publish:
+    needs: embed-and-test
+    if: ${{ needs.embed-and-test.result == 'success' }}
     permissions:
       contents: write
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1 (pin S2)
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4 (pin S2)
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
-          path: rates
-      - name: Ensamblar kernel SEP_RESPONSE_GRID
-        run: |
-          python3 tools/generate_sep_grid.py assemble \
-            --rates "rates/sep-col-*/rates_k*.csv" \
-            --bg rates/sep-col-bg/rates_bg.csv \
-            --amp 1000 --out sep_grid.js
-      - name: Embeber en index.html
-        run: |
-          python3 tools/embed_sep_grid.py --grid sep_grid.js --index index.html
-      - name: Verificar dimensiones y monotonia (check_sep_grid)
-        run: python3 tools/tests/check_sep_grid.py --index index.html
-      - name: Commit y push
+          name: sep-operator-validation
+          path: publish-artifacts
+      - name: El commit de artefacto solo después de todas las puertas
         env:
           TOKEN: ${{ github.token }}
         run: |
+          test -s publish-artifacts/reports/validation.json
+          test -s publish-artifacts/index.html
+          cp publish-artifacts/index.html index.html
           git config user.name "cosmic-rad-bot"
           git config user.email "cosmic-rad-bot@users.noreply.github.com"
           git add index.html
-          if git diff --cached --quiet; then
-            echo "Sin cambios en index.html; no hay commit."
-          else
-            git commit -m "chore(sep): regenerate SEP_RESPONSE_GRID kernel (CARI-7A)"
-            git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
-          fi
+          git diff --cached --quiet && exit 0
+          git commit -m "chore(sep): publicar operador nodal sep-2"
+          git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push origin "HEAD:${GITHUB_REF_NAME}"

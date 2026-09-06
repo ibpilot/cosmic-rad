@@ -7,6 +7,7 @@ const fs = require("fs"), vm = require("vm"), path = require("path");
 // worktree, y los tests pasaban o reventaban por el fichero de otro sitio.
 const REPO = process.env.REPO || path.resolve(__dirname, "..", "..");
 const html = fs.readFileSync(path.join(REPO, "index.html"), "utf8");
+const runtime = fs.readFileSync(path.join(REPO, "tools", "sep_operator_runtime.js"), "utf8");
 const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)].map(m => m[1]);
 let app = scripts[scripts.length - 1].replace(/ReactDOM\.createRoot\([\s\S]*$/, "");
 
@@ -22,6 +23,7 @@ const ctx = {
 };
 ctx.window = ctx; ctx.globalThis = ctx;
 vm.createContext(ctx);
+vm.runInContext(runtime, ctx);
 vm.runInContext(app, ctx);
 
 let pass = 0, fail = 0;
