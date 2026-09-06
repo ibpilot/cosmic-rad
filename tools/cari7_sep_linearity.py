@@ -95,8 +95,24 @@ def band_rows(e_lo, e_hi, n_bins=200, include_lo=True, include_hi=True):
     """Fraccion espectral A o B de la superposicion: el espectro base confinado
     a [e_lo, e_hi]. Fuera de la banda el espectro es cero (no se escribe).
     `include_lo=False` / `include_hi=False` excluyen el borde (para que A y B
-    contiguas no dupliquen el borde compartido)."""
+    contiguas no dupliquen el borde compartido).
+
+    La banda incluye SIEMPRE sus extremos (si `include_hi`, anade e_hi aunque el
+    muestreo log no caiga en el): sin eso, dos bandas contiguas dejan un hueco
+    en la malla del BO11 que A+B rellena por interpolacion pero A y B no cubren,
+    y la superposicion mediria un artefacto (A+B != A+B)."""
     full = power_law_rows(n_bins)      # forma fina de referencia
+    # Valor de la forma en los bordes (interpolando la forma fina).
+    def f_at(e):
+        fs = sorted(full)
+        for i in range(len(fs) - 1):
+            e1, f1 = fs[i]
+            e2, f2 = fs[i + 1]
+            if e1 <= e <= e2:
+                if f1 > 0 and f2 > 0 and e1 != e2:
+                    return f1 * (f2 / f1) ** (math.log(e / e1) / math.log(e2 / e1))
+                return f1
+        return fs[0][1] if e < fs[0][0] else fs[-1][1]
     out = []
     for e, f in full:
         if not include_lo and e <= e_lo:
@@ -105,7 +121,11 @@ def band_rows(e_lo, e_hi, n_bins=200, include_lo=True, include_hi=True):
             continue
         if e_lo <= e <= e_hi:
             out.append((e, f))
-    return out
+    if include_lo and not any(abs(e - e_lo) < 1e-12 for e, _ in out):
+        out.append((e_lo, f_at(e_lo)))
+    if include_hi and not any(abs(e - e_hi) < 1e-12 for e, _ in out):
+        out.append((e_hi, f_at(e_hi)))
+    return sorted(out)
 
 
 def gle_rows_from_fixture(fixture_path, n_bins, baseline_path=None):
@@ -254,37 +274,68 @@ def _rcmap_gate(cutoffs, date, grid_step):
             if any(abs(v - t) <= 0.25 for t in targets)}
 
 
-def _project_powerlaw(rows, grid):
+def _project_powerlaw(rows, grid, zero_outside=False):
     """Proyecta (E, F) sobre `grid` interpolando en log-log y extrapolando con
     la pendiente espectral local FUERA del rango (ley de potencia), no plano:
     una cola plana hasta 10 TeV (la malla del BO11 llega a 10000 GeV) daria una
-    dosis absurda y romperia la convergencia."""
+    dosis absurda y romperia la convergencia.
+
+    Con `zero_outside=True` (bandas de la superposicion), el espectro vale 0
+    fuera de [E_min, E_max] de las filas: las bandas A y B deben ser disjuntas
+    de verdad. Si se extrapolaran (ley de potencia), cada banda por separado ya
+    daria casi la dosis del espectro completo y la superposicion mediria
+    ab/(a+b) ~ 0.5 (medido en CI)."""
     import bisect
     pts = sorted((math.log(e), math.log(f)) for e, f in rows if e > 0 and f > 0)
     if not pts:
         raise SystemExit("espectro sin puntos positivos para proyectar")
+    lo_e, hi_e = math.exp(pts[0][0]), math.exp(pts[-1][0])
     out = []
     for e in grid:
+        x = math.log(e)
+        if e < lo_e or e > hi_e:
+            out.append((e, 0.0 if zero_outside else None))
+            continue
+        i = bisect.bisect_right([p[0] for p in pts], x)
+        if i >= len(pts):
+            i = len(pts) - 1
+        x1, y1 = pts[i - 1]
+        x2, y2 = pts[i]
+        if x2 == x1:
+            out.append((e, math.exp(y2)))
+        else:
+            out.append((e, math.exp(y1 + (y2 - y1) * (x - x1) / (x2 - x1))))
+    if not zero_outside:
+        # Pasar de nuevo para extrapolar los que quedaron pendientes (None).
+        out = _extrapolate_tails(rows, out)
+    return out
+
+
+def _extrapolate_tails(rows, projected):
+    """Rellena los huecos (None) de los extremos extrapolando con la pendiente
+    espectral local del primer/ultimo tramo de `rows` (ley de potencia)."""
+    import bisect
+    pts = sorted((math.log(e), math.log(f)) for e, f in rows if e > 0 and f > 0)
+    out = []
+    for e, f in projected:
+        if f is not None:
+            out.append((e, f))
+            continue
         x = math.log(e)
         if x <= pts[0][0]:
             x1, y1 = pts[0]
             x2, y2 = pts[min(1, len(pts) - 1)]
             m = (y2 - y1) / (x2 - x1) if x2 != x1 else 0.0
             out.append((e, math.exp(y1 + m * (x - x1))))
-        elif x >= pts[-1][0]:
+        else:
             x1, y1 = pts[-2]
             x2, y2 = pts[-1]
             m = (y2 - y1) / (x2 - x1) if x2 != x1 else 0.0
             out.append((e, math.exp(y2 + m * (x - x2))))
-        else:
-            i = bisect.bisect_right([p[0] for p in pts], x)
-            x1, y1 = pts[i - 1]
-            x2, y2 = pts[i]
-            out.append((e, math.exp(y1 + (y2 - y1) * (x - x1) / (x2 - x1))))
     return out
 
 
-def _write_my_model(cari, rows):
+def _write_my_model(cari, rows, zero_outside=False):
     """Escribe GCR_MODELS/MY_MODEL.OUT: el espectro GCR de fondo (BO11) MAS el
     espectro SEP `rows` SUMADO a la componente de protones (Z=1).
 
@@ -299,6 +350,9 @@ def _write_my_model(cari, rows):
       1. Estructura: 100 filas por Z=1..28 con la malla del BO11.
       2. Formato: lineas de 26 chars con las columnas del BO11.
       3. Iones: CARI exige Z>=2 (dosis 0/nan si van a cero); se conservan.
+
+    `zero_outside=True` (bandas de la superposicion): el SEP vale 0 fuera del
+    rango de `rows` (bandas disjuntas de verdad, sin extrapolacion).
     """
     gcr = os.path.join(cari, "GCR_MODELS")
     dst = os.path.join(gcr, sep.MY_MODEL_NAME)
@@ -307,7 +361,8 @@ def _write_my_model(cari, rows):
     if not z1_grid:
         raise SystemExit("no hay malla Z=1 en BO11_GCR.OUT (¿distro incompleta?)")
     # Espectro SEP proyectado sobre la malla fija de Z=1 del BO11.
-    sep_proj = dict(_project_powerlaw(rows, z1_grid))
+    sep_proj = dict(_project_powerlaw(rows, z1_grid,
+                                      zero_outside=zero_outside))
     with open(dst, "w") as f:
         f.write("2002.041096\n")           # epoca del BO11_GCR.OUT distribuido
         f.write("   Z       E            F\n")
@@ -392,10 +447,10 @@ def _run_current_my_model(cari, binary, date, cutoffs, os_name="unix",
 
 
 def run_rows(cari, binary, rows, date, cutoffs, os_name="unix", wine=None,
-             verbose=False, rc_targets=None, tag=None):
+             verbose=False, rc_targets=None, tag=None, zero_outside=False):
     """Escribe MY_MODEL.OUT con `rows` y corre CARI (campo C7) sobre la rejilla
     reducida. Devuelve { (rc_gv, alt_km): rate_usvh }."""
-    _write_my_model(cari, rows)
+    _write_my_model(cari, rows, zero_outside=zero_outside)
     return _run_current_my_model(cari, binary, date, cutoffs, os_name=os_name,
                                  wine=wine, verbose=verbose,
                                  rc_targets=rc_targets, tag=tag)
@@ -486,7 +541,8 @@ def control_solo_protones(cari, binary, date, args):
             os.remove(backup)
 
 
-def run_sep_net(cari, binary, date, args, rows, tag=None, _gcr_cache=None):
+def run_sep_net(cari, binary, date, args, rows, tag=None, _gcr_cache=None,
+                zero_outside=False):
     """Dosis SEP NETA de un espectro de protones: corre MY_MODEL (= GCR del BO11
     + SEP en Z=1) y le resta la dosis del fondo GCR puro (BO11 sin modificar).
 
@@ -515,7 +571,8 @@ def run_sep_net(cari, binary, date, args, rows, tag=None, _gcr_cache=None):
                 shutil.copy(backup, gcr_file)
                 os.remove(backup)
     total = run_rows(cari, binary, rows, date, args.cutoffs, os_name=args.os,
-                     wine=args.wine, verbose=args.verbose, tag=tag)
+                     wine=args.wine, verbose=args.verbose, tag=tag,
+                     zero_outside=zero_outside)
     gcr = _gcr_cache["gcr"]
     net = {}
     for k in total:
@@ -567,12 +624,18 @@ def gate_superposition(cari, binary, date, args, gcr_cache=None):
     # A cubre [E_MIN, mid], B cubre (mid, E_MAX]: sin duplicar el borde `mid`.
     band_a = band_rows(E_MIN_GEV, mid)
     band_b = band_rows(mid, E_MAX_GEV, include_lo=False)
+    # A y B con zero_outside: cada banda vale 0 fuera de su rango (disjuntas de
+    # verdad). Si se extrapolaran, cada una daria casi la dosis del espectro
+    # completo y la superposicion mediria ~0.5 (bug destapado en CI).
     a = run_sep_net(cari, binary, date, args, band_a, tag="sa",
-                    _gcr_cache=gcr_cache)
+                    _gcr_cache=gcr_cache, zero_outside=True)
     b = run_sep_net(cari, binary, date, args, band_b, tag="sb",
-                    _gcr_cache=gcr_cache)
+                    _gcr_cache=gcr_cache, zero_outside=True)
+    # A+B tambien con zero_outside: como concatenacion de bandas recortadas no
+    # debe ganar colas extrapoladas en los extremos (si no, A+B no seria
+    # exactamente A+B y la superposicion mediria un artefacto).
     ab = run_sep_net(cari, binary, date, args, band_a + band_b, tag="sab",
-                     _gcr_cache=gcr_cache)
+                     _gcr_cache=gcr_cache, zero_outside=True)
     n, mx, mn, minr, maxr, same = superposition_metric(a, b, ab)
     passed = summarize("superposicion: dosis(A+B) vs dosis(A)+dosis(B)",
                        n, mx, mn, minr, maxr, same, TOL_SUPERPOSITION)
