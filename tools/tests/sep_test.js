@@ -8,7 +8,7 @@ let app = scripts[scripts.length - 1].replace(/ReactDOM\.createRoot\([\s\S]*$/, 
 
 const ctx = {
   console, atob, Math, JSON, Date, isFinite, parseInt, parseFloat, String, Number,
-  Array, Object, Boolean, Error, TypeError, RegExp, Float32Array, Int16Array, Uint8Array,
+  Array, Object, Boolean, Error, TypeError, RegExp, Float32Array, Int16Array, Uint8Array, Map, Promise,
   fetch: () => Promise.reject(new Error("no net in tests")),
   navigator: { userAgent: "node" },
   localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
@@ -1377,6 +1377,24 @@ console.log("T9 ruta SEP — instrumentacion (informe T14)");
      probe.range ? probe.range.lowUsv.toFixed(4) + " - " + probe.range.highUsv.toFixed(4) +
        " uSv" : "sin cifra (" + probe.reason + ")");
 })();
+
+console.log("T11 archivo real");
+{
+  const FIXA = path.join(REPO, "tools", "fixtures", "goes", "archive");
+  const rj = (n) => JSON.parse(fs.readFileSync(path.join(FIXA, n), "utf8"));
+  const adapted = ctx.solarDayAdapt(
+    [rj("2026-09-08-diff.json"), rj("2026-09-09-diff.json")],
+    [rj("2026-09-08.json"), rj("2026-09-09.json")]);
+  const startMs = Date.UTC(2026, 8, 9, 6, 0);
+  const points = [];
+  for (let i = 0; i <= 12; i++) {
+    points.push({ tMs: startMs + i * 15 * 60 * 1000, rcGV: 1.0, altitudeKm: 10.5 });
+  }
+  const r = SepModel.route({ channels: adapted.channels, samples: adapted.samples,
+                             startMs: startMs, points: points, operator: fakeOperator(1, 0.01) });
+  ok("R1 dia tranquilo -> ok:true, sin_senal", r.ok === true && r.state === "sin_senal",
+     JSON.stringify({ ok: r.ok, state: r.state, reason: r.reason, code: r.code }));
+}
 
 console.log("\n" + pass + " pass, " + fail + " fail");
 process.exit(fail ? 1 : 0);

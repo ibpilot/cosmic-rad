@@ -417,7 +417,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.13";
+var APP_VERSION = "1.14";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2203,6 +2203,302 @@ var OCC_STATES = ["programado", "esperando_datos", "incompleto", "estimacion_dis
   "esperando_fecha"];
 var OCC_MAX = 100;
 
+// ── T11: archivo solar publico (ocurrencias) ─────────────────────────────────
+// Primer dia del archivo GOES publico (cosmic-rad-data). Antes no hay datos.
+var SOLAR_ARCHIVE_START_MS = Date.UTC(2026, 7, 30);
+var SOLAR_ARCHIVE_BASE = "https://raw.githubusercontent.com/ibpilot/cosmic-rad-data/main/";
+// Version del modelo con que se incorpora una cifra; si cambia, la ocurrencia pasa a modelo_nuevo.
+var SEP_MODEL_VERSION = "t9-2026-09-11";
+var BASELINE_MS = 12 * 3600 * 1000;
+
+// Orden canonico de los 13 canales del diferencial GOES.
+var SOLAR_CHANNEL_ORDER = ["P1", "P2A", "P2B", "P3", "P4", "P5", "P6", "P7",
+  "P8A", "P8B", "P8C", "P9", "P10"];
+
+// occVisible(state): agrupa el estado interno en uno de los cuatro visibles.
+// Tabla explicita; un estado fuera de la tabla es un error de programacion.
+var OCC_VISIBLE = {
+  esperando_fecha: "pendiente",
+  programado: "pendiente",
+  esperando_datos: "pendiente",
+  incompleto: "pendiente",
+  estimacion_disponible: "disponible",
+  modelo_nuevo: "disponible",
+  incorporada: "revisada",
+  sin_senal: "revisada",
+  fuera_de_rango: "revisada",
+  noaa_no_disponible: "aviso"
+};
+function occVisible(state) {
+  if (Object.prototype.hasOwnProperty.call(OCC_VISIBLE, state)) return OCC_VISIBLE[state];
+  throw new Error("occVisible: estado desconocido " + state);
+}
+
+// solarDayAdapt(diffJsons, intJsons): adapta los ficheros diarios del archivo
+// publico al contrato de SepModel.route. No filtra huecos ni flujos negativos:
+// el modelo cierra en pendiente cuando el dato no es medible. Nunca lanza.
+function solarDayAdapt(diffJsons, intJsons) {
+  var diffs = Array.isArray(diffJsons) ? diffJsons : [];
+  var ints = Array.isArray(intJsons) ? intJsons : [];
+  var raw = [];
+  var i, j;
+  for (i = 0; i < diffs.length; i++) {
+    var d = diffs[i];
+    if (d && Array.isArray(d.samples)) {
+      for (j = 0; j < d.samples.length; j++) raw.push(d.samples[j]);
+    }
+  }
+  if (!raw.length) return { channels: [], samples: [] };
+  // Canales: los de la primera muestra diferencial, en orden canonico.
+  var energy = raw[0] && raw[0].energy;
+  var channels = [];
+  for (i = 0; i < SOLAR_CHANNEL_ORDER.length; i++) {
+    var name = SOLAR_CHANNEL_ORDER[i];
+    var ch = { name: name, lo_keV: NaN, hi_keV: NaN };
+    var text = energy && typeof energy[name] === "string" ? energy[name] : "";
+    var m = /^(\d+)\s*-\s*(\d+)\s*keV$/.exec(text);
+    if (m) { ch.lo_keV = +m[1]; ch.hi_keV = +m[2]; }
+    channels.push(ch);
+  }
+  // Integral >=500 MeV por instante t.
+  var int500ByT = {};
+  for (i = 0; i < ints.length; i++) {
+    var it = ints[i];
+    if (!it || !Array.isArray(it.samples)) continue;
+    for (j = 0; j < it.samples.length; j++) {
+      var is = it.samples[j];
+      if (is && typeof is.t === "string" && is.flux && typeof is.flux === "object") {
+        int500ByT[is.t] = is.flux[">=500 MeV"];
+      }
+    }
+  }
+  var samples = [];
+  for (i = 0; i < raw.length; i++) {
+    var r = raw[i];
+    if (!r || typeof r.t !== "string") continue;
+    var tMs = Date.parse(r.t);
+    if (!isFinite(tMs)) continue;
+    var smp = {
+      tMs: tMs,
+      // El modelo exige `sat` de tipo string; el archivo lo guarda numerico.
+      sat: r.sat == null ? undefined : String(r.sat),
+      int500: Object.prototype.hasOwnProperty.call(int500ByT, r.t) ? int500ByT[r.t] : undefined
+    };
+    if (r.flux && typeof r.flux === "object") {
+      for (j = 0; j < SOLAR_CHANNEL_ORDER.length; j++) {
+        smp[SOLAR_CHANNEL_ORDER[j]] = r.flux[SOLAR_CHANNEL_ORDER[j]];
+      }
+    }
+    samples.push(smp);
+  }
+  samples.sort(function (a, b) { return a.tMs - b.tMs; });
+  return { channels: channels, samples: samples };
+}
+
+// occRoutePoints(f, occ): puntos {tMs, rcGV, altitudeKm} de la ruta de una
+// ocurrencia, o null si no hay ruta/rc utilizable. Punto con rcGV no finito se
+// descarta; con menos de dos puntos no hay ruta.
+function occRoutePoints(f, occ) {
+  var depMs = depMsOf(occ);
+  if (depMs === null || !f) return null;
+  var raw = [];
+  var i;
+  if (Array.isArray(f.track) && f.track.length >= 2 &&
+      Array.isArray(f.track[0]) && f.track[0][0] != null) {
+    for (i = 0; i < f.track.length; i++) {
+      var p = f.track[i];
+      if (!Array.isArray(p) || p[0] == null) continue;
+      // p[0] = minutos desde la salida (como en calcTrack).
+      raw.push({ tMs: depMs + p[0] * 60000, lat: p[1], lon: p[2], altitudeKm: p[3] });
+    }
+  } else {
+    var A = f.orig != null ? activeDB[f.orig] : null;
+    var B = f.dest != null ? activeDB[f.dest] : null;
+    if (!A || !B) return null;
+    var n = 32;
+    var gc = greatCirclePoints(A.lat, A.lon, B.lat, B.lon, n);
+    var fi = f.flIdx != null && FL_OPTIONS[f.flIdx] ? f.flIdx : 1;
+    var altitudeKm = FL_OPTIONS[fi].altKm;
+    var timeH = gcDistance(A.lat, A.lon, B.lat, B.lon) / 830;
+    for (i = 0; i < n; i++) {
+      raw.push({ tMs: depMs + i / (n - 1) * timeH * 3600000,
+                 lat: gc[i][0], lon: gc[i][1], altitudeKm: altitudeKm });
+    }
+  }
+  if (raw.length < 2) return null;
+  var out = [];
+  for (i = 0; i < raw.length; i++) {
+    var rcGV = rcAt(raw[i].lat, raw[i].lon);
+    if (rcGV == null || !isFinite(rcGV)) continue;
+    out.push({ tMs: raw[i].tMs, rcGV: rcGV, altitudeKm: raw[i].altitudeKm });
+  }
+  return out.length >= 2 ? out : null;
+}
+function occLandMs(points) {
+  return points[points.length - 1].tMs;
+}
+
+// solarDayKey(ms) / solarDaysFor(a, b): dias UTC que tocan [a, b].
+function solarDayKey(ms) {
+  var d = new Date(ms);
+  var mo = d.getUTCMonth() + 1, da = d.getUTCDate();
+  return d.getUTCFullYear() + "-" + (mo < 10 ? "0" : "") + mo + "-" + (da < 10 ? "0" : "") + da;
+}
+function solarDaysFor(startMs, endMs) {
+  var out = [];
+  if (!isFinite(startMs) || !isFinite(endMs)) return out;
+  var s = new Date(startMs), e = new Date(endMs);
+  var start = Date.UTC(s.getUTCFullYear(), s.getUTCMonth(), s.getUTCDate());
+  var end = Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), e.getUTCDate());
+  for (var t = start; t <= end; t += 86400000) out.push(solarDayKey(t));
+  return out;
+}
+
+// true solo si occEvaluate llegaria a necesitar el archivo (pasa las reglas 1-5).
+function occNeedsArchive(f, occ, nowMs) {
+  if (!occ || typeof occ !== "object" || occ.state === "incorporada") return false;
+  var depMs = depMsOf(occ);
+  if (depMs === null || depMs - BASELINE_MS < SOLAR_ARCHIVE_START_MS) return false;
+  var points = occRoutePoints(f, occ);
+  if (!points) return false;
+  return occLandMs(points) <= (nowMs == null ? Date.now() : nowMs);
+}
+
+// occEvaluate(f, occ, archive, nowMs, routeFn): estado visible + cifra de una
+// ocurrencia. `archive` null => fallo de red. Pura; routeFn inyectable en tests.
+function occEvaluate(f, occ, archive, nowMs, routeFn) {
+  var route = routeFn == null ? SepModel.route : routeFn;
+  var now = nowMs == null ? Date.now() : nowMs;
+  if (!occ || typeof occ !== "object") return { state: "esperando_fecha", result: null };
+  // 1. Incorporada: no se recalcula; solo cambia si el modelo es otro.
+  if (occ.state === "incorporada") {
+    if (occ.modelVersion !== SEP_MODEL_VERSION) {
+      return { state: "modelo_nuevo", result: occ.result == null ? null : occ.result };
+    }
+    return { state: "incorporada", result: occ.result == null ? null : occ.result };
+  }
+  // 2. Sin fecha no hay ventana.
+  var depMs = depMsOf(occ);
+  if (depMs === null) return { state: "esperando_fecha", result: null };
+  // 3. La baseline entera debe caer dentro del archivo.
+  if (depMs - BASELINE_MS < SOLAR_ARCHIVE_START_MS) return { state: "fuera_de_rango", result: null };
+  // 4. Sin ruta no hay integracion posible.
+  var points = occRoutePoints(f, occ);
+  if (!points) return { state: "incompleto", result: null };
+  // 5. Vuelo aun no aterrizado.
+  var landMs = occLandMs(points);
+  if (landMs > now) return { state: "programado", result: null };
+  // 6. Archivo no disponible (red).
+  if (archive === null || archive === undefined) return { state: "noaa_no_disponible", result: null };
+  // 7. Cobertura de los dias necesarios.
+  var days = solarDaysFor(depMs - BASELINE_MS, landMs);
+  var manifest = archive.manifest || {};
+  var cov = manifest.coverage && Array.isArray(manifest.coverage.days)
+    ? manifest.coverage.days : [];
+  var covDiff = manifest.differential && manifest.differential.coverage &&
+    Array.isArray(manifest.differential.coverage.days)
+    ? manifest.differential.coverage.days : [];
+  var inc = Array.isArray(manifest.incomplete_days) ? manifest.incomplete_days : [];
+  var incDiff = manifest.differential && Array.isArray(manifest.differential.incomplete_days)
+    ? manifest.differential.incomplete_days : [];
+  var dayMap = archive.days && typeof archive.days === "object" ? archive.days : {};
+  var i, k;
+  for (i = 0; i < days.length; i++) {
+    var day = days[i];
+    if (cov.indexOf(day) !== -1 && covDiff.indexOf(day) !== -1) {
+      if (dayMap[day] == null) return { state: "esperando_datos", result: null };
+      continue;
+    }
+    var permanent = false;
+    for (k = 0; k < inc.length; k++) {
+      if (inc[k] && inc[k].day === day && inc[k].permanent === true) permanent = true;
+    }
+    for (k = 0; k < incDiff.length; k++) {
+      if (incDiff[k] && incDiff[k].day === day && incDiff[k].permanent === true) permanent = true;
+    }
+    return permanent
+      ? { state: "incompleto", result: null }
+      : { state: "esperando_datos", result: null };
+  }
+  // 8. Modelo.
+  var diffJsons = [], intJsons = [];
+  for (i = 0; i < days.length; i++) {
+    var entry = dayMap[days[i]];
+    diffJsons.push(entry ? entry.diff : null);
+    intJsons.push(entry ? entry.int : null);
+  }
+  var adapted = solarDayAdapt(diffJsons, intJsons);
+  var r;
+  try {
+    r = route({ channels: adapted.channels, samples: adapted.samples,
+                startMs: depMs, points: points, operator: SEP_DOSE });
+  } catch (e) {
+    return { state: "incompleto", result: null };
+  }
+  if (!r || !r.ok) return { state: "incompleto", result: null };
+  if (r.state === "sin_senal") return { state: "sin_senal", result: null };
+  if (r.state === "detectado") {
+    if (r.range) {
+      return { state: "estimacion_disponible",
+               result: { lowUsv: r.range.lowUsv, highUsv: r.range.highUsv } };
+    }
+    // Evento activo sin contribucion estimable en esta ruta: la UI lo explica.
+    return { state: "sin_senal", result: null, eventActive: true };
+  }
+  return { state: "incompleto", result: null };
+}
+
+// Carga del archivo solar publico. Un 404 es "dato ausente", no un error.
+var _solarManifestPromise = null;
+var _solarDayCache = new Map();
+function fetchSolarManifest() {
+  if (_solarManifestPromise) return _solarManifestPromise;
+  _solarManifestPromise = fetch(SOLAR_ARCHIVE_BASE + "manifest.json").then(function (res) {
+    if (!res || !res.ok) throw new Error("solar manifest HTTP " + (res && res.status));
+    return res.json();
+  }).catch(function (err) {
+    _solarManifestPromise = null;
+    throw err;
+  });
+  return _solarManifestPromise;
+}
+function fetchSolarPart(url) {
+  return fetch(url).then(function (res) {
+    if (!res || res.status === 404) return null;
+    if (!res.ok) throw new Error("solar HTTP " + res.status);
+    return res.json();
+  });
+}
+function fetchSolarDay(day) {
+  if (_solarDayCache.has(day)) return _solarDayCache.get(day);
+  var parts = String(day).split("-");
+  var base = SOLAR_ARCHIVE_BASE + "solar/" + parts[0] + "/" + parts[1] + "/" + day;
+  var p = Promise.all([fetchSolarPart(base + "-diff.json"), fetchSolarPart(base + ".json")])
+    .then(function (out) {
+      if (out[0] === null || out[1] === null) return null;
+      return { diff: out[0], int: out[1] };
+    }, function (err) {
+      _solarDayCache.delete(day);
+      throw err;
+    });
+  _solarDayCache.set(day, p);
+  return p;
+}
+function loadArchiveFor(points, depMs) {
+  if (!Array.isArray(points) || points.length < 2 || !isFinite(depMs)) {
+    return Promise.resolve(null);
+  }
+  var days = solarDaysFor(depMs - BASELINE_MS, occLandMs(points));
+  return fetchSolarManifest().then(function (manifest) {
+    return Promise.all(days.map(function (day) { return fetchSolarDay(day); }))
+      .then(function (list) {
+        var dayMap = {};
+        for (var i = 0; i < days.length; i++) dayMap[days[i]] = list[i];
+        return { manifest: manifest, days: dayMap };
+      });
+  }).catch(function () { return null; });
+}
+
 // BEGIN SEP_MODEL_RUNTIME
 // Copia literal de tools/sep_model_runtime.js; regenerar con
 // python3 tools/embed_sep_runtime.py. No editar a mano.
@@ -3981,6 +4277,31 @@ var LANG = {
     pairCollapseIn: "colapsando en",
     pairCollapseCancel: "tocar para cancelar el colapso automático",
     sameAirportWarn: "⚠️ Origen y destino iguales",
+    occVis_pendiente: "pendiente",
+    occVis_disponible: "disponible",
+    occVis_revisada: "revisada",
+    occVis_aviso: "aviso",
+    occState_programado: "programado",
+    occState_esperando_datos: "esperando datos",
+    occState_incompleto: "incompleto",
+    occState_estimacion_disponible: "estimación disponible",
+    occState_incorporada: "incorporada",
+    occState_noaa_no_disponible: "archivo GOES no disponible",
+    occState_sin_senal: "sin señal solar",
+    occState_fuera_de_rango: "fuera del archivo",
+    occState_modelo_nuevo: "modelo actualizado",
+    occState_esperando_fecha: "sin fecha",
+    occState_sin_senal_evento: "evento solar activo sin contribución estimable en esta ruta",
+    occSplit: "Desglosar por fecha",
+    occCollapse: "Agrupar",
+    occCantCollapse: "Hay cifras incorporadas: no se puede agrupar",
+    occIncorporate: "Incorporar",
+    occRecalc: "Recalcular",
+    occRemove: "quitar",
+    occChecking: "comprobando…",
+    occNoaaFail: "calculado sin datos de llamaradas solares — no se pudo leer el archivo GOES",
+    occNoDate: "sin fecha",
+    occSepTitle: "Radiación por evento solar: estimación a partir de protones solares medidos por GOES",
     codeNotFound: "Código no encontrado",
     originLabel: "Origen",
     destLabel: "Destino",
@@ -4238,6 +4559,31 @@ var LANG = {
     pairCollapseIn: "collapsing in",
     pairCollapseCancel: "tap to cancel the auto-collapse",
     sameAirportWarn: "⚠️ Origin and destination are the same",
+    occVis_pendiente: "pending",
+    occVis_disponible: "available",
+    occVis_revisada: "reviewed",
+    occVis_aviso: "warning",
+    occState_programado: "scheduled",
+    occState_esperando_datos: "waiting for data",
+    occState_incompleto: "incomplete",
+    occState_estimacion_disponible: "estimate available",
+    occState_incorporada: "incorporated",
+    occState_noaa_no_disponible: "GOES archive unavailable",
+    occState_sin_senal: "no solar signal",
+    occState_fuera_de_rango: "outside the archive",
+    occState_modelo_nuevo: "model updated",
+    occState_esperando_fecha: "no date",
+    occState_sin_senal_evento: "active solar event with no estimable contribution on this route",
+    occSplit: "Split by date",
+    occCollapse: "Group",
+    occCantCollapse: "Some figures are incorporated: cannot group",
+    occIncorporate: "Incorporate",
+    occRecalc: "Recalculate",
+    occRemove: "remove",
+    occChecking: "checking…",
+    occNoaaFail: "calculated without solar flare data — the GOES archive could not be read",
+    occNoDate: "no date",
+    occSepTitle: "Solar event radiation: estimate from solar protons measured by GOES",
     codeNotFound: "Code not found",
     originLabel: "Origin",
     destLabel: "Destination",
@@ -4903,6 +5249,193 @@ function Chip(_ref8) {
   }, icon, " ", label);
 }
 
+// ── OccList (T11): ocurrencias de un vuelo ────────────────────────────────────
+function occVisColor(vis) {
+  if (vis === "disponible") return "#3b9ede";
+  if (vis === "aviso") return "#e09020";
+  if (vis === "revisada") return "#40c080";
+  return "#8aacbc";
+}
+function OccList(_refOcc) {
+  var flight = _refOcc.flight,
+    onChange = _refOcc.onChange,
+    id = _refOcc.id,
+    t = _refOcc.t;
+  var hasOcc = Array.isArray(flight.occurrences);
+  var occs = hasOcc ? flight.occurrences : [];
+  var split = !hasOcc && flight.legs > 1;
+  var single = !hasOcc && !split;
+  var _useStateO = useState(false),
+    _useStateO2 = _slicedToArray(_useStateO, 2),
+    open = _useStateO2[0],
+    setOpen = _useStateO2[1];
+  var _useStateE = useState({}),
+    _useStateE2 = _slicedToArray(_useStateE, 2),
+    evals = _useStateE2[0],
+    setEvals = _useStateE2[1];
+  var tempRef = useRef(null);
+  if (single && (tempRef.current === null ||
+      tempRef.current.depDate !== flight.depDate || tempRef.current.depTime !== flight.depTime)) {
+    tempRef.current = makeOccurrence(flight.depDate, flight.depTime, "programada");
+  }
+  var rows = single ? [tempRef.current] : occs;
+  var active = single || open;
+  // Evaluacion perezosa: solo al desplegar (o en la fila unica). El resultado
+  // vive en estado local del componente; nunca se persiste.
+  useEffect(function () {
+    if (!active) return;
+    var cancelled = false;
+    var now = Date.now();
+    rows.forEach(function (occ) {
+      var finish = function (res) {
+        if (cancelled) return;
+        setEvals(function (m) {
+          var n = _objectSpread({}, m);
+          n[occ.id] = res;
+          return n;
+        });
+      };
+      if (!occNeedsArchive(flight, occ, now)) {
+        finish(occEvaluate(flight, occ, null, now)); return;
+      }
+      var depMs = depMsOf(occ);
+      loadArchiveFor(occRoutePoints(flight, occ), depMs).then(function (archive) {
+        finish(occEvaluate(flight, occ, archive, now));
+      });
+    });
+    return function () { cancelled = true; };
+  }, [active, flight]);
+  if (split) {
+    return React.createElement("div", { style: { marginTop: 6 } },
+      React.createElement("button", {
+        onClick: function () { onChange(id, "occurrences", splitLegs(flight).occurrences); },
+        style: btnSmall
+      }, t.occSplit));
+  }
+  function patch(occ, fields) {
+    var next = rows.map(function (o) {
+      return o.id === occ.id ? _objectSpread(_objectSpread({}, o), fields) : o;
+    });
+    onChange(id, "occurrences", next);
+  }
+  function incorporate(occ, res) {
+    var fig = res && res.result ? res.result : null;
+    if (!fig) return;
+    patch(occ, { state: "incorporada", result: fig, modelVersion: SEP_MODEL_VERSION });
+  }
+  function recalc(occ) {
+    var bypass = _objectSpread(_objectSpread({}, occ), { state: "estimacion_disponible" });
+    var now = Date.now();
+    var apply = function (res) {
+      if (!res || !res.result) {
+        setEvals(function (m) {
+          var n = _objectSpread({}, m);
+          n[occ.id] = res;
+          return n;
+        });
+        return;
+      }
+      incorporate(occ, res);
+    };
+    if (!occNeedsArchive(flight, bypass, now)) {
+      apply(occEvaluate(flight, bypass, null, now)); return;
+    }
+    var depMs = depMsOf(occ);
+    loadArchiveFor(occRoutePoints(flight, occ), depMs).then(function (archive) {
+      apply(occEvaluate(flight, bypass, archive, now));
+    });
+  }
+  function renderRow(occ) {
+    var ev = evals[occ.id];
+    var state = ev ? ev.state : occ.state;
+    var vis = occVisible(state);
+    var detail = ev
+      ? (ev.eventActive ? t.occState_sin_senal_evento : t["occState_" + state])
+      : t.occChecking;
+    var when = occ.depDate && occ.depTime ? occ.depDate + " " + occ.depTime : t.occNoDate;
+    var actions = [];
+    if (state === "incorporada") {
+      var fig = occSepFigure(occ);
+      actions.push(React.createElement("span", {
+        key: "fig", style: { color: "#40c080", fontWeight: 700 }
+      }, fig ? "+" + fmtDose(fig.lowUsv) + "–" + fmtDose(fig.highUsv) : ""));
+      actions.push(React.createElement("button", {
+        key: "rm", style: btnSmall,
+        onClick: function () { patch(occ, { state: "programado", result: null, modelVersion: null }); }
+      }, t.occRemove));
+    } else if (state === "esperando_fecha") {
+      actions.push(React.createElement("input", {
+        key: "d", type: "date", value: occ.depDate || "", style: { fontSize: 10.5 },
+        onChange: function (e) {
+          patch(occ, { depDate: e.target.value, state: "programado", result: null });
+        }
+      }));
+      actions.push(React.createElement("input", {
+        key: "t", type: "time", value: occ.depTime || "", style: { fontSize: 10.5 },
+        onChange: function (e) {
+          patch(occ, { depTime: e.target.value, state: "programado", result: null });
+        }
+      }));
+    } else if (vis === "disponible") {
+      if (state === "modelo_nuevo") {
+        actions.push(React.createElement("button", {
+          key: "rc", style: btnSmall, onClick: function () { recalc(occ); }
+        }, t.occRecalc));
+      } else {
+        actions.push(React.createElement("button", {
+          key: "in", style: btnSmall, onClick: function () { incorporate(occ, ev); }
+        }, t.occIncorporate));
+      }
+    } else if (state === "noaa_no_disponible") {
+      actions.push(React.createElement("button", {
+        key: "noaa", disabled: true, style: btnSmall
+      }, t.occIncorporate));
+      actions.push(React.createElement("span", {
+        key: "warn", style: { fontSize: 10, color: "#e09020" }
+      }, t.occNoaaFail));
+    }
+    return React.createElement("div", {
+      key: occ.id,
+      style: { display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap", padding: "2px 0", fontSize: 11 }
+    }, React.createElement("span", {
+      style: { minWidth: 96, color: "#8aacbc" }
+    }, when), React.createElement("span", {
+      title: detail, style: { fontWeight: 700, color: occVisColor(vis) }
+    }, t["occVis_" + vis]), React.createElement("span", {
+      style: { fontSize: 10, color: "#6a8fa8" }
+    }, detail), actions.length ? React.createElement("span", {
+      style: { display: "flex", gap: 4, alignItems: "center" }
+    }, actions) : null);
+  }
+  var counts = {};
+  for (var i = 0; i < rows.length; i++) {
+    var st = evals[rows[i].id] ? evals[rows[i].id].state : rows[i].state;
+    var v = occVisible(st);
+    counts[v] = (counts[v] || 0) + 1;
+  }
+  var summary = ["pendiente", "disponible", "revisada", "aviso"].filter(function (k) {
+    return counts[k];
+  }).map(function (k) { return counts[k] + " " + t["occVis_" + k]; });
+  var canGroup = canCollapse(flight);
+  var header = single ? null : React.createElement("div", {
+    onClick: function () { setOpen(!open); },
+    style: { cursor: "pointer", fontSize: 11, color: "#8aacbc", fontWeight: 600, marginTop: 6 }
+  }, open ? "▾ " : "▸ ", rows.length + " " + t.flightsWord,
+     summary.length ? " · " + summary.join(" · ") : "");
+  var groupBtn = hasOcc ? React.createElement("button", {
+    style: btnSmall,
+    disabled: !canGroup,
+    title: canGroup ? t.occCollapse : t.occCantCollapse,
+    onClick: function () {
+      var c = collapseOccurrences(flight);
+      if (c) onChange(id, "occurrences", c.occurrences);
+    }
+  }, t.occCollapse) : null;
+  return React.createElement("div", null, header, active
+    ? React.createElement("div", null, rows.map(renderRow), groupBtn)
+    : null);
+}
+
 // ── FlightRow ─────────────────────────────────────────────────────────────────
 function FlightRow(_ref9) {
   var flight = _ref9.flight,
@@ -4930,6 +5463,13 @@ function FlightRow(_ref9) {
   if (!FL_OPTIONS[flIdx]) flIdx = 1; // guard against out-of-range index from imported/corrupted data
   var calc = (valid || hasTrack) ? flightCalc(flight, hpMV) : null;
   var totalUsv = calc ? calc.doseUsv * legs : 0;
+  // T11: cifras SEP incorporadas por ocurrencia (si las hay).
+  var occFigures = Array.isArray(flight.occurrences)
+    ? flight.occurrences.map(occSepFigure).filter(Boolean) : [];
+  var hasOccInc = occFigures.length > 0;
+  var occX = calc ? calc.doseUsv * (Array.isArray(flight.occurrences) ? flight.occurrences.length : legs) : 0;
+  var occLow = occFigures.reduce(function (s, o) { return s + o.lowUsv; }, 0);
+  var occHigh = occFigures.reduce(function (s, o) { return s + o.highUsv; }, 0);
   var _useStateR = useState(false),
     _useStateR2 = _slicedToArray(_useStateR, 2),
     showCalc = _useStateR2[0],
@@ -5135,11 +5675,15 @@ function FlightRow(_ref9) {
     icon: "\u2622\uFE0F",
     label: "".concat(fmtDose(calc.doseUsv), "/leg"),
     accent: true
-  }), calc.doseSepUsv > 0 && /*#__PURE__*/React.createElement("span", {
+  }), !hasOccInc && calc.doseSepUsv > 0 && /*#__PURE__*/React.createElement("span", {
     className: "gle-split"
-  }, t.gleGcr, " ", fmtDose(calc.doseUsv - calc.doseSepUsv), " + ", t.gleSep, " ", fmtDose(calc.doseSepUsv), " · ", t.gleQAjustado), calc.gleNoFigure ? /*#__PURE__*/React.createElement("span", {
+  }, t.gleGcr, " ", fmtDose(calc.doseUsv - calc.doseSepUsv), " + ", t.gleSep, " ", fmtDose(calc.doseSepUsv), " · ", t.gleQAjustado), !hasOccInc && calc.gleNoFigure ? /*#__PURE__*/React.createElement("span", {
     className: "gle-split gle-nofig"
-  }, "⚠️ ", t.gleNoFigure.replace("{n}", calc.gleNoFigure)) : null, legs > 1 && /*#__PURE__*/React.createElement(Chip, {
+  }, "⚠️ ", t.gleNoFigure.replace("{n}", calc.gleNoFigure)) : null, hasOccInc && /*#__PURE__*/React.createElement("span", {
+    className: "gle-split"
+  }, t.gleGcr, " ", fmtDose(occX), " · ", /*#__PURE__*/React.createElement("span", {
+    title: t.occSepTitle
+  }, t.gleSep), " ", fmtDose(occLow), "–", fmtDose(occHigh), " · ", t.colTotal, " ", fmtDose(occX + occLow), "–", fmtDose(occX + occHigh)), legs > 1 && /*#__PURE__*/React.createElement(Chip, {
     icon: "\u2716\uFE0F",
     label: "".concat(fmtDose(totalUsv), " (\xD7").concat(legs, ")"),
     accent: true
@@ -5167,7 +5711,12 @@ function FlightRow(_ref9) {
       fontSize: 11,
       color: "#e09020"
     }
-  }, t.sameAirportWarn) : null), showCalc && /*#__PURE__*/React.createElement(CalcInfoModal, {
+  }, t.sameAirportWarn) : null), valid && calc ? /*#__PURE__*/React.createElement(OccList, {
+    flight: flight,
+    onChange: _onChange,
+    id: id,
+    t: t
+  }) : null, showCalc && /*#__PURE__*/React.createElement(CalcInfoModal, {
     t: t,
     onClose: function onClose() {
       return setShowCalc(false);
