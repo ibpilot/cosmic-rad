@@ -46,6 +46,13 @@
  *   el flujo no es negativo; un canal ausente/corrupto, un hueco de la serie,
  *   un cambio de satelite o un exceso insuficiente para ajustar cierran la
  *   ocurrencia como pendiente.
+ *   F1.1: un paso cuyo punto medio cae ANTES del onset detectado es cero
+ *   medido (continue): no se muestrea ni ajusta ni cuenta como medido.
+ *   F1.2: tras construir los bins, la banda dura P8+ es la puerta contra el
+ *   ruido de la linea base: si no es calculable la ocurrencia cierra como
+ *   observacion_incompleta, y si esta en o por debajo de
+ *   detection.baseline.threshold.p8plus el paso es cero medido. Solo por
+ *   encima del umbral se ajusta.
  */
 (function (root, factory) {
   var api = factory();
@@ -126,15 +133,15 @@
   var EXPONENT_MAX = 4;               // pendiente log-log maxima explorada
   var POWER_GAMMA_MIN = -2;           // rejilla gruesa de la ley de potencia
   var POWER_GAMMA_MAX = 8;
-  var POWER_GAMMA_COARSE_STEP = 0.05;
+  var POWER_GAMMA_COARSE_STEP = 0.1;
   var POWER_GAMMA_REFINE_HALF_WIDTH = 0.1;
-  var POWER_GAMMA_REFINE_ITERATIONS = 30;
-  var BREAKPOINT_COARSE_STEPS = 20;   // rejilla log de la rodilla (g=0..20)
+  var POWER_GAMMA_REFINE_ITERATIONS = 15;
+  var BREAKPOINT_COARSE_STEPS = 6;    // rejilla log de la rodilla (g=0..6)
   var DOUBLE_LAW_STATIC_SEEDS = [[-1, -3], [-2, -4]];
-  var DOUBLE_LAW_ALTERNATIONS = 2;    // barridos alternos en la exploracion
-  var DOUBLE_LAW_COARSE_ITERATIONS = 20;
-  var DOUBLE_LAW_REFINE_ALTERNATIONS = 12;
-  var DOUBLE_LAW_REFINE_ITERATIONS = 40;
+  var DOUBLE_LAW_ALTERNATIONS = 1;    // barridos alternos en la exploracion
+  var DOUBLE_LAW_COARSE_ITERATIONS = 10;
+  var DOUBLE_LAW_REFINE_ALTERNATIONS = 4;
+  var DOUBLE_LAW_REFINE_ITERATIONS = 20;
   var SSE_EARLY_STOP = 1e-12;         // SSE bajo el cual no se refina mas
 
   function isFiniteNumber(value) {
@@ -918,11 +925,14 @@
       { model: "double-power-law", doseUsv: 0, tailDoseUsv: 0, errorDoseUsv: 0 }
     ];
     var measuredSteps = 0;
+    var fitCache = new Map();
     for (var i = 0; i + 1 < points.length; i++) {
       var a = points[i], b = points[i + 1];
       var dtH = (b.tMs - a.tMs) / 3600000;
       if (!(dtH > 0)) continue;
       var tMid = (a.tMs + b.tMs) / 2;
+      // F1.1: antes del onset no hay evento que integrar: cero medido.
+      if (tMid < detection.onsetMs) continue;
       var sample = sampleAt(ordered, tMid);
       if (!sample) return routePending(REASONS.HUECO_OBSERVACION);
       if (typeof sample.sat !== "string" || !sample.sat) {
@@ -932,12 +942,33 @@
 
       var built = buildBins(channels, sample, baselineValues);
       if (!built.ok) return routePending(REASONS.OBSERVACION_INCOMPLETA);
-      var usable = usableBins(built.bins);
-      if (!usable.length) continue;   // 13 canales presentes y sin exceso: cero medido
-      if (usable.length < MIN_USABLE_BINS) return routePending(REASONS.MODELO_NO_RESOLUBLE);
 
-      var solutions = [fitPowerLaw(usable), fitDoublePowerLaw(usable)];
-      if (!solutions[0] || !solutions[1]) return routePending(REASONS.MODELO_NO_RESOLUBLE);
+      // F1.2: el ruido de la linea base no es dosis. La banda dura P8+ debe
+      // superar su umbral; si no es calculable, no se puede medir.
+      var hard = bandValue(sample, channels.map, CONFIRMATION_CHANNELS);
+      if (hard === null) return routePending(REASONS.OBSERVACION_INCOMPLETA);
+      if (hard <= detection.baseline.threshold.p8plus) continue;
+
+      // Cache de ajustes dentro de esta llamada: pasos que caen en la misma
+      // muestra de 5 min reutilizan el ajuste (o su motivo de cierre).
+      var cached = fitCache.get(sample);
+      if (cached === undefined) {
+        var usable = usableBins(built.bins);
+        if (!usable.length) {
+          cached = { zero: true };   // 13 canales presentes y sin exceso: cero medido
+        } else if (usable.length < MIN_USABLE_BINS) {
+          cached = { reason: REASONS.MODELO_NO_RESOLUBLE };
+        } else {
+          var fitted = [fitPowerLaw(usable), fitDoublePowerLaw(usable)];
+          cached = (!fitted[0] || !fitted[1])
+            ? { reason: REASONS.MODELO_NO_RESOLUBLE }
+            : { solutions: fitted };
+        }
+        fitCache.set(sample, cached);
+      }
+      if (cached.zero) continue;
+      if (cached.reason) return routePending(cached.reason);
+      var solutions = cached.solutions;
 
       // Punto medio del tramo: regla de punto medio, converge al refinar la ruta.
       var rcGV = (a.rcGV + b.rcGV) / 2;

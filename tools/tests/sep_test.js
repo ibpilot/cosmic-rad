@@ -1186,6 +1186,59 @@ ok("paso con los 13 canales en la linea base -> cero medido, no pendiente", (fun
   return r.ok === true && r.state === "detectado" && r.range !== null &&
          r.steps > 0 && r.steps < 24;
 })());
+ok("T1 ruta anterior al onset (punto medio < onset) -> cero medido, 0 pasos", (function () {
+  // El ruido de la linea base por encima de la mediana no es dosis: una ruta que
+  // termina antes del onset no mide ni un solo paso, incluida la excursion
+  // aislada en onset-2 pasos que si supera el umbral pero no es racha de tres.
+  const s = t9Series();
+  const det = SepModel.detect(s);
+  if (det.state !== "detectado") return false;
+  const onset = det.onsetMs;
+  const r = runRoute(s, routePoints(onset - 2 * HOUR_MS, onset, 24, 0.5, 10.5));
+  return r.ok === true && r.state === "detectado" && r.range === null && r.steps === 0;
+})());
+ok("T2 banda P8+ en la mediana -> esos pasos son cero medido", (function () {
+  // Muestras con 5 bins de exceso (P1..P4) pero la banda dura P8+ clavada en su
+  // mediana: no superan el umbral, asi que no se ajustan y no cuentan.
+  const s = t9Series(), k = t9OnsetIndex(s), g = t9OnsetGlobal(s);
+  if (k < 0) return false;
+  const medians = SepModel.detect(s).baseline.medians;
+  for (let i = g + 8; i < g + 24; i++) {
+    setOnlyChannels(s.samples[i], medians, ["P1", "P2A", "P2B", "P3", "P4"]);
+  }
+  const r = runRoute(s, routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
+  return r.ok === true && r.state === "detectado" && r.range !== null &&
+         r.steps > 0 && r.steps < 48;
+})());
+ok("T3 Rc y altitud se interpolan en el punto medio del tramo", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s);
+  if (k < 0) return false;
+  const seen = [];
+  const spy = { rate: function (args) {
+    seen.push({ rcGV: args.rcGV, altitudeKm: args.altitudeKm });
+    return { ok: true, rateUsvH: 1, tailRateUsvH: 0, numericalErrorUsvH: 0 };
+  } };
+  const t0 = s.startMs + k * STEP_MS;
+  const points = routePoints(t0, t0 + 5 * 60 * 1000, 1, (f) => 2 * f, (f) => 9 + 2 * f);
+  const r = runRoute(s, points, spy);
+  return r.ok === true && seen.length > 0 &&
+         seen.every((c) => c.rcGV === 1 && c.altitudeKm === 10);
+})());
+ok("T4 el flujo se muestrea en el punto medio, no en el extremo del tramo", (function () {
+  // Hueco en [onset+45, onset+65) min: la muestra de a.tMs (onset+60) no existe,
+  // pero la de tMid (onset+70) si, asi que la ruta puede medir.
+  const s = t9Series(), k = t9OnsetIndex(s);
+  if (k < 0) return false;
+  const onset = s.startMs + k * STEP_MS;
+  for (let i = s.samples.length - 1; i >= 0; i--) {
+    const t = s.samples[i].tMs;
+    if (t >= onset + 45 * 60 * 1000 && t < onset + 65 * 60 * 1000) s.samples.splice(i, 1);
+  }
+  const points = [{ tMs: onset + 60 * 60 * 1000, rcGV: 1, altitudeKm: 10.5 },
+                  { tMs: onset + 80 * 60 * 1000, rcGV: 1, altitudeKm: 10.5 }];
+  const r = runRoute(s, points, alternatingOperator(1, 1));
+  return r.ok === true;
+})());
 
 console.log("T9 ruta SEP — fallos cerrados");
 ok("hueco de la serie dentro de la ruta -> pendiente (no cero)", (function () {
@@ -1273,6 +1326,12 @@ console.log("T9 ruta SEP — instrumentacion (informe T14)");
     " ms total, " + perFlight.toFixed(1) + " ms/vuelo; umbral de troceo 200 ms");
   console.log("  rango de referencia: " + (probe.range ? probe.range.lowUsv.toFixed(4) +
     " - " + probe.range.highUsv.toFixed(4) + " uSv" : "sin cifra (" + probe.reason + ")"));
+  ok("T5 rango de referencia a <=5% de 6.0466 - 18.1399 uSv",
+     probe.range !== null &&
+     Math.abs(probe.range.lowUsv / 6.0466 - 1) <= 0.05 &&
+     Math.abs(probe.range.highUsv / 18.1399 - 1) <= 0.05,
+     probe.range ? probe.range.lowUsv.toFixed(4) + " - " + probe.range.highUsv.toFixed(4) +
+       " uSv" : "sin cifra (" + probe.reason + ")");
 })();
 
 console.log("\n" + pass + " pass, " + fail + " fail");
