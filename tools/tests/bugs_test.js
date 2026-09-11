@@ -625,6 +625,99 @@ async function testRouteImportKeepsCuratedIcaoAliases() {
      calculated && calculated.distKm);
 }
 
+console.log("\nT10 ocurrencias");
+{
+  // Vuelos del Paso 0 (dosis de referencia fijadas con el código sin cambios).
+  const A = { orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
+  const B = { orig: "MAD", dest: "JFK", legs: 3, flIdx: 2, depDate: "2021-10-28", depTime: "14:00" };
+  const C = { orig: "LHR", dest: "NRT", legs: 2, flIdx: 1,
+    track: [[null, 51.5, -0.4, 10.668], [null, 60, 60, 11.0], [null, 35.7, 139.8, 10.668]] };
+  const REF = { A: 27.521219708117496, B: 35.435214508544320, C: 45.904099010735550 };
+  const Bh = ctx.hydrateFlight(B);
+
+  // M1 — la migración no cambia ninguna dosis (igualdad exacta).
+  ok("M1 migración A idéntica", ctx.flightCalc(ctx.hydrateFlight(A), 650).doseUsv === REF.A,
+     ctx.flightCalc(ctx.hydrateFlight(A), 650).doseUsv);
+  ok("M1 migración B idéntica", ctx.flightCalc(ctx.hydrateFlight(B), 650).doseUsv === REF.B,
+     ctx.flightCalc(ctx.hydrateFlight(B), 650).doseUsv);
+  ok("M1 migración C idéntica", ctx.flightCalc(ctx.hydrateFlight(C), 650).doseUsv === REF.C,
+     ctx.flightCalc(ctx.hydrateFlight(C), 650).doseUsv);
+
+  // M2 — un vuelo sin occurrences hidrata SIN la clave.
+  const months = ctx.parseBackup(JSON.stringify({ version: 1, months: { "2024-05": [A, B, C] } }));
+  ok("M2 backup parseado", months && months["2024-05"] && months["2024-05"].length === 3);
+  months["2024-05"].forEach((fl, i) => {
+    const h = ctx.hydrateFlight(fl);
+    ok("M2 vuelo " + i + " sin clave occurrences", !("occurrences" in h));
+  });
+
+  // M3 — ida y vuelta split → collapse devuelve el vuelo original.
+  const back = ctx.collapseOccurrences(ctx.splitLegs(Bh));
+  const canon = o => JSON.stringify(o, Object.keys(o).sort());
+  ok("M3 round-trip deep-equal", back !== null && canon(back) === canon(Bh),
+     back && canon(back) + " vs " + canon(Bh));
+
+  // M4 — reparto de legs: la primera ocurrencia hereda fecha, el resto no.
+  const sp = ctx.splitLegs(Bh);
+  ok("M4 tres ocurrencias", sp.occurrences.length === 3, sp.occurrences.length);
+  ok("M4 [0] con fecha y programado",
+     sp.occurrences[0].depDate === "2021-10-28" && sp.occurrences[0].state === "programado",
+     JSON.stringify(sp.occurrences[0]));
+  ok("M4 [1] sin fecha y esperando_fecha",
+     sp.occurrences[1].depDate === undefined && sp.occurrences[1].state === "esperando_fecha",
+     JSON.stringify(sp.occurrences[1]));
+  ok("M4 [2] sin fecha y esperando_fecha",
+     sp.occurrences[2].depDate === undefined && sp.occurrences[2].state === "esperando_fecha",
+     JSON.stringify(sp.occurrences[2]));
+
+  // M5 — legs:1 no se desglosa: mismo objeto.
+  const f1 = { orig: "MAD", dest: "JFK", legs: 1 };
+  ok("M5 legs:1 devuelve el mismo objeto", ctx.splitLegs(f1) === f1);
+
+  // M6 — con una ocurrencia incorporada no se puede colapsar.
+  const conInc = { orig: "MAD", dest: "JFK", legs: 2, occurrences: [
+    ctx.makeOccurrence("2024-05-11", "02:00"),
+    { id: 1, depDate: "2024-05-11", depTime: "03:00", state: "incorporada", result: { lowUsv: 1, highUsv: 2 } }
+  ] };
+  ok("M6 collapse null con incorporada", ctx.collapseOccurrences(conInc) === null);
+  ok("M6 collapse OK sin incorporada",
+     ctx.collapseOccurrences({ orig: "MAD", occurrences: [{ state: "programado" }] }) !== null);
+
+  // M7 — sin fecha u hora no hay cifra SEP.
+  ok("M7 sin fecha nunca da cifra",
+     ctx.occSepFigure({ state: "incorporada", result: { lowUsv: 1, highUsv: 3 } }) === null);
+  ok("M7 con fecha da la cifra",
+     JSON.stringify(ctx.occSepFigure({ state: "incorporada", depDate: "2024-05-11", depTime: "02:00",
+       result: { lowUsv: 1, highUsv: 3 } })) === '{"lowUsv":1,"highUsv":3}');
+
+  // M8 — resultado invertido (low > high) se descarta y marca incompleto.
+  const inv = ctx.hydrateOccurrence({ state: "incorporada", depDate: "2024-05-11", depTime: "02:00",
+    result: { lowUsv: 5, highUsv: 2 } });
+  ok("M8 result invertido → null", inv.result === null, JSON.stringify(inv.result));
+  ok("M8 state → incompleto", inv.state === "incompleto", inv.state);
+
+  // M9 — estados y objetos basura se sanean.
+  ok("M9 state desconocido → esperando_fecha", ctx.hydrateOccurrence({ state: "hackeado" }).state === "esperando_fecha");
+  ok("M9 no-objeto → null", ctx.hydrateOccurrence("x") === null);
+
+  // M10 — persistencia: las ocurrencias sobreviven al JSON.
+  const round = ctx.hydrateFlight(JSON.parse(JSON.stringify(ctx.serializeFlight(ctx.splitLegs(Bh)))));
+  ok("M10 tres ocurrencias tras round-trip",
+     Array.isArray(round.occurrences) && round.occurrences.length === 3,
+     round.occurrences && round.occurrences.length);
+  ok("M10 depDate/state intactos",
+     Array.isArray(round.occurrences) &&
+       round.occurrences.map(o => o.depDate + "/" + o.state).join(",") ===
+         "2021-10-28/programado,undefined/esperando_fecha,undefined/esperando_fecha",
+     round.occurrences && round.occurrences.map(o => o.depDate + "/" + o.state).join(","));
+
+  // M11 — instante UTC canónico y hora imposible.
+  ok("M11 depMsOf(makeOccurrence) === Date.UTC",
+     ctx.depMsOf(ctx.makeOccurrence("2024-05-11", "01:30")) === Date.UTC(2024, 4, 11, 1, 30));
+  ok("M11 hora 25:00 → esperando_fecha",
+     ctx.makeOccurrence("2024-05-11", "25:00").state === "esperando_fecha");
+}
+
 testRouteImportKeepsCuratedIcaoAliases().then(function () {
   console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");
   process.exit(fail === 0 ? 0 : 1);

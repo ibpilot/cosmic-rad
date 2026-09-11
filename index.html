@@ -2195,6 +2195,14 @@ function depMsOf(f) {
     check.getUTCHours() === hh && check.getUTCMinutes() === mm ? ms : null;
 }
 
+// Estados internos de una ocurrencia (T10). La UI (T11) los agrupa en tres.
+// "esperando_fecha" no esta entre los nueve del plan: es el estado de una
+// ocurrencia creada al desglosar sin fecha todavia (el plan lo nombra ahi).
+var OCC_STATES = ["programado", "esperando_datos", "incompleto", "estimacion_disponible",
+  "incorporada", "noaa_no_disponible", "sin_senal", "fuera_de_rango", "modelo_nuevo",
+  "esperando_fecha"];
+var OCC_MAX = 100;
+
 // BEGIN SEP_MODEL_RUNTIME
 // Copia literal de tools/sep_model_runtime.js; regenerar con
 // python3 tools/embed_sep_runtime.py. No editar a mano.
@@ -3746,7 +3754,7 @@ var mkId = function mkId() {
 function hydrateFlight(f) {
   var legs = Math.min(9999, Math.max(1, Math.round(Number(f.legs)) || 1));
   var flIdx = Number(f.flIdx);
-  return _objectSpread(_objectSpread({}, f), {}, {
+  var h = _objectSpread(_objectSpread({}, f), {}, {
     id: mkId(),
     legs: legs,
     flIdx: FL_OPTIONS[flIdx] ? flIdx : 1,
@@ -3759,6 +3767,92 @@ function hydrateFlight(f) {
     depDate: typeof f.depDate === "string" ? f.depDate : undefined,
     depTime: typeof f.depTime === "string" ? f.depTime : undefined
   });
+  // T10: las ocurrencias solo existen si el vuelo las trae como array. Si no,
+  // la clave ni se crea (el vuelo legado debe hidratar idéntico a como lo hacía).
+  if (Array.isArray(f.occurrences)) {
+    h.occurrences = f.occurrences.slice(0, OCC_MAX).map(hydrateOccurrence).filter(Boolean);
+  } else {
+    delete h.occurrences;
+  }
+  return h;
+}
+
+// Ocurrencia vacia. Sin fecha -> esperando_fecha; con fecha valida -> programado.
+function makeOccurrence(depDate, depTime, timeKind) {
+  var occ = {
+    id: mkId(),
+    depDate: typeof depDate === "string" ? depDate : undefined,
+    depTime: typeof depTime === "string" ? depTime : undefined,
+    timeKind: timeKind === "real" ? "real" : "programada",
+    state: null,
+    noaaCapture: null,
+    modelVersion: null,
+    result: null
+  };
+  occ.state = depMsOf({ depDate: occ.depDate, depTime: occ.depTime }) !== null
+    ? "programado" : "esperando_fecha";
+  return occ;
+}
+
+// Desglose de un vuelo legado legs>1 en N ocurrencias. NO modifica el vuelo:
+// devuelve una copia con `occurrences`; los demas campos quedan identicos.
+function splitLegs(f) {
+  if (Array.isArray(f.occurrences) || !(f.legs > 1)) return f;
+  var n = Math.min(Math.floor(f.legs), OCC_MAX);
+  var occs = [makeOccurrence(f.depDate, f.depTime, "programada")];
+  for (var i = 1; i < n; i++) occs.push(makeOccurrence());
+  var copy = _objectSpread({}, f);
+  copy.occurrences = occs;
+  return copy;
+}
+
+// Se puede volver al grupo legado mientras ninguna ocurrencia tenga SEP incorporado.
+function canCollapse(f) {
+  if (!f || !Array.isArray(f.occurrences)) return true;
+  return f.occurrences.every(function (o) { return !(o && o.state === "incorporada"); });
+}
+function collapseOccurrences(f) {
+  if (!canCollapse(f)) return null;
+  var copy = _objectSpread({}, f);
+  delete copy.occurrences;
+  return copy;
+}
+
+// Cifra SEP de una ocurrencia: SOLO si tiene fecha/hora valida, esta incorporada y trae resultado.
+function occSepFigure(occ) {
+  if (!occ || occ.state !== "incorporada" || depMsOf(occ) === null) return null;
+  var r = occ.result;
+  if (!r || typeof r !== "object" || !isFinite(r.lowUsv) || !isFinite(r.highUsv)) return null;
+  return { lowUsv: r.lowUsv, highUsv: r.highUsv };
+}
+
+// Sanea una ocurrencia de backup/almacen. Nunca lanza.
+function hydrateOccurrence(o) {
+  if (!o || typeof o !== "object" || Array.isArray(o)) return null;
+  var depDate = typeof o.depDate === "string" ? o.depDate : undefined;
+  var depTime = typeof o.depTime === "string" ? o.depTime : undefined;
+  var timeKind = o.timeKind === "real" || o.timeKind === "programada" ? o.timeKind : "programada";
+  var state = OCC_STATES.indexOf(o.state) !== -1
+    ? o.state
+    : (depMsOf(o) !== null ? "programado" : "esperando_fecha");
+  var result = null;
+  var r = o.result;
+  if (r && typeof r === "object" && !Array.isArray(r) && isFinite(r.lowUsv) && isFinite(r.highUsv) &&
+      r.lowUsv >= 0 && r.lowUsv <= r.highUsv) {
+    result = { lowUsv: r.lowUsv, highUsv: r.highUsv };
+  }
+  if (state === "incorporada" && (result === null || depMsOf(o) === null)) state = "incompleto";
+  return {
+    id: mkId(),
+    depDate: depDate,
+    depTime: depTime,
+    timeKind: timeKind,
+    state: state,
+    noaaCapture: o.noaaCapture && typeof o.noaaCapture === "object" && !Array.isArray(o.noaaCapture)
+      ? o.noaaCapture : null,
+    modelVersion: typeof o.modelVersion === "string" ? o.modelVersion : null,
+    result: result
+  };
 }
 
 // Valida el JSON de un backup y devuelve el mapa de meses, o null si no sirve.
@@ -3805,7 +3899,8 @@ function serializeFlight(f) {
     steps: f.steps,
     collapsed: f.collapsed,
     depDate: f.depDate,
-    depTime: f.depTime
+    depTime: f.depTime,
+    occurrences: f.occurrences
   };
 }
 
