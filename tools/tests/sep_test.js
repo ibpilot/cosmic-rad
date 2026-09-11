@@ -1041,5 +1041,239 @@ ok("sin canales u operador invalido falla cerrado", (function () {
          SepModel.ensemble(null).code === "ENTRADA_INVALIDA";
 })());
 
+// === T9: integracion por ruta (fuente canonica) ============================
+// Serie real de GLE73 (baseline del 27 + dia del evento) para todos los casos
+// que necesitan un evento detectable. Los fallos cerrados se fabrican mutando
+// esa misma serie DESPUES del onset, que detect() no vuelve a mirar.
+function t9Series() { return stitch("g16_2021-10-27.json", "g16_2021-10-28.json"); }
+function t9OnsetIndex(s) {
+  const d = SepModel.detect(s);
+  return d.state === "detectado" ? (d.onsetMs - s.startMs) / STEP_MS : -1;
+}
+// Indice dentro del array `samples` (las series de prueba arrancan en t=0).
+function t9OnsetGlobal(s) {
+  const d = SepModel.detect(s);
+  return d.state === "detectado" ? Math.round(d.onsetMs / STEP_MS) : -1;
+}
+function t9Fn(v) { return typeof v === "function" ? v : () => v; }
+function routePoints(startMs, endMs, n, rcAtf, altAtf) {
+  const rcFn = t9Fn(rcAtf), altFn = t9Fn(altAtf), pts = [];
+  for (let i = 0; i <= n; i++) {
+    const f = i / n;
+    pts.push({ tMs: startMs + (endMs - startMs) * f, rcGV: rcFn(f), altitudeKm: altFn(f) });
+  }
+  return pts;
+}
+function routeFromOnset(s, k, hours, n, rcAtf, altAtf) {
+  const t0 = s.startMs + k * STEP_MS;
+  return routePoints(t0, t0 + hours * HOUR_MS, n, rcAtf, altAtf);
+}
+function runRoute(series, points, operator) {
+  return SepModel.route({ channels: series.channels, samples: series.samples,
+                          startMs: series.startMs, points: points,
+                          operator: operator || ctx.SEP_DOSE });
+}
+function routeCenter(r) { return Math.sqrt(r.range.lowUsv * r.range.highUsv); }
+// Operador sintetico que alterna la tasa de los dos miembros del ensemble (la
+// primera llamada de cada paso es la ley de potencia, la segunda la doble ley).
+function alternatingOperator(rateA, rateB) {
+  let calls = 0;
+  return { rate: function () {
+    calls++;
+    return { ok: true, rateUsvH: calls % 2 ? rateA : rateB, tailRateUsvH: 0,
+             numericalErrorUsvH: 0 };
+  } };
+}
+// Deja la muestra con exceso solo en los canales indicados, sobre las medianas
+// reales del baseline (los demas canales quedan exactamente en su mediana).
+function setOnlyChannels(sample, medians, names) {
+  for (const name of CH_NAMES) sample[name] = medians[name];
+  for (const name of names) sample[name] = medians[name] + 1e-3;
+}
+// Evento sintetico con espectro BLANDO (E^-3) sobre la linea base del fixture
+// tranquilo. GLE73 real no sirve para los casos que publican cifra: su ajuste de
+// ley de potencia sale casi plano (~E^-0.7) y su cola >=10 GeV supera el 10%,
+// asi que el ensemble falla cerrado (se prueba aparte, mas abajo).
+function softEventSeries() {
+  const d = fixture("g18_2024-05-08.json"), med = {};
+  for (let c = 0; c < CH_NAMES.length; c++) {
+    const values = [];
+    for (let i = 0; i < 144; i++) values.push(d.diff[i][c]);
+    med[CH_NAMES[c]] = median(values);
+  }
+  const iv = [];
+  for (let i = 0; i < 144; i++) iv.push(d.integral_500_keV[i]);
+  med.int500 = median(iv);
+  const s = quietSeries(144, 96);
+  const SOFT = (E) => Math.pow(E, -3);
+  for (let i = 144; i < 240; i++) {
+    const sample = s.samples[i];
+    for (const c of s.channels) {
+      sample[c.name] = med[c.name] +
+        binAverage(SOFT, c.lo_keV / KEV_PER_GEV, c.hi_keV / KEV_PER_GEV) / KEV_PER_GEV;
+    }
+    sample.int500 = med.int500 + 1;
+  }
+  return s;
+}
+
+console.log("T9 ruta SEP — integracion y rango");
+ok("ruta polar da mas dosis que ecuatorial en el mismo evento", (function () {
+  const s = softEventSeries();
+  const det = SepModel.detect(s);
+  if (det.state !== "detectado") return false;
+  const t0 = det.onsetMs, t1 = t0 + 2 * HOUR_MS;
+  const polar = runRoute(s, routePoints(t0, t1, 24, 0.5, 10.5));
+  const ecuat = runRoute(s, routePoints(t0, t1, 24, 2, 10.5));
+  return polar.ok && ecuat.ok && polar.range && ecuat.range &&
+         routeCenter(polar) > routeCenter(ecuat);
+})());
+ok("Rc muy alta (ecuador real) -> la cola domina y no hay cifra", (function () {
+  const s = softEventSeries();
+  const det = SepModel.detect(s);
+  if (det.state !== "detectado") return false;
+  const t0 = det.onsetMs, t1 = t0 + 2 * HOUR_MS;
+  const r = runRoute(s, routePoints(t0, t1, 24, 12, 10.5));
+  return r.ok === false && r.state === "pendiente" && r.reason === "sin_convergencia";
+})());
+ok("convergencia de ruta <5% al duplicar pasos", (function () {
+  const s = softEventSeries();
+  const det = SepModel.detect(s);
+  if (det.state !== "detectado") return false;
+  const t0 = det.onsetMs, t1 = t0 + 2 * HOUR_MS;
+  const rc = (f) => 0.5 + 1.5 * f, alt = (f) => 9 + 3 * f;
+  const coarse = runRoute(s, routePoints(t0, t1, 16, rc, alt));
+  const fine = runRoute(s, routePoints(t0, t1, 64, rc, alt));
+  return coarse.ok && fine.ok && coarse.range && fine.range &&
+         Math.abs(routeCenter(fine) / routeCenter(coarse) - 1) < 0.05;
+})());
+ok("GLE73 real (espectro duro) falla cerrado por cola, no da cifra", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s);
+  if (k < 0) return false;
+  const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5));
+  return r.ok === false && r.state === "pendiente" && r.reason === "sin_convergencia";
+})());
+ok("el rango se forma DESPUES de integrar cada miembro (no punto a punto)", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s);
+  if (k < 0) return false;
+  // 24 pasos x 1/12 h = 2 h: el miembro 0 integra 2 uSv y el miembro 1, 6 uSv.
+  const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5),
+                     alternatingOperator(1, 3));
+  return r.ok && r.steps === 24 && r.range &&
+         Math.abs(r.range.lowUsv - 2) < 1e-9 && Math.abs(r.range.highUsv - 6) < 1e-9 &&
+         Math.abs(r.range.factor - 3) < 1e-9 &&
+         r.members[0].doseUsv === r.range.lowUsv && r.members[1].doseUsv === r.range.highUsv;
+})());
+ok("el rango no se estrecha por debajo de factor 3 con miembros iguales", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s);
+  if (k < 0) return false;
+  const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5),
+                     alternatingOperator(2, 2));
+  return r.ok && r.range && r.range.factor >= 2.999999 &&
+         Math.abs(routeCenter(r) - 4) < 1e-9;
+})());
+ok("sin senal -> estado sin_senal, dosis cero y sin cifra", (function () {
+  const s = quietSeries(144, 24);
+  const r = runRoute(s, routePoints(s.startMs, s.startMs + 2 * HOUR_MS, 12, 1, 10.5));
+  return r.ok && r.state === "sin_senal" && r.range === null && r.steps === 0;
+})());
+ok("paso con los 13 canales en la linea base -> cero medido, no pendiente", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s), g = t9OnsetGlobal(s);
+  if (k < 0) return false;
+  const medians = SepModel.detect(s).baseline.medians;
+  for (let i = g + 8; i < g + 24; i++) setOnlyChannels(s.samples[i], medians, []);
+  const r = runRoute(s, routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
+  return r.ok === true && r.state === "detectado" && r.range !== null &&
+         r.steps > 0 && r.steps < 24;
+})());
+
+console.log("T9 ruta SEP — fallos cerrados");
+ok("hueco de la serie dentro de la ruta -> pendiente (no cero)", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s), g = t9OnsetGlobal(s);
+  if (k < 0) return false;
+  s.samples.splice(g + 10, 2);
+  const r = runRoute(s, routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
+  return r.ok === false && r.state === "pendiente" && r.reason === "hueco_observacion";
+})());
+ok("canal ausente en un paso -> pendiente (no se inventa el flujo)", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s), g = t9OnsetGlobal(s);
+  if (k < 0) return false;
+  s.samples[g + 5].P9 = null;
+  const r = runRoute(s, routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
+  return r.ok === false && r.state === "pendiente" && r.reason === "observacion_incompleta";
+})());
+ok("cambio de satelite despues del onset -> pendiente (detect retorna antes)", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s), g = t9OnsetGlobal(s);
+  if (k < 0) return false;
+  s.samples[g + 5].sat = "g18";
+  const r = runRoute(s, routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
+  return r.ok === false && r.state === "pendiente" && r.reason === "cambio_satelite";
+})());
+ok("exceso en menos de 4 bins -> pendiente, nunca cero", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s), g = t9OnsetGlobal(s);
+  if (k < 0) return false;
+  const medians = SepModel.detect(s).baseline.medians;
+  for (let i = g + 8; i < g + 24; i++) setOnlyChannels(s.samples[i], medians, ["P8A", "P8B", "P8C"]);
+  const r = runRoute(s, routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
+  return r.ok === false && r.state === "pendiente" && r.reason === "modelo_no_resoluble";
+})());
+ok("cola integrada >=10% en un miembro -> sin convergencia", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s);
+  if (k < 0) return false;
+  const op = { rate: function () {
+    return { ok: true, rateUsvH: 1, tailRateUsvH: 0.5, numericalErrorUsvH: 0 };
+  } };
+  const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5), op);
+  return r.ok === false && r.state === "pendiente" && r.reason === "sin_convergencia";
+})());
+ok("dosis integrada bajo la cota de error -> sin cifra", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s);
+  if (k < 0) return false;
+  const op = { rate: function () {
+    return { ok: true, rateUsvH: 1, tailRateUsvH: 0, numericalErrorUsvH: 2 };
+  } };
+  const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5), op);
+  return r.ok === false && r.state === "pendiente" && r.reason === "modelo_no_resoluble";
+})());
+ok("error del operador se propaga como codigo, nunca como cero", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s);
+  if (k < 0) return false;
+  const op = { rate: function () { return { ok: false, code: "INVALID_MODEL" }; } };
+  const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5), op);
+  return r.ok === false && r.code === "INVALID_MODEL" && r.range === undefined;
+})());
+ok("cota de error ausente del operador -> fallo cerrado", (function () {
+  const s = t9Series(), k = t9OnsetIndex(s);
+  if (k < 0) return false;
+  const op = { rate: function () { return { ok: true, rateUsvH: 1, tailRateUsvH: 0 }; } };
+  const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5), op);
+  return r.ok === false && r.code === "NUMERIC_FAILURE";
+})());
+ok("ruta invalida (menos de dos puntos, no creciente, no finita) -> entrada invalida", (function () {
+  const t0 = 0;
+  const bad = [[], [{ tMs: t0, rcGV: 1, altitudeKm: 10.5 }],
+    [{ tMs: t0, rcGV: 1, altitudeKm: 10.5 }, { tMs: t0, rcGV: 1, altitudeKm: 10.5 }],
+    [{ tMs: t0, rcGV: NaN, altitudeKm: 10.5 }, { tMs: t0 + STEP_MS, rcGV: 1, altitudeKm: 10.5 }]];
+  return bad.every((points) => SepModel.route({ channels: CHANNELS, samples: [],
+    startMs: 0, points: points, operator: alternatingOperator(1, 1) }).code === "ENTRADA_INVALIDA");
+})());
+
+console.log("T9 ruta SEP — instrumentacion (informe T14)");
+(function () {
+  const s = softEventSeries();
+  const det = SepModel.detect(s);
+  if (det.state !== "detectado") { console.log("  (sin evento: no se mide)"); return; }
+  const points = routePoints(det.onsetMs, det.onsetMs + 2 * HOUR_MS, 32,
+                             (f) => 0.5 + 1.5 * f, (f) => 9 + 3 * f);
+  const probe = runRoute(s, points);
+  const t0 = Date.now();
+  for (let i = 0; i < 40; i++) runRoute(s, points);
+  const perFlight = (Date.now() - t0) / 40;
+  console.log("  T9 40 rutas x 32 pasos (mes lleno): " + (perFlight * 40).toFixed(0) +
+    " ms total, " + perFlight.toFixed(1) + " ms/vuelo; umbral de troceo 200 ms");
+  console.log("  rango de referencia: " + (probe.range ? probe.range.lowUsv.toFixed(4) +
+    " - " + probe.range.highUsv.toFixed(4) + " uSv" : "sin cifra (" + probe.reason + ")"));
+})();
+
 console.log("\n" + pass + " pass, " + fail + " fail");
 process.exit(fail ? 1 : 0);

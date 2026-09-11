@@ -1,9 +1,11 @@
-/* Synchronous fail-closed SEP model: detection (T7) and spectral ensemble (T8).
+/* Synchronous fail-closed SEP model: detection (T7), spectral ensemble (T8)
+ * and route integration (T9).
  *
  * Public interface (deliberately small; validators, coverage, bin construction,
  * spectral fitting and the optimizer are private helpers):
  *   SepModel.detect(input)   -> detection state
  *   SepModel.ensemble(input) -> spectral ensemble + range, or a closed error
+ *   SepModel.route(input)    -> route-integrated dose range, or a closed error
  *
  * detect(input):
  *   {startMs, samples:[{tMs, sat, <canal>, int500}], channels:[{name,lo_keV,hi_keV}]}
@@ -27,6 +29,23 @@
  *   como dosis cero. "Compatible" significa ajuste finito + operador valido +
  *   cola 10-20 GeV < 10% del total; no hay umbral de bondad estadistica aqui:
  *   el backtesting es T14.
+ *
+ * route(input):
+ *   {channels, samples, startMs, points:[{tMs, rcGV, altitudeKm}], operator}
+ *   Integra el ensemble espectral a lo largo de una ruta: cada paso aporta su
+ *   Rc (calculado FUERA del Module, con rcAt) y su altitud, y el flujo se
+ *   muestrea del instante UTC con retencion de orden cero a cadencia de 5 min.
+ *   -> {ok:true, state:"sin_senal"|"detectado", onsetMs, range, members, steps}
+ *    | {ok:false, state:"pendiente", reason}
+ *    | {ok:false, code}
+ *   Cada miembro del ensemble se integra por separado y el rango se forma
+ *   DESPUES de integrar, nunca mezclando minimos y maximos punto a punto. Se
+ *   rechaza la cifra (sin numero, no cero) si tailDose/totalDose >= 10% en
+ *   cualquier miembro o si totalDose <= numericalErrorDose. Un paso sin exceso
+ *   sobre la linea base es dosis cero SOLO si los 13 canales estan presentes y
+ *   el flujo no es negativo; un canal ausente/corrupto, un hueco de la serie,
+ *   un cambio de satelite o un exceso insuficiente para ajustar cierran la
+ *   ocurrencia como pendiente.
  */
 (function (root, factory) {
   var api = factory();
@@ -67,7 +86,9 @@
     OBSERVACION_INCOMPLETA: "observacion_incompleta",
     OBSERVACION_INSUFICIENTE: "observacion_insuficiente",
     OBSERVACION_CONFLICTIVA: "observacion_conflictiva",
-    HUECO_OBSERVACION: "hueco_observacion"
+    HUECO_OBSERVACION: "hueco_observacion",
+    MODELO_NO_RESOLUBLE: "modelo_no_resoluble",
+    SIN_CONVERGENCIA: "sin_convergencia"
   });
 
   // --- Deteccion (T7): constantes -------------------------------------------
@@ -800,5 +821,166 @@
     return { ok: true, solutions: solutions, range: range };
   }
 
-  return { SepModel: { detect: detect, ensemble: ensemble }, ERROR_CODES: ERROR_CODES };
+  // --- Integracion por ruta (T9) -------------------------------------------
+  // Evaluacion del operador para un miembro del ensemble. A diferencia de
+  // evaluateWithOperator (que sirve al caso puntual de ensemble) exige tambien
+  // la cota de error numerico: la ruta la integra y la usa como puerta final.
+  function evaluateMember(operator, solution, rcGV, altitudeKm) {
+    var result;
+    try {
+      result = operator.rate({ spectrumAtGeV: solution.spectrumAtGeV, rcGV: rcGV,
+                               altitudeKm: altitudeKm });
+    } catch (error) {
+      return failed(ERROR_CODES.NUMERIC_FAILURE);
+    }
+    if (!result || result.ok !== true) {
+      return failed((result && result.code) || ERROR_CODES.NUMERIC_FAILURE);
+    }
+    if (!isFiniteNumber(result.rateUsvH) || !(result.rateUsvH > 0) ||
+        !isFiniteNumber(result.tailRateUsvH) || !(result.tailRateUsvH >= 0) ||
+        !isFiniteNumber(result.numericalErrorUsvH) || !(result.numericalErrorUsvH >= 0)) {
+      return failed(ERROR_CODES.NUMERIC_FAILURE);
+    }
+    return { ok: true, rateUsvH: result.rateUsvH, tailRateUsvH: result.tailRateUsvH,
+             numericalErrorUsvH: result.numericalErrorUsvH };
+  }
+
+  // Copia ordenada por tiempo. normalizeSamples ordena pero no devuelve la
+  // lista (solo el resultado de detect), y la ruta necesita buscar por instante.
+  function sortedByTime(samples) {
+    var ordered = [];
+    for (var i = 0; i < samples.length; i++) ordered.push(samples[i]);
+    ordered.sort(function (a, b) { return a.tMs - b.tMs; });
+    return ordered;
+  }
+
+  // Retencion de orden cero: la ultima muestra con tMs <= t. Se exige que no
+  // haya mas de una cadencia de separacion; un hueco devuelve null (fail-closed)
+  // en vez de arrastrar una muestra vieja como si fuera el flujo del instante.
+  function sampleAt(ordered, tMs) {
+    var low = 0, high = ordered.length - 1, found = null;
+    while (low <= high) {
+      var mid = (low + high) >> 1;
+      if (ordered[mid].tMs <= tMs) { found = ordered[mid]; low = mid + 1; }
+      else high = mid - 1;
+    }
+    if (!found) return null;
+    if (tMs - found.tMs >= SAMPLING_INTERVAL_MS) return null;
+    return found;
+  }
+
+  function validRoutePoints(points) {
+    if (!Array.isArray(points) || points.length < 2) return null;
+    for (var i = 0; i < points.length; i++) {
+      var point = points[i];
+      if (!point || !isFiniteNumber(point.tMs) || !isFiniteNumber(point.rcGV) ||
+          !isFiniteNumber(point.altitudeKm)) return null;
+      if (i && !(point.tMs > points[i - 1].tMs)) return null;
+    }
+    return points;
+  }
+
+  // Un fallo de datos en la ruta se expone con el mismo `state:"pendiente"` que
+  // detect(), para que el llamador no tenga que distinguir dos formas de "no
+  // puedo medir".
+  function routePending(reason) {
+    return { ok: false, state: "pendiente", reason: reason };
+  }
+
+  function route(input) {
+    if (!input || typeof input !== "object") return failed(ERROR_CODES.ENTRADA_INVALIDA);
+    var operator = input.operator;
+    if (!operator || typeof operator.rate !== "function") {
+      return failed(ERROR_CODES.MODELO_NO_DISPONIBLE);
+    }
+    var points = validRoutePoints(input.points);
+    if (!points) return failed(ERROR_CODES.ENTRADA_INVALIDA);
+    if (!Array.isArray(input.samples) || input.samples.length < MIN_CONSECUTIVE_SAMPLES) {
+      return routePending(REASONS.SIN_DATOS);
+    }
+
+    var detection = detect({ startMs: input.startMs, channels: input.channels,
+                             samples: input.samples });
+    if (detection.state === "pendiente") return routePending(detection.reason);
+    if (detection.state === "sin_senal") {
+      return { ok: true, state: "sin_senal", onsetMs: null, range: null,
+               members: [], steps: 0 };
+    }
+
+    var channels = normalizeChannels(input.channels);
+    if (!channels) return routePending(REASONS.CANALES_INVALIDOS);
+    var baselineValues = resolveBaselineValues(detection.baseline);
+    var ordered = sortedByTime(input.samples);
+    var satellite = detection.baseline.satellites[0];
+
+    var members = [
+      { model: "power-law", doseUsv: 0, tailDoseUsv: 0, errorDoseUsv: 0 },
+      { model: "double-power-law", doseUsv: 0, tailDoseUsv: 0, errorDoseUsv: 0 }
+    ];
+    var measuredSteps = 0;
+    for (var i = 0; i + 1 < points.length; i++) {
+      var a = points[i], b = points[i + 1];
+      var dtH = (b.tMs - a.tMs) / 3600000;
+      if (!(dtH > 0)) continue;
+      var tMid = (a.tMs + b.tMs) / 2;
+      var sample = sampleAt(ordered, tMid);
+      if (!sample) return routePending(REASONS.HUECO_OBSERVACION);
+      if (typeof sample.sat !== "string" || !sample.sat) {
+        return routePending(REASONS.SATELITE_AUSENTE);
+      }
+      if (sample.sat !== satellite) return routePending(REASONS.CAMBIO_SATELITE);
+
+      var built = buildBins(channels, sample, baselineValues);
+      if (!built.ok) return routePending(REASONS.OBSERVACION_INCOMPLETA);
+      var usable = usableBins(built.bins);
+      if (!usable.length) continue;   // 13 canales presentes y sin exceso: cero medido
+      if (usable.length < MIN_USABLE_BINS) return routePending(REASONS.MODELO_NO_RESOLUBLE);
+
+      var solutions = [fitPowerLaw(usable), fitDoublePowerLaw(usable)];
+      if (!solutions[0] || !solutions[1]) return routePending(REASONS.MODELO_NO_RESOLUBLE);
+
+      // Punto medio del tramo: regla de punto medio, converge al refinar la ruta.
+      var rcGV = (a.rcGV + b.rcGV) / 2;
+      var altitudeKm = (a.altitudeKm + b.altitudeKm) / 2;
+      for (var s = 0; s < solutions.length; s++) {
+        var evaluated = evaluateMember(operator, solutions[s], rcGV, altitudeKm);
+        if (!evaluated.ok) return failed(evaluated.code);
+        members[s].doseUsv += evaluated.rateUsvH * dtH;
+        members[s].tailDoseUsv += evaluated.tailRateUsvH * dtH;
+        members[s].errorDoseUsv += evaluated.numericalErrorUsvH * dtH;
+      }
+      measuredSteps++;
+    }
+
+    var low = Infinity, high = -Infinity;
+    for (var m = 0; m < members.length; m++) {
+      var member = members[m];
+      if (!(member.doseUsv > 0)) continue;
+      if (member.tailDoseUsv / member.doseUsv >= TAIL_MAX_FRACTION) {
+        return routePending(REASONS.SIN_CONVERGENCIA);
+      }
+      if (member.doseUsv <= member.errorDoseUsv) {
+        return routePending(REASONS.MODELO_NO_RESOLUBLE);
+      }
+      if (member.doseUsv < low) low = member.doseUsv;
+      if (member.doseUsv > high) high = member.doseUsv;
+    }
+    if (low === Infinity) {
+      // Evento detectado pero sin contribucion medible a lo largo de esta ruta.
+      return { ok: true, state: "detectado", onsetMs: detection.onsetMs, range: null,
+               members: members, steps: measuredSteps };
+    }
+    var range = widenLogRange(low, high, RANGE_MIN_FACTOR);
+    if (!range) return failed(ERROR_CODES.NUMERIC_FAILURE);
+    return {
+      ok: true, state: "detectado", onsetMs: detection.onsetMs,
+      range: { lowUsv: range.lowUsvH, highUsv: range.highUsvH, factor: range.factor },
+      members: members, steps: measuredSteps
+    };
+  }
+
+  return {
+    SepModel: { detect: detect, ensemble: ensemble, route: route },
+    ERROR_CODES: ERROR_CODES
+  };
 }));
