@@ -716,6 +716,10 @@ console.log("\nT10 ocurrencias");
      ctx.depMsOf(ctx.makeOccurrence("2024-05-11", "01:30")) === Date.UTC(2024, 4, 11, 1, 30));
   ok("M11 hora 25:00 → esperando_fecha",
      ctx.makeOccurrence("2024-05-11", "25:00").state === "esperando_fecha");
+
+  // M12 — un backup con `occurrences` que no es array no deja basura en el vuelo.
+  ok("M12 occurrences no-array se elimina al hidratar",
+     ["x", {}, 7, null].every(v => !("occurrences" in ctx.hydrateFlight({orig: "MAD", dest: "JFK", occurrences: v}))));
 }
 
 testRouteImportKeepsCuratedIcaoAliases().then(function () {
