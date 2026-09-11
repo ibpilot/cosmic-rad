@@ -82,6 +82,7 @@ table { border-collapse:collapse; width:100%; }
 .gle-dep input { min-width:130px; padding:3px 5px; background:rgba(255,255,255,0.07);
   border:1px solid rgba(208,138,44,0.4); border-radius:5px; color:#e0eef5; }
 .gle-split { opacity:0.8; font-size:11px; color:#e0c080; }
+.gle-nofig { font-weight: 600; }
 .gle-rt { background:#4a1f1f; border-left:3px solid #d04c4c; padding:8px 12px;
   margin:8px 0; border-radius:4px; font-size:12px; color:#f0c0c0; }
 .gle-rt.gle-rt-quiet { background:#16242e; border-left-color:#3f6277; color:#a8c4d4; }
@@ -416,7 +417,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.12";
+var APP_VERSION = "1.13";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2078,6 +2079,22 @@ function gleWindow(tMs) {
   }
   return null;
 }
+// Ventana asumida para un GLE sin perfil NMDB: sin perfil no hay duracion medida.
+// ponytail: 6 h fijas (PANDOCA: el aumento de GLE74 duro ~6 h); campo por evento si hay mas.
+var GLE_NOPROFILE_H = 6;
+// gleUnprofiledOverlap(t0Ms, t1Ms): primer GLE SIN perfil cuya ventana
+// [t0, t0 + 6 h) se solapa con [t0Ms, t1Ms), o null.
+function gleUnprofiledOverlap(t0Ms, t1Ms) {
+  if (!isFinite(t0Ms) || !isFinite(t1Ms) || !(t1Ms > t0Ms)) return null;
+  for (var i = 0; i < GLE_EVENTS.length; i++) {
+    var ev = GLE_EVENTS[i];
+    if (!ev || (ev.p && ev.p.length)) continue;
+    var e0 = gleMs(ev.t0);
+    if (!isFinite(e0)) continue;
+    if (t0Ms < e0 + GLE_NOPROFILE_H * 3600000 && t1Ms > e0) return ev;
+  }
+  return null;
+}
 // sepRate(lat, lon, altKm, tMs): uSv/h aportados por el evento activo.
 //   K(R0) * I0(t) * exp(-Rc/R0(t)) * altFactor
 // El factor de altitud NO es el de la rejilla: el espectro SEP es mas blando y
@@ -3332,7 +3349,7 @@ function calcTrack(track, hpMV, altKm, depMs) {
   });
   if (track.length < 2) return null;
   var hasTime = track[0][0] != null;
-  var doseUsv = 0, doseSepUsv = 0, distKm = 0, timeH = 0, incomplete = false;
+  var doseUsv = 0, doseSepUsv = 0, gleNoFigure = null, distKm = 0, timeH = 0, incomplete = false;
   var hasSep = isFinite(depMs) && depMs !== null;
   // Altitud por defecto FL350 para puntos sin altitud: un a[3] undefined daba
   // NaN dentro de doseRateGrid, y la guarda `rate == null` no captura NaN.
@@ -3422,11 +3439,15 @@ function calcTrack(track, hpMV, altKm, depMs) {
     }
     var sep = sepDose(a, b, aAlt, bAlt, tMinA, tMinB);
     if (sep > 0) { doseSepUsv += sep; doseUsv += sep; }
+    if (hasSep && gleNoFigure === null) {
+      var nf = gleUnprofiledOverlap(depMs + tMinA * 60000, depMs + tMinB * 60000);
+      if (nf) gleNoFigure = nf.n;
+    }
     distKm += seg;
     timeH += dtH;
   }
   return { distKm: Math.round(distKm), timeH: timeH, doseUsv: doseUsv,
-           doseSepUsv: doseSepUsv, effLat: null,
+           doseSepUsv: doseSepUsv, gleNoFigure: gleNoFigure, effLat: null,
            rateUsvh: timeH > 0 ? doseUsv / timeH : 0,
            nPts: track.length, incomplete: incomplete };
 }
@@ -3442,6 +3463,11 @@ function flightCalc(f, hpMV) {
   var fi2 = FL_OPTIONS[f.flIdx] ? f.flIdx : 1;
   var r = calcFlight(f.orig, f.dest, fi2, hpMV);
   if (r && r.doseSepUsv === undefined) r.doseSepUsv = 0;
+  if (r && r.gleNoFigure === undefined) {
+    var nf2 = isFinite(depMs) && depMs !== null && isFinite(r.timeH)
+      ? gleUnprofiledOverlap(depMs, depMs + r.timeH * 3600000) : null;
+    r.gleNoFigure = nf2 ? nf2.n : null;
+  }
   return r;
 }
 
@@ -3802,6 +3828,7 @@ var LANG = {
     gleGcr: "GCR",
     gleQAjustado: "ajustado",
     gleQSoloEvento: "solo evento",
+    gleNoFigure: "Evento solar GLE{n}: dosis no estimable (posible aumento significativo en rutas polares)",
     gleQMedido: "medido",
     gleRt: "Tormenta de radiación solar",
     gleRtAge: "hace {age}",
@@ -4058,6 +4085,7 @@ var LANG = {
     gleGcr: "GCR",
     gleQAjustado: "fitted",
     gleQSoloEvento: "event only",
+    gleNoFigure: "Solar event GLE{n}: dose not estimable (possibly significant increase on polar routes)",
     gleQMedido: "measured",
     gleRt: "solar radiation storm",
     gleRtAge: "{age} ago",
@@ -5014,7 +5042,9 @@ function FlightRow(_ref9) {
     accent: true
   }), calc.doseSepUsv > 0 && /*#__PURE__*/React.createElement("span", {
     className: "gle-split"
-  }, t.gleGcr, " ", fmtDose(calc.doseUsv - calc.doseSepUsv), " + ", t.gleSep, " ", fmtDose(calc.doseSepUsv), " · ", t.gleQAjustado), legs > 1 && /*#__PURE__*/React.createElement(Chip, {
+  }, t.gleGcr, " ", fmtDose(calc.doseUsv - calc.doseSepUsv), " + ", t.gleSep, " ", fmtDose(calc.doseSepUsv), " · ", t.gleQAjustado), calc.gleNoFigure ? /*#__PURE__*/React.createElement("span", {
+    className: "gle-split gle-nofig"
+  }, "⚠️ ", t.gleNoFigure.replace("{n}", calc.gleNoFigure)) : null, legs > 1 && /*#__PURE__*/React.createElement(Chip, {
     icon: "\u2716\uFE0F",
     label: "".concat(fmtDose(totalUsv), " (\xD7").concat(legs, ")"),
     accent: true

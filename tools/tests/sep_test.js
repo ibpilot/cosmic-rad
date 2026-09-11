@@ -73,6 +73,50 @@ ok("el perfil temporal se sigue paso a paso", (function () {
   return s0 > 0 && Math.abs(s2 / s0 - 0.25) < 1e-9;
 })());
 
+console.log("aviso GLE sin perfil");
+// GLE sin perfil NMDB (p vacio): no suma dosis, pero un vuelo que lo atraviesa
+// debe avisarse igualmente (sin cifra). Ventana asumida de 6 h.
+const SOLO = {n: 74, t0: "2024-05-11T01:30Z", dt: 15, q: "solo evento", p: []};
+const SOLO_EPOCH = {n: 70, t0: "1970-01-01T00:00Z", dt: 15, q: "solo evento", p: []};
+const AJUST = {n: 73, t0: "2021-10-28T15:45Z", dt: 15, q: "ajustado", p: [[100, 2, 0.01]]};
+const E0 = Date.UTC(2024, 4, 11, 1, 30);
+const A0 = Date.UTC(2021, 9, 28, 15, 45);
+// Track sin hora de 2 puntos: ~1600 km => ~2 h a 830 km/h.
+const NF_TRACK = [[null, 70, -30, 10.668], [null, 60, 0, 10.668]];
+function withGle(list, fn) {
+  const saved = ctx.GLE_EVENTS;
+  ctx.GLE_EVENTS = list;
+  try { return fn(); } finally { ctx.GLE_EVENTS = saved; }
+}
+ok("solape que arranca antes del GLE sin perfil devuelve el evento", withGle([SOLO], function () {
+  const ev = ctx.gleUnprofiledOverlap(E0 - 3600000, E0 + 60000);
+  return !!ev && ev.n === 74;
+}));
+ok("borde a 6 h exclusivo: pasada la ventana no hay aviso", withGle([SOLO], function () {
+  return ctx.gleUnprofiledOverlap(E0 + 6 * 3600000, E0 + 7 * 3600000) === null;
+}));
+ok("un GLE con perfil no genera aviso sin cifra", withGle([AJUST], function () {
+  return ctx.gleUnprofiledOverlap(A0 - 3600000, A0 + 3600000) === null;
+}));
+ok("track que atraviesa el GLE sin perfil -> aviso y cero SEP", withGle([SOLO], function () {
+  const r = ctx.calcTrack(NF_TRACK, 650, null, E0 - 3600000);
+  return r.gleNoFigure === 74 && r.doseSepUsv === 0;
+}));
+ok("track 12 h despues del GLE sin perfil -> sin aviso", withGle([SOLO], function () {
+  return ctx.calcTrack(NF_TRACK, 650, null, E0 + 12 * 3600000).gleNoFigure === null;
+}));
+ok("sin fecha de salida no se avisa", withGle([SOLO, SOLO_EPOCH], function () {
+  return ctx.calcTrack(NF_TRACK, 650, null, null).gleNoFigure === null;
+}));
+ok("las plantillas ES y EN llevan el hueco {n}",
+   String(ctx.LANG.es.gleNoFigure).indexOf("{n}") !== -1 &&
+   String(ctx.LANG.en.gleNoFigure).indexOf("{n}") !== -1);
+ok("vuelo sin track que atraviesa el GLE sin perfil -> aviso", withGle([SOLO], function () {
+  const r = ctx.flightCalc({orig: "MAD", dest: "JFK", legs: 1, flIdx: 1,
+                            depDate: "2024-05-11", depTime: "00:30"}, 650);
+  return r && r.gleNoFigure === 74;
+}));
+
 console.log("integracion en calcTrack");
 // Track polar de 1 h: [tMin, lat, lon, altKm]
 const TRACK = [[0, 78, -70, 10.668], [30, 78, -60, 10.668], [60, 78, -50, 10.668]];
