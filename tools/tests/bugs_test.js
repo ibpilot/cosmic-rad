@@ -970,6 +970,50 @@ console.log("\nT11 ocurrencias UI");
   }
 }
 
+console.log("\nSelectores fecha/hora — borrador local + confirmación");
+{
+  const dp = ctx.depDraftPatch;
+
+  // D1 — borrador completo y válido → los dos campos.
+  const d1 = dp({ depDate: "2026-09-01", depTime: "14:30" });
+  ok("D1 borrador completo devuelve los campos",
+     JSON.stringify(d1) === '{"depDate":"2026-09-01","depTime":"14:30"}',
+     JSON.stringify(d1));
+
+  // D2 — hora ausente o incompleta → null (la hora sin minutos no vale).
+  const d2 = [{ depDate: "2026-09-01" }, { depDate: "2026-09-01", depTime: "14" },
+    { depDate: "2026-09-01", depTime: "" }];
+  ok("D2 hora incompleta o ausente → null", d2.every((d) => dp(d) === null),
+     JSON.stringify(d2.map(dp)));
+
+  // D3 — fecha ausente o mal formada → null.
+  const d3 = [{ depTime: "14:30" }, { depDate: "1-9-2026", depTime: "14:30" }];
+  ok("D3 fecha ausente o mal formada → null", d3.every((d) => dp(d) === null),
+     JSON.stringify(d3.map(dp)));
+
+  // D4 — valores imposibles → null (hora 25:00, 31 de febrero).
+  const d4 = [{ depDate: "2026-09-01", depTime: "25:00" },
+    { depDate: "2026-02-31", depTime: "10:00" }];
+  ok("D4 valores imposibles → null", d4.every((d) => dp(d) === null),
+     JSON.stringify(d4.map(dp)));
+
+  // D5 — entradas basura: no lanzan y dan null.
+  let d5threw = null, d5out = null;
+  try { d5out = [dp(null), dp("x"), dp({ depDate: 5, depTime: 7 })]; }
+  catch (e) { d5threw = e.message; }
+  ok("D5 entradas basura no lanzan y dan null",
+     d5threw === null && d5out && d5out.every((v) => v === null),
+     d5threw === null ? JSON.stringify(d5out) : d5threw);
+
+  // D6 — el texto del estado cita la fecha de inicio y no dice "revisado".
+  const es6 = ctx.LANG.es.occState_fuera_de_rango;
+  const en6 = ctx.LANG.en.occState_fuera_de_rango;
+  ok("D6 ES menciona 2026 y no 'revis'",
+     es6.indexOf("2026") !== -1 && es6.toLowerCase().indexOf("revis") === -1, es6);
+  ok("D6 EN menciona 2026 y no 'review'",
+     en6.indexOf("2026") !== -1 && en6.toLowerCase().indexOf("review") === -1, en6);
+}
+
 // T8 — un fallo HTTP no envenena la caché del manifest (F1); requiere async.
 async function testFetchSolarManifestRetriesAfterHttpError() {
   console.log("\nT8 — un fallo HTTP no envenena la caché del manifest");

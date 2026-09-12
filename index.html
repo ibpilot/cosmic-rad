@@ -77,10 +77,17 @@ table { border-collapse:collapse; width:100%; }
 .gle-banner { background:#3a2a10; border-left:3px solid #d08a2c; padding:8px 12px;
   margin:8px 0; border-radius:4px; font-size:12px; color:#f0d09a; }
 .gle-hint { opacity:0.75; font-size:11px; margin-top:4px; }
-.gle-dep { display:flex; gap:6px; align-items:center; flex-wrap:wrap;
-  font-size:11px; margin-top:4px; color:#d0b070; }
-.gle-dep input { min-width:130px; padding:3px 5px; background:rgba(255,255,255,0.07);
-  border:1px solid rgba(208,138,44,0.4); border-radius:5px; color:#e0eef5; }
+.gle-dep { display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; }
+.gle-dep label { display:flex; flex-direction:column; gap:3px; font-size:10px; color:#8aacbc; }
+.gle-dep input, .occ-input { min-width:140px; min-height:32px; padding:5px 8px;
+  background:rgba(255,255,255,0.07); border:1.5px solid rgba(255,255,255,0.15);
+  border-radius:6px; color:#e8f2f8; font-size:12.5px; color-scheme:dark; }
+.gle-dep input:focus, .occ-input:focus { outline:none; border-color:#3b9ede; }
+.occ-confirm { min-height:32px; padding:4px 12px; border-radius:6px; cursor:pointer;
+  background:rgba(40,160,100,0.15); border:1px solid rgba(40,160,100,0.35);
+  color:#40c080; font-size:11px; font-weight:700; }
+.occ-confirm:disabled { opacity:0.35; cursor:not-allowed; }
+@media (max-width:420px) { .gle-dep input, .occ-input { min-width:0; width:100%; } }
 .gle-split { opacity:0.8; font-size:11px; color:#e0c080; }
 .gle-nofig { font-weight: 600; }
 .gle-rt { background:#4a1f1f; border-left:3px solid #d04c4c; padding:8px 12px;
@@ -417,7 +424,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.14";
+var APP_VERSION = "1.15";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2354,6 +2361,17 @@ function solarDaysFor(startMs, endMs) {
   return out;
 }
 
+// Borrador de fecha/hora -> campos a guardar, o null si no es confirmable.
+// Exige fecha Y hora completas y validas (la hora sin minutos no vale).
+function depDraftPatch(draft) {
+  if (!draft || typeof draft !== "object") return null;
+  var d = typeof draft.depDate === "string" ? draft.depDate : "";
+  var tm = typeof draft.depTime === "string" ? draft.depTime : "";
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(d) || !/^\d{2}:\d{2}$/.test(tm)) return null;
+  if (depMsOf({ depDate: d, depTime: tm }) === null) return null;
+  return { depDate: d, depTime: tm };
+}
+
 // true solo si occEvaluate llegaria a necesitar el archivo (pasa las reglas 1-5).
 function occNeedsArchive(f, occ, nowMs) {
   if (!occ || typeof occ !== "object" || occ.state === "incorporada") return false;
@@ -4288,7 +4306,7 @@ var LANG = {
     occState_incorporada: "incorporada",
     occState_noaa_no_disponible: "archivo GOES no disponible",
     occState_sin_senal: "sin señal solar",
-    occState_fuera_de_rango: "fuera del archivo",
+    occState_fuera_de_rango: "sin archivo GOES (desde el 30-08-2026)",
     occState_modelo_nuevo: "modelo actualizado",
     occState_esperando_fecha: "sin fecha",
     occState_sin_senal_evento: "evento solar activo sin contribución estimable en esta ruta",
@@ -4298,6 +4316,7 @@ var LANG = {
     occIncorporate: "Incorporar",
     occRecalc: "Recalcular",
     occRemove: "quitar",
+    occConfirm: "Confirmar",
     occChecking: "comprobando…",
     occNoaaFail: "calculado sin datos de llamaradas solares — no se pudo leer el archivo GOES",
     occNoDate: "sin fecha",
@@ -4570,7 +4589,7 @@ var LANG = {
     occState_incorporada: "incorporated",
     occState_noaa_no_disponible: "GOES archive unavailable",
     occState_sin_senal: "no solar signal",
-    occState_fuera_de_rango: "outside the archive",
+    occState_fuera_de_rango: "no GOES archive (from 2026-08-30)",
     occState_modelo_nuevo: "model updated",
     occState_esperando_fecha: "no date",
     occState_sin_senal_evento: "active solar event with no estimable contribution on this route",
@@ -4580,6 +4599,7 @@ var LANG = {
     occIncorporate: "Incorporate",
     occRecalc: "Recalculate",
     occRemove: "remove",
+    occConfirm: "Confirm",
     occChecking: "checking…",
     occNoaaFail: "calculated without solar flare data — the GOES archive could not be read",
     occNoDate: "no date",
@@ -5279,6 +5299,16 @@ function OccList(_refOcc) {
     tempRef.current = makeOccurrence(flight.depDate, flight.depTime, "programada");
   }
   var rows = single ? [tempRef.current] : occs;
+  var _useStateD = useState(function () {
+    var m = {};
+    rows.forEach(function (o) {
+      m[o.id] = { depDate: o.depDate || "", depTime: o.depTime || "" };
+    });
+    return m;
+  }),
+    _useStateD2 = _slicedToArray(_useStateD, 2),
+    drafts = _useStateD2[0],
+    setDrafts = _useStateD2[1];
   var active = single || open;
   // Evaluacion perezosa: solo al desplegar (o en la fila unica). El resultado
   // vive en estado local del componente; nunca se persiste.
@@ -5364,18 +5394,42 @@ function OccList(_refOcc) {
         onClick: function () { patch(occ, { state: "programado", result: null, modelVersion: null }); }
       }, t.occRemove));
     } else if (state === "esperando_fecha") {
+      var draft = drafts[occ.id] || { depDate: occ.depDate || "", depTime: occ.depTime || "" };
       actions.push(React.createElement("input", {
-        key: "d", type: "date", value: occ.depDate || "", style: { fontSize: 10.5 },
+        key: "d", type: "date", className: "occ-input", value: draft.depDate,
         onChange: function (e) {
-          patch(occ, { depDate: e.target.value, state: "programado", result: null });
+          var v = e.target.value;
+          setDrafts(function (m) {
+            var n = _objectSpread({}, m);
+            n[occ.id] = _objectSpread(_objectSpread({}, draft), { depDate: v });
+            return n;
+          });
         }
       }));
       actions.push(React.createElement("input", {
-        key: "t", type: "time", value: occ.depTime || "", style: { fontSize: 10.5 },
+        key: "t", type: "time", className: "occ-input", value: draft.depTime,
         onChange: function (e) {
-          patch(occ, { depTime: e.target.value, state: "programado", result: null });
+          var v = e.target.value;
+          setDrafts(function (m) {
+            var n = _objectSpread({}, m);
+            n[occ.id] = _objectSpread(_objectSpread({}, draft), { depTime: v });
+            return n;
+          });
         }
       }));
+      actions.push(React.createElement("button", {
+        key: "ok", className: "occ-confirm", disabled: depDraftPatch(draft) === null,
+        onClick: function () {
+          var p = depDraftPatch(draft);
+          if (p === null) return;
+          patch(occ, _objectSpread(p, { state: "programado", result: null }));
+          setDrafts(function (m) {
+            var n = _objectSpread({}, m);
+            delete n[occ.id];
+            return n;
+          });
+        }
+      }, t.occConfirm));
     } else if (vis === "disponible") {
       if (state === "modelo_nuevo") {
         actions.push(React.createElement("button", {
@@ -5474,6 +5528,17 @@ function FlightRow(_ref9) {
     _useStateR2 = _slicedToArray(_useStateR, 2),
     showCalc = _useStateR2[0],
     setShowCalc = _useStateR2[1];
+  var depRef = useRef(null);
+  var _useStateDep = useState({ depDate: flight.depDate || "", depTime: flight.depTime || "" }),
+    _useStateDep2 = _slicedToArray(_useStateDep, 2),
+    depDraft = _useStateDep2[0],
+    setDepDraft = _useStateDep2[1];
+  if (depRef.current === null ||
+      depRef.current.depDate !== (flight.depDate || "") ||
+      depRef.current.depTime !== (flight.depTime || "")) {
+    depRef.current = { depDate: flight.depDate || "", depTime: flight.depTime || "" };
+    setDepDraft(depRef.current);
+  }
   return /*#__PURE__*/React.createElement("div", {
     style: {
       background: "rgba(255,255,255,0.04)",
@@ -5577,17 +5642,35 @@ function FlightRow(_ref9) {
     className: "gle-dep"
   }, /*#__PURE__*/React.createElement("label", null, t.gleDate, /*#__PURE__*/React.createElement("input", {
     type: "date",
-    value: flight.depDate || "",
+    className: "occ-input",
+    value: depDraft.depDate,
     onChange: function onChange(e) {
-      return _onChange(id, "depDate", e.target.value);
+      var v = e.target.value;
+      return setDepDraft(function (d) {
+        return _objectSpread(_objectSpread({}, d), { depDate: v });
+      });
     }
   })), /*#__PURE__*/React.createElement("label", null, t.gleTime, /*#__PURE__*/React.createElement("input", {
     type: "time",
-    value: flight.depTime || "",
+    className: "occ-input",
+    value: depDraft.depTime,
     onChange: function onChange(e) {
-      return _onChange(id, "depTime", e.target.value);
+      var v = e.target.value;
+      return setDepDraft(function (d) {
+        return _objectSpread(_objectSpread({}, d), { depTime: v });
+      });
     }
-  }))), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("button", {
+    className: "occ-confirm",
+    disabled: depDraftPatch(depDraft) === null ||
+      (depDraft.depDate === (flight.depDate || "") && depDraft.depTime === (flight.depTime || "")),
+    onClick: function onClick() {
+      var p = depDraftPatch(depDraft);
+      if (p === null) return;
+      _onChange(id, "depDate", p.depDate);
+      _onChange(id, "depTime", p.depTime);
+    }
+  }, t.occConfirm)), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
