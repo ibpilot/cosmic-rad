@@ -2316,6 +2316,62 @@ function solarDayAdapt(diffJsons, intJsons) {
   return { channels: channels, samples: samples };
 }
 
+// nceiDayAdapt(file): adapta un dia-satelite del archivo historico NCEI a la
+// MISMA forma canonica que solarDayAdapt. Devuelve null si el fichero no cumple
+// el contrato: un dia a medias se descarta entero, no se degrada en silencio.
+// Igual que solarDayAdapt, no filtra nulos ni negativos; el modelo ya cierra en
+// pendiente cuando el dato no es medible.
+function nceiDayAdapt(file) {
+  if (!file || typeof file !== "object" || Array.isArray(file)) return null;
+  var i, j;
+  // El eje temporal se reconstruye; NCEI no lo trae por muestra.
+  var t0 = typeof file.start_time === "string" ? Date.parse(file.start_time) : NaN;
+  if (!isFinite(t0)) return null;
+  if (file.time_step_s !== 300) return null;
+  var sat = satKey(file.sat);
+  if (sat === undefined) return null;
+  var n = file.n_steps;
+  if (typeof n !== "number" || n !== 288) return null;
+  var diff = file.diff;
+  if (!Array.isArray(diff) || diff.length !== n) return null;
+  // `integral_500_keV` es el nombre viejo; miente sobre la unidad pero los
+  // fixtures aun lo usan, asi que se acepta durante la transicion.
+  var integ = Array.isArray(file.integral_500_mev) ? file.integral_500_mev
+            : Array.isArray(file.integral_500_keV) ? file.integral_500_keV : null;
+  if (integ === null || integ.length !== n) return null;
+  var chans = file.channels;
+  if (!Array.isArray(chans) || chans.length !== SOLAR_CHANNEL_ORDER.length) return null;
+  // Indice canal -> columna, por NOMBRE. En los ficheros publicados el orden ya
+  // coincide, pero indexar por nombre convierte un reordenado futuro en un fallo
+  // ruidoso en vez de en 13 canales mal asignados.
+  var colOf = {};
+  for (j = 0; j < chans.length; j++) {
+    var c = chans[j];
+    if (!c || typeof c !== "object") return null;
+    if (SOLAR_CHANNEL_ORDER.indexOf(c.name) < 0) return null;
+    if (Object.prototype.hasOwnProperty.call(colOf, c.name)) return null;
+    colOf[c.name] = j;
+  }
+  var channels = [];
+  for (i = 0; i < SOLAR_CHANNEL_ORDER.length; i++) {
+    var nm = SOLAR_CHANNEL_ORDER[i];
+    if (!Object.prototype.hasOwnProperty.call(colOf, nm)) return null;
+    var src = chans[colOf[nm]];
+    channels.push({ name: nm, lo_keV: src.lo_keV, hi_keV: src.hi_keV });
+  }
+  var samples = [];
+  for (i = 0; i < n; i++) {
+    var row = diff[i];
+    if (!Array.isArray(row) || row.length !== SOLAR_CHANNEL_ORDER.length) return null;
+    var smp = { tMs: t0 + i * 300000, sat: sat, int500: integ[i] };
+    for (j = 0; j < SOLAR_CHANNEL_ORDER.length; j++) {
+      smp[SOLAR_CHANNEL_ORDER[j]] = row[colOf[SOLAR_CHANNEL_ORDER[j]]];
+    }
+    samples.push(smp);
+  }
+  return { channels: channels, samples: samples };
+}
+
 // occRoutePoints(f, occ): puntos {tMs, rcGV, altitudeKm} de la ruta de una
 // ocurrencia, o null si no hay ruta/rc utilizable. Punto con rcGV no finito se
 // descarta; con menos de dos puntos no hay ruta.

@@ -1223,6 +1223,110 @@ console.log("\nF6-1 satKey normaliza el satelite");
      basura.map((v) => JSON.stringify(v) + "=" + ctx.satKey(v)).join(","));
 }
 
+console.log("\nF6-2 nceiDayAdapt");
+{
+  const FIXN = path.join(REPO, "tools", "fixtures", "ncei");
+  const readN = (n) => JSON.parse(fs.readFileSync(path.join(FIXN, n), "utf8"));
+  const f08 = readN("2026-09-08-g18.json");
+
+  const partsOf = (v) => ({
+    channels: v && Array.isArray(v.channels) ? v.channels : [],
+    samples: v && Array.isArray(v.samples) ? v.samples : []
+  });
+  const channelNames = (xs) => xs.map((c) => c && c.name).join(",");
+  const a = ctx.nceiDayAdapt(f08);
+  const aParts = partsOf(a), channels = aParts.channels, samples = aParts.samples;
+  ok("F6 devuelve objeto", a !== null && typeof a === "object");
+  ok("F6 13 canales en SOLAR_CHANNEL_ORDER",
+     channels.length === 13 &&
+     channelNames(channels) === "P1,P2A,P2B,P3,P4,P5,P6,P7,P8A,P8B,P8C,P9,P10",
+     channelNames(channels));
+  ok("F6 P1 1020/1860 keV", !!channels[0] && channels[0].lo_keV === 1020 && channels[0].hi_keV === 1860,
+     JSON.stringify(channels[0]));
+  ok("F6 P10 267000/390000 keV", !!channels[12] && channels[12].lo_keV === 267000 && channels[12].hi_keV === 390000,
+     JSON.stringify(channels[12]));
+  ok("F6 288 muestras", samples.length === 288, samples.length);
+  ok("F6 t0 = start_time", !!samples[0] && samples[0].tMs === Date.parse("2026-09-08T00:00:00Z"),
+     samples[0] && samples[0].tMs);
+  ok("F6 cadencia exacta de 300 s",
+     samples.length === 288 && !!samples[0] &&
+     samples.every((s, i) => !!s && s.tMs === samples[0].tMs + i * 300000));
+  ok("F6 sat normalizado a '18'", samples.length === 288 && samples.every((s) => !!s && s.sat === "18"),
+     samples[0] && samples[0].sat);
+  ok("F6 int500[0] = integral_500_mev[0]",
+     !!samples[0] && samples[0].int500 === f08.integral_500_mev[0],
+     (samples[0] && samples[0].int500) + " vs " + f08.integral_500_mev[0]);
+  ok("F6 P1[0] = diff[0][0]", !!samples[0] && samples[0].P1 === f08.diff[0][0],
+     (samples[0] && samples[0].P1) + " vs " + f08.diff[0][0]);
+
+  // El indice canal -> columna es por NOMBRE: barajar `channels` y permutar cada
+  // fila de `diff` igual debe dar exactamente el mismo resultado. Sin esto, un
+  // adaptador que indexa por posicion (row[j]) no se distingue con los canales
+  // del fixture, que ya vienen en orden canonico.
+  const barajado = JSON.parse(JSON.stringify(f08));
+  barajado.channels = barajado.channels.slice().reverse();
+  barajado.diff = barajado.diff.map((r) => r.slice().reverse());
+  const ab = ctx.nceiDayAdapt(barajado);
+  const abParts = partsOf(ab);
+  ok("F6 canales barajados con columnas permutadas -> mismas muestras",
+     ab !== null &&
+     channelNames(abParts.channels) === channelNames(channels) &&
+     abParts.samples.length === samples.length &&
+     abParts.samples.every((s, i) => !!s && !!samples[i] && s.P1 === samples[i].P1 && s.P10 === samples[i].P10 &&
+       s.int500 === samples[i].int500),
+     abParts.samples[0] ? abParts.samples[0].P1 + " vs " + (samples[0] && samples[0].P1) : String(ab));
+
+  // Los dos adaptadores producen el MISMO int500 para el mismo instante: NCEI
+  // integral_500_mev y SWPC flux[">=500 MeV"] son el mismo numero (ratio 1.0000
+  // en los 288 slots del 2026-09-08, medido al disenar la fase).
+  const FIXA = path.join(REPO, "tools", "fixtures", "goes", "archive");
+  const swpc = ctx.solarDayAdapt(
+    [JSON.parse(fs.readFileSync(path.join(FIXA, "2026-09-08-diff.json"), "utf8"))],
+    [JSON.parse(fs.readFileSync(path.join(FIXA, "2026-09-08.json"), "utf8"))]);
+  // SWPC serializa float32 y NCEI publica el mismo numero con %.7g: el contrato
+  // es igualdad a 7 cifras significativas, no igualdad de bits.
+  const mismos = samples.length === 288 && swpc.samples.length === 288 && samples.every((s, i) => {
+    const ws = swpc.samples[i];
+    return s && ws && typeof ws.int500 === "number" && s.tMs === ws.tMs &&
+      s.int500 === Number(ws.int500.toPrecision(7));
+  });
+  ok("F6 int500 coincide con SWPC a 7 cifras significativas", mismos);
+
+  // La clave vieja `integral_500_keV` sigue valiendo (fixtures en transicion).
+  const viejo = JSON.parse(JSON.stringify(f08));
+  viejo.integral_500_keV = viejo.integral_500_mev;
+  delete viejo.integral_500_mev;
+  const av = ctx.nceiDayAdapt(viejo);
+  const avParts = partsOf(av);
+  ok("F6 acepta integral_500_keV como alias",
+     av !== null && !!avParts.samples[0] && avParts.samples[0].int500 === f08.integral_500_mev[0]);
+
+  // Rechazos: cualquier desviacion de forma devuelve null, no un dia degradado.
+  const roto = (mut) => { const c = JSON.parse(JSON.stringify(f08)); mut(c); return ctx.nceiDayAdapt(c); };
+  ok("F6 rechaza time_step_s 60", roto((c) => { c.time_step_s = 60; }) === null);
+  ok("F6 rechaza n_steps 287", roto((c) => { c.n_steps = 287; }) === null);
+  ok("F6 rechaza fila diff de 12", roto((c) => { c.diff[5] = c.diff[5].slice(0, 12); }) === null);
+  ok("F6 rechaza integral corto", roto((c) => { c.integral_500_mev.pop(); }) === null);
+  ok("F6 rechaza 12 canales", roto((c) => { c.channels.pop(); }) === null);
+  ok("F6 rechaza canal desconocido", roto((c) => { c.channels[3].name = "PX"; }) === null);
+  ok("F6 rechaza start_time basura", roto((c) => { c.start_time = "ayer"; }) === null);
+  ok("F6 rechaza sat basura", roto((c) => { c.sat = "sputnik"; }) === null);
+  ok("F6 rechaza no-objeto",
+     [null, undefined, 7, "x", []].every((v) => ctx.nceiDayAdapt(v) === null));
+
+  // Nulos: se pasan tal cual, no se filtran ni se rellenan.
+  const conNulos = roto((c) => { c.diff[10] = c.diff[10].map(() => null); c.integral_500_mev[10] = null; });
+  const nulosParts = partsOf(conNulos);
+  ok("F6 nulos se pasan tal cual",
+     conNulos !== null && nulosParts.samples.length === 288 && !!nulosParts.samples[10] &&
+     nulosParts.samples[10].P1 === null && nulosParts.samples[10].int500 === null);
+  const conNegativos = roto((c) => { c.diff[11][0] = -0.25; c.integral_500_mev[11] = -0.5; });
+  const negativosParts = partsOf(conNegativos);
+  ok("F6 negativos se pasan tal cual",
+     conNegativos !== null && negativosParts.samples.length === 288 && !!negativosParts.samples[11] &&
+     negativosParts.samples[11].P1 === -0.25 && negativosParts.samples[11].int500 === -0.5);
+}
+
 testRouteImportKeepsCuratedIcaoAliases()
   .then(testFetchSolarManifestRetriesAfterHttpError)
   .then(function () {
