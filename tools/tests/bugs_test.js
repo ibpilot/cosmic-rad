@@ -1826,6 +1826,178 @@ async function testLoadArchiveForNceiEndToEnd() {
   }
 }
 
+// F8 — el fallback de la ventana multi-satelite: SWPC sigue siendo la via
+// rapida y NCEI solo se descarga si la ventana EXACTA trae mas de un satelite.
+console.log("\nF8-1 windowSatellites: solo cuenta la ventana exacta");
+{
+  const s = (tMs, sat) => ({ tMs: tMs, sat: sat });
+  const T = Date.parse("2026-09-08T00:00:00Z");
+  ok("F8 dos satelites dentro de la ventana",
+     ctx.windowSatellites([s(T, 18), s(T + 600000, 19)], T, T + 3600000).join(",") === "18,19");
+  ok("F8 un cambio FUERA de la ventana no cuenta",
+     ctx.windowSatellites([s(T, 18), s(T + 600000, 18), s(T + 99 * 3600000, 19)],
+                          T, T + 3600000).join(",") === "18");
+  ok("F8 sat no reconocible no cuenta como valido",
+     ctx.windowSatellites([s(T, 18), s(T + 600000, null), s(T + 900000, "foo")],
+                          T, T + 3600000).join(",") === "18");
+  ok("F8 tMs invalido se ignora",
+     ctx.windowSatellites([s(NaN, 19), s(T, 18)], T, T + 3600000).join(",") === "18");
+  ok("F8 sin muestras -> []", ctx.windowSatellites([], T, T + 3600000).length === 0);
+  ok("F8 entradas deformes -> [] sin lanzar",
+     ctx.windowSatellites(null, T, T + 1).length === 0);
+}
+
+async function testMultiSatFallback() {
+  console.log("\nF8-2 fallback SWPC multi-satelite -> NCEI");
+  const realFetch = ctx.fetch;
+  const reset = () => {
+    ctx._solarManifestPromise = null;
+    ctx._nceiManifestPromise = null;
+    ctx._solarDayCache.clear();
+    ctx._nceiDayCache.clear();
+  };
+  const swpcDayFiles = (day, satOf) => {
+    const t0 = Date.parse(day + "T00:00:00Z");
+    const diff = { samples: [] }, int = { samples: [] };
+    for (let i = 0; i < 288; i++) {
+      const t = new Date(t0 + i * 300000).toISOString();
+      const sat = typeof satOf === "function" ? satOf(i) : satOf;
+      diff.samples.push({ t: t, sat: sat, flux: {} });
+      int.samples.push({ t: t, flux: { ">=500 MeV": 0 } });
+    }
+    return { diff: diff, int: int };
+  };
+  const nceiChannels = ctx.SOLAR_CHANNEL_ORDER.map((n) => ({ name: n, lo_keV: 0, hi_keV: 0 }));
+  const nceiFile = (day, sat) => ({
+    day: day, sat: sat, start_time: day + "T00:00:00Z", time_step_s: 300, n_steps: 288,
+    channels: nceiChannels,
+    diff: Array.from({ length: 288 }, () => new Array(13).fill(0)),
+    integral_500_mev: new Array(288).fill(0)
+  });
+  const swpcManifest = {
+    coverage: { days: ["2026-09-08", "2026-09-09"], first_day: "2026-08-30" },
+    differential: { coverage: { days: ["2026-09-08", "2026-09-09"] } }
+  };
+  // 09-08: g18 salvo las ultimas 3 h (ya dentro de la ventana) -> g19.
+  // 09-09: g18 hasta el aterrizaje.
+  const multiDays = {
+    "2026-09-08": swpcDayFiles("2026-09-08", (i) => (i >= 216 ? 19 : 18)),
+    "2026-09-09": swpcDayFiles("2026-09-09", 18)
+  };
+  const depMs = Date.UTC(2026, 8, 9, 6, 0);
+  const points = [{ lat: 40, lon: -3, tMs: depMs },
+                  { lat: 40, lon: -74, tMs: depMs + 8 * 3600000 }];
+  const flight = { orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
+  const occurrence = { id: 1, depDate: "2026-09-09", depTime: "06:00", timeKind: "programada",
+    state: "programado", noaaCapture: null, modelVersion: null, result: null };
+  // NCEI con un unico satelite COMUN (g19) distinto del primario SWPC, para que
+  // una mezcla se vea a la primera.
+  const nceiManifest = { days: {
+    "2026-09-08": { status: "complete", candidates: [
+      { sat: "g19", valid_diff_slots: 288, recommended: true, path: "ncei/A.json" }] },
+    "2026-09-09": { status: "complete", candidates: [
+      { sat: "g19", valid_diff_slots: 288, recommended: true, path: "ncei/B.json" }] }
+  } };
+  const mkFetch = (opts) => {
+    const o = opts || {};
+    const days = o.swpcDays || multiDays;
+    const urls = [];
+    const fn = (u) => {
+      urls.push(u);
+      if (u.indexOf("ncei/manifest.json") !== -1) {
+        if (o.nceiManifestError) return Promise.resolve({ ok: false, status: 500 });
+        if (o.nceiEmpty) return Promise.resolve({ ok: true, json: () => Promise.resolve({ days: {} }) });
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(nceiManifest) });
+      }
+      if (o.nceiFileMissing && u.indexOf("ncei/") !== -1) {
+        return Promise.resolve({ ok: false, status: 404 });
+      }
+      if (u.indexOf("ncei/A.json") !== -1) return Promise.resolve({ ok: true, json: () => Promise.resolve(nceiFile("2026-09-08", "g19")) });
+      if (u.indexOf("ncei/B.json") !== -1) return Promise.resolve({ ok: true, json: () => Promise.resolve(nceiFile("2026-09-09", "g19")) });
+      if (u.endsWith("/manifest.json")) return Promise.resolve({ ok: true, json: () => Promise.resolve(swpcManifest) });
+      const d = u.indexOf("2026-09-08") !== -1 ? "2026-09-08" : "2026-09-09";
+      const part = u.indexOf("-diff.json") !== -1 ? "diff" : "int";
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(days[d][part]) });
+    };
+    fn.urls = urls;
+    return fn;
+  };
+  const runWithFetch = async (fetchImpl) => {
+    reset();
+    ctx.fetch = fetchImpl;
+    try { return await ctx.loadArchiveFor(points, depMs); }
+    finally { ctx.fetch = realFetch; reset(); }
+  };
+
+  try {
+    // 1. Fallback exitoso: la ventana entera se recalcula con UN satelite NCEI.
+    const f1 = mkFetch({});
+    const arch = await runWithFetch(f1);
+    ok("F8 fallback elige NCEI con un unico satelite",
+       arch && arch.source && arch.source.src === "ncei" && arch.source.sat === "19",
+       arch && JSON.stringify(arch.source));
+    ok("F8 pide el manifiesto NCEI al haber >1 satelite",
+       f1.urls.some((u) => u.indexOf("ncei/manifest.json") !== -1), f1.urls.join(","));
+    ok("F8 carga los dos ficheros NCEI",
+       arch && arch.days["2026-09-08"] && arch.days["2026-09-09"]);
+    let visto = null;
+    ctx.occEvaluate(flight, occurrence, arch, Date.UTC(2026, 8, 10), (input) => {
+      visto = input; return { ok: true, state: "sin_senal" };
+    });
+    const sats = visto ? Array.from(new Set(visto.samples.map((s) => s.sat))) : [];
+    ok("F8 REGRESION ANTI-MEZCLA: un solo satelite en la ventana",
+       sats.length === 1 && sats[0] === "19", sats.join(","));
+    ok("F8 576 muestras recalculadas con NCEI",
+       visto && visto.samples.length === 576, visto && visto.samples.length);
+
+    // 2. NCEI no cubre la ventana -> se conserva SWPC, que cierra en incompleto.
+    const arch2 = await runWithFetch(mkFetch({ nceiEmpty: true }));
+    ok("F8 NCEI no cubre -> se conserva SWPC",
+       arch2 && arch2.source === "swpc", arch2 && JSON.stringify(arch2.source));
+    const out2 = ctx.occEvaluate(flight, occurrence, arch2, Date.UTC(2026, 8, 10),
+      () => ({ ok: false, reason: "cambio_satelite" }));
+    ok("F8 SWPC conservado cierra en incompleto", out2.state === "incompleto", out2.state);
+
+    // 3. Fallo de red del manifiesto NCEI -> se conserva SWPC.
+    const arch3 = await runWithFetch(mkFetch({ nceiManifestError: true }));
+    ok("F8 NCEI falla -> se conserva SWPC",
+       arch3 && arch3.source === "swpc", arch3 && JSON.stringify(arch3.source));
+
+    // 4. Manifiesto NCEI completo pero falta el fichero de un dia (404):
+    //    NCEI "falta" -> se conserva SWPC, no se usa a medias.
+    const archMissing = await runWithFetch(mkFetch({ nceiFileMissing: true }));
+    ok("F8 fichero NCEI ausente -> se conserva SWPC",
+       archMissing && archMissing.source === "swpc", archMissing && JSON.stringify(archMissing.source));
+
+    // 5. Ventana monofsatelite -> NCEI NO se descarga.
+    const singleDays = {
+      "2026-09-08": swpcDayFiles("2026-09-08", 18),
+      "2026-09-09": swpcDayFiles("2026-09-09", 18)
+    };
+    const f4 = mkFetch({ swpcDays: singleDays });
+    const arch4 = await runWithFetch(f4);
+    ok("F8 ventana monofsatelite -> source 'swpc'",
+       arch4 && arch4.source === "swpc", arch4 && JSON.stringify(arch4.source));
+    ok("F8 ventana monofsatelite NO descarga ncei/manifest.json",
+       f4.urls.every((u) => u.indexOf("ncei/manifest.json") === -1), f4.urls.join(","));
+
+    // 6. El cambio de satelite POSTERIOR al aterrizaje no dispara NCEI (917d572).
+    const tardeDays = {
+      "2026-09-08": swpcDayFiles("2026-09-08", 18),
+      "2026-09-09": swpcDayFiles("2026-09-09", (i) => (i > 168 ? 19 : 18))
+    };
+    const f5 = mkFetch({ swpcDays: tardeDays });
+    const arch5 = await runWithFetch(f5);
+    ok("F8 cambio tras el aterrizaje -> sigue SWPC",
+       arch5 && arch5.source === "swpc", arch5 && JSON.stringify(arch5.source));
+    ok("F8 cambio tras el aterrizaje NO descarga NCEI",
+       f5.urls.every((u) => u.indexOf("ncei/manifest.json") === -1), f5.urls.join(","));
+  } finally {
+    ctx.fetch = realFetch;
+    reset();
+  }
+}
+
 async function testSolarRetry() {
 console.log("\nF7 reintento de los 5xx transitorios");
 {
@@ -1921,6 +2093,7 @@ testRouteImportKeepsCuratedIcaoAliases()
   .then(testFetchNcei)
   .then(testLoadArchiveForSwpcNoPideNcei)
   .then(testLoadArchiveForNceiEndToEnd)
+  .then(testMultiSatFallback)
   .then(testSolarRetry)
   .then(function () {
   console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");

@@ -424,7 +424,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.26";
+var APP_VERSION = "1.27";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2244,6 +2244,25 @@ function satKey(v) {
   return m ? m[1] : undefined;
 }
 
+// windowSatellites(samples, startMs, endMs): satelites validos distintos que
+// aparecen en la ventana [startMs, endMs]. Solo esa ventana: un cambio de
+// satelite POSTERIOR al aterrizaje no debe forzar el fallback (bug 917d572).
+// Un `sat` no reconocible por satKey no cuenta como satelite valido.
+function windowSatellites(samples, startMs, endMs) {
+  var out = [];
+  var list = Array.isArray(samples) ? samples : [];
+  for (var i = 0; i < list.length; i++) {
+    var s = list[i];
+    if (!s || typeof s.tMs !== "number" || !isFinite(s.tMs)) continue;
+    if (s.tMs < startMs || s.tMs > endMs) continue;
+    var k = satKey(s.sat);
+    if (k === undefined) continue;
+    if (out.indexOf(k) === -1) out.push(k);
+  }
+  out.sort();
+  return out;
+}
+
 // occVisible(state): agrupa el estado interno en uno de los cuatro visibles.
 // Tabla explicita; un estado fuera de la tabla es un error de programacion.
 var OCC_VISIBLE = {
@@ -2937,33 +2956,77 @@ function fetchNceiDay(day, sat, manifest) {
   _nceiDayCache.set(key, p);
   return p;
 }
+// loadNceiFor(days, manifest): descarga el manifiesto NCEI y elige un UNICO
+// satelite para la ventana entera. Aqui la eleccion es SOLO dentro de NCEI
+// (swpcManifest nulo) para reutilizar solarPickSource sin su precedencia SWPC.
+// Devuelve {archive, nceiManifest}; `archive` es null si NCEI no cubre la
+// ventana. Nunca lanza por "no cubre"; si la red falla, rechaza.
+function loadNceiFor(days, manifest) {
+  return fetchNceiManifest().then(function (nceiManifest) {
+    var source = solarPickSource(days, null, nceiManifest);
+    if (source === null) return { archive: null, nceiManifest: nceiManifest };
+    return Promise.all(days.map(function (day) {
+      return fetchNceiDay(day, source.sat, nceiManifest);
+    })).then(function (list) {
+      var dayMap = {};
+      for (var i = 0; i < days.length; i++) dayMap[days[i]] = list[i];
+      return { archive: { manifest: manifest, nceiManifest: nceiManifest,
+                          source: source, days: dayMap },
+               nceiManifest: nceiManifest };
+    });
+  });
+}
+
+// true si TODOS los dias de la ventana tienen fichero. Un dia a null es NCEI
+// que "falta" para esta ventana: no se usa a medias.
+function archiveDaysPresent(archive, days) {
+  if (!archive) return false;
+  for (var i = 0; i < days.length; i++) {
+    if (archive.days[days[i]] == null) return false;
+  }
+  return true;
+}
+
 function loadArchiveFor(points, depMs) {
   if (!Array.isArray(points) || points.length < 2 || !isFinite(depMs)) {
     return Promise.resolve(null);
   }
-  var days = solarDaysFor(depMs - BASELINE_MS, occLandMs(points));
+  // La ventana EXACTA es [dep - 12 h, aterrizaje]. Inspeccionar mas alla
+  // reabriria el bug 917d572 (un cambio de satelite posterior al aterrizaje).
+  var startMs = depMs - BASELINE_MS;
+  var endMs = occLandMs(points);
+  var days = solarDaysFor(startMs, endMs);
   return fetchSolarManifest().then(function (manifest) {
-    // El manifiesto NCEI solo se descarga si SWPC no cubre la ventana entera.
+    // Via rapida SWPC. El manifiesto NCEI solo se paga si la ventana SWPC trae
+    // MAS DE UN satelite valido; una ventana monofsatelite no lo descarga.
     if (solarPickSource(days, manifest, null) === "swpc") {
       return Promise.all(days.map(function (day) { return fetchSolarDay(day); }))
         .then(function (list) {
           var dayMap = {};
           for (var i = 0; i < days.length; i++) dayMap[days[i]] = list[i];
-          return { manifest: manifest, nceiManifest: null, source: "swpc", days: dayMap };
+          var swpcArchive = { manifest: manifest, nceiManifest: null,
+                              source: "swpc", days: dayMap };
+          var muestra = solarDayAdapt(
+            days.map(function (d) { return dayMap[d] ? dayMap[d].diff : null; }),
+            days.map(function (d) { return dayMap[d] ? dayMap[d].int : null; }));
+          if (windowSatellites(muestra.samples, startMs, endMs).length <= 1) {
+            return swpcArchive;
+          }
+          // Mas de un satelite dentro de la ventana: se reintenta la ventana
+          // ENTERA con un unico satelite NCEI; nunca se mezclan fuentes. Si
+          // NCEI falta, no cubre o falla, se conserva SWPC, que cerrara seguro
+          // en incompleto (CAMBIO_SATELITE), sin prometer un dato que no viene.
+          return loadNceiFor(days, manifest).then(function (res) {
+            return archiveDaysPresent(res.archive, days) ? res.archive : swpcArchive;
+          }, function () {
+            return swpcArchive;
+          });
         });
     }
-    return fetchNceiManifest().then(function (nceiManifest) {
-      var source = solarPickSource(days, manifest, nceiManifest);
-      if (source === null || source === "swpc") {
-        return { manifest: manifest, nceiManifest: nceiManifest, source: null, days: {} };
-      }
-      return Promise.all(days.map(function (day) {
-        return fetchNceiDay(day, source.sat, nceiManifest);
-      })).then(function (list) {
-        var dayMap = {};
-        for (var i = 0; i < days.length; i++) dayMap[days[i]] = list[i];
-        return { manifest: manifest, nceiManifest: nceiManifest, source: source, days: dayMap };
-      });
+    // SWPC no cubre la ventana: NCEI o nada. Sin cambios de comportamiento.
+    return loadNceiFor(days, manifest).then(function (res) {
+      return res.archive || { manifest: manifest, nceiManifest: res.nceiManifest,
+                              source: null, days: {} };
     });
   }).catch(function (err) {
     // Sin esta traza, un 503 del archivo y un bloqueo del CSP dan
