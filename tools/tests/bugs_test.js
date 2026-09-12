@@ -730,7 +730,10 @@ console.log("\nT11 ocurrencias UI");
     esperando_fecha: "pendiente", programado: "pendiente", esperando_datos: "pendiente",
     incompleto: "pendiente", estimacion_disponible: "disponible", modelo_nuevo: "disponible",
     incorporada: "revisada", sin_senal: "revisada", fuera_de_rango: "revisada",
-    noaa_no_disponible: "aviso"
+    noaa_no_disponible: "aviso",
+    // Terminal: dia completo y el modelo no puede acotar la cifra. Ni pendiente
+    // (no hay nada que esperar) ni revisada (no es contribucion despreciable).
+    no_estimable: "aviso"
   };
   const occ = (date, time, state, extra) => Object.assign({
     id: 1, depDate: date, depTime: time, timeKind: "programada",
@@ -740,11 +743,11 @@ console.log("\nT11 ocurrencias UI");
   const DEP = Date.UTC(2026, 8, 9, 6, 0);
   const NOW_AFTER = DEP + 24 * 3600 * 1000;
 
-  // U1 — la tabla cubre los 10 estados y solo devuelve uno de los cuatro visibles.
+  // U1 — la tabla cubre TODOS los estados y solo devuelve uno de los cuatro visibles.
   const u1ok = ctx.OCC_STATES.every((s) =>
     ["pendiente", "disponible", "revisada", "aviso"].indexOf(ctx.occVisible(s)) !== -1 &&
     ctx.occVisible(s) === OCCVIS[s]);
-  ok("U1 occVisible cubre los 10 estados según la tabla C2", u1ok,
+  ok("U1 occVisible cubre todos los estados según la tabla C2", u1ok,
      ctx.OCC_STATES.map((s) => s + "=" + ctx.occVisible(s)).join(","));
 
   // U2 — estado desconocido: error, nunca un valor por defecto.
@@ -836,6 +839,25 @@ console.log("\nT11 ocurrencias UI");
   ok("U9 !r.ok → incompleto", r9b.state === "incompleto", r9b.state);
   ok("U9 route lanzando → incompleto", r9c.state === "incompleto", r9c.state);
   ok("U9 detectado sin rango → sin_senal", r9d.state === "sin_senal", r9d.state);
+
+  // U9b — un motivo del MODELO cierra terminal; uno del DATO sigue pendiente.
+  const r9e = ctx.occEvaluate(FLIGHT, U9O, archOk, NOW_AFTER,
+    () => ({ ok: false, state: "pendiente", reason: "sin_convergencia" }));
+  const r9f = ctx.occEvaluate(FLIGHT, U9O, archOk, NOW_AFTER,
+    () => ({ ok: false, state: "pendiente", reason: "modelo_no_resoluble" }));
+  const r9g = ctx.occEvaluate(FLIGHT, U9O, archOk, NOW_AFTER,
+    () => ({ ok: false, state: "pendiente", reason: "hueco_observacion" }));
+  ok("U9b sin_convergencia → no_estimable (terminal, no pendiente)",
+     r9e.state === "no_estimable" && r9e.result === null &&
+     ctx.occVisible(r9e.state) === "aviso", r9e.state);
+  ok("U9b modelo_no_resoluble → no_estimable", r9f.state === "no_estimable", r9f.state);
+  ok("U9b hueco_observacion sigue incompleto (un dato mejor lo arregla)",
+     r9g.state === "incompleto" && ctx.occVisible(r9g.state) === "pendiente", r9g.state);
+  ok("U9b hydrateOccurrence conserva no_estimable (no lo resetea a programado)",
+     ctx.hydrateOccurrence(occ("2026-09-09", "06:00", "no_estimable")).state === "no_estimable");
+  ok("U9b no_estimable tiene etiqueta en los dos idiomas",
+     typeof ctx.LANG.es.occState_no_estimable === "string" &&
+     typeof ctx.LANG.en.occState_no_estimable === "string");
 
   // U10 — regla 1: version del modelo.
   const spy10 = { calls: 0, fn: function () { spy10.calls++; return { ok: true, state: "sin_senal" }; } };

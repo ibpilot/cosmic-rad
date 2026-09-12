@@ -424,7 +424,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.21";
+var APP_VERSION = "1.22";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2207,7 +2207,7 @@ function depMsOf(f) {
 // ocurrencia creada al desglosar sin fecha todavia (el plan lo nombra ahi).
 var OCC_STATES = ["programado", "esperando_datos", "incompleto", "estimacion_disponible",
   "incorporada", "noaa_no_disponible", "sin_senal", "fuera_de_rango", "modelo_nuevo",
-  "esperando_fecha"];
+  "esperando_fecha", "no_estimable"];
 var OCC_MAX = 100;
 
 // ── T11: archivo solar publico (ocurrencias) ─────────────────────────────────
@@ -2245,6 +2245,11 @@ var OCC_VISIBLE = {
   programado: "pendiente",
   esperando_datos: "pendiente",
   incompleto: "pendiente",
+  // Terminal: el dato del dia esta completo y el modelo no puede acotar la
+  // cifra. No es "pendiente", porque no hay nada que esperar; tampoco
+  // "revisada", que daria a entender contribucion despreciable cuando lo que
+  // pasa es que no se puede acotar. Es un aviso.
+  no_estimable: "aviso",
   estimacion_disponible: "disponible",
   modelo_nuevo: "disponible",
   incorporada: "revisada",
@@ -2658,6 +2663,13 @@ function undoBatch(flights, batch) {
   });
 }
 
+// Motivos de cierre que vienen del MODELO, no del dato: con el dia completo y
+// permanente no los arregla una descarga posterior, asi que la ocurrencia no
+// puede quedarse en "pendiente" prometiendo que ya llegara. El resto de motivos
+// (huecos, canales ausentes, cambio de satelite, baseline corta) SI se arreglan
+// con datos mejores y siguen cerrando en incompleto.
+var OCC_MODEL_REASONS = { sin_convergencia: true, modelo_no_resoluble: true };
+
 // true solo si occEvaluate llegaria a necesitar el archivo (pasa las reglas 1-5).
 function occNeedsArchive(f, occ, nowMs) {
   if (!occ || typeof occ !== "object" || occ.state === "incorporada") return false;
@@ -2782,7 +2794,10 @@ function occEvaluate(f, occ, archive, nowMs, routeFn) {
   } catch (e) {
     return { state: "incompleto", result: null };
   }
-  if (!r || !r.ok) return { state: "incompleto", result: null };
+  if (!r || !r.ok) {
+    return { state: r && OCC_MODEL_REASONS[r.reason] === true ? "no_estimable" : "incompleto",
+             result: null };
+  }
   if (r.state === "sin_senal") return { state: "sin_senal", result: null };
   if (r.state === "detectado") {
     if (r.range) {
@@ -4766,6 +4781,7 @@ var LANG = {
     occState_programado: "programado",
     occState_esperando_datos: "esperando datos",
     occState_incompleto: "incompleto",
+    occState_no_estimable: "evento solar sin cifra acotable",
     occState_estimacion_disponible: "estimación disponible",
     occState_incorporada: "incorporada",
     occState_noaa_no_disponible: "archivo GOES no disponible",
@@ -5060,6 +5076,7 @@ var LANG = {
     occState_programado: "scheduled",
     occState_esperando_datos: "waiting for data",
     occState_incompleto: "incomplete",
+    occState_no_estimable: "solar event with no boundable figure",
     occState_estimacion_disponible: "estimate available",
     occState_incorporada: "incorporated",
     occState_noaa_no_disponible: "GOES archive unavailable",
