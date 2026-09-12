@@ -1038,6 +1038,98 @@ async function testFetchSolarManifestRetriesAfterHttpError() {
   }
 }
 
+// F6-4 — descarga perezosa del archivo histórico NCEI; requiere async.
+async function testFetchNcei() {
+  console.log("\nF6-4 descarga del archivo NCEI");
+  const realFetch = ctx.fetch;
+  const MAN = { days: { "2026-09-08": { status: "complete", candidates: [
+    { sat: "g18", valid_diff_slots: 288, recommended: true, path: "ncei/sgps/g18/2026/09/X.json" },
+    { sat: "g19", valid_diff_slots: 276, recommended: false, path: "ncei/sgps/g19/2026/09/Y.json" }] } } };
+  try {
+    // El manifiesto se cachea y un fallo HTTP no envenena la cache.
+    ctx._nceiManifestPromise = null;
+    let calls = 0, urls = [];
+    ctx.fetch = function (u) {
+      calls++; urls.push(u);
+      if (calls === 1) return Promise.resolve({ ok: false, status: 500 });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(MAN) });
+    };
+    let err = null;
+    try { await ctx.fetchNceiManifest(); } catch (e) { err = e; }
+    ok("F6 fallo HTTP del manifiesto rechaza", err !== null);
+    const m = await ctx.fetchNceiManifest();
+    ok("F6 reintenta tras el fallo (cache no envenenada)", calls === 2, calls);
+    ok("F6 pide ncei/manifest.json", urls[0].indexOf("ncei/manifest.json") !== -1, urls[0]);
+    const m2 = await ctx.fetchNceiManifest();
+    ok("F6 segunda llamada usa cache", calls === 2 && m2 === m, calls);
+
+    // La ruta sale del manifiesto, no se construye.
+    ctx._nceiDayCache.clear();
+    urls = [];
+    ctx.fetch = function (u) {
+      urls.push(u);
+      const sat = u.indexOf("/g19/") !== -1 ? "g19" : "g18";
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ day: "2026-09-08", sat }) });
+    };
+    const f = await ctx.fetchNceiDay("2026-09-08", "18", MAN);
+    ok("F6 usa el path del candidato", urls[0].indexOf("ncei/sgps/g18/2026/09/X.json") !== -1, urls[0]);
+    ok("F6 devuelve el fichero", f && f.sat === "g18", JSON.stringify(f));
+    const f2 = await ctx.fetchNceiDay("2026-09-08", "18", MAN);
+    ok("F6 dia cacheado no repite fetch", urls.length === 1, urls.length);
+
+    // Elige el candidato del satelite pedido y la cache distingue satelites del
+    // mismo dia: pedir g19 tras cachear g18 debe tocar su propia URL.
+    const f19 = await ctx.fetchNceiDay("2026-09-08", "19", MAN);
+    ok("F6 respeta el satelite pedido",
+       urls.length === 2 && urls[1].indexOf("g19/2026/09/Y.json") !== -1 && f19.sat === "g19",
+       JSON.stringify({ urls, f19 }));
+
+    // 404 = dato ausente, no error.
+    ctx._nceiDayCache.clear();
+    ctx.fetch = function () { return Promise.resolve({ ok: false, status: 404 }); };
+    ok("F6 404 -> null", (await ctx.fetchNceiDay("2026-09-08", "18", MAN)) === null);
+
+    // Cualquier rechazo borra la promesa del dia: HTTP y JSON deben poder
+    // reintentarse en la misma sesion.
+    ctx._nceiDayCache.clear();
+    calls = 0;
+    ctx.fetch = function () {
+      calls++;
+      if (calls === 1) return Promise.resolve({ ok: false, status: 500 });
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ sat: "g18" }) });
+    };
+    err = null;
+    try { await ctx.fetchNceiDay("2026-09-08", "18", MAN); } catch (e) { err = e; }
+    ok("F6 fallo HTTP del dia rechaza", err !== null);
+    const trasHttp = await ctx.fetchNceiDay("2026-09-08", "18", MAN);
+    ok("F6 dia reintenta tras fallo HTTP", calls === 2 && trasHttp.sat === "g18", calls);
+
+    ctx._nceiDayCache.clear();
+    calls = 0;
+    ctx.fetch = function () {
+      calls++;
+      return Promise.resolve({ ok: true, json: () => calls === 1
+        ? Promise.reject(new Error("json roto")) : Promise.resolve({ sat: "g18" }) });
+    };
+    err = null;
+    try { await ctx.fetchNceiDay("2026-09-08", "18", MAN); } catch (e) { err = e; }
+    ok("F6 JSON invalido del dia rechaza", err !== null);
+    const trasJson = await ctx.fetchNceiDay("2026-09-08", "18", MAN);
+    ok("F6 dia reintenta tras JSON invalido", calls === 2 && trasJson.sat === "g18", calls);
+
+    // Satelite sin candidato: null sin tocar la red.
+    ctx._nceiDayCache.clear();
+    let tocado = false;
+    ctx.fetch = function () { tocado = true; return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }); };
+    ok("F6 satelite inexistente -> null", (await ctx.fetchNceiDay("2026-09-08", "99", MAN)) === null);
+    ok("F6 satelite inexistente no llama a fetch", tocado === false);
+  } finally {
+    ctx.fetch = realFetch;
+    ctx._nceiManifestPromise = null;
+    ctx._nceiDayCache.clear();
+  }
+}
+
 console.log("\nT12 lote");
 {
   const hp = 650;
@@ -1450,6 +1542,7 @@ console.log("\nF6-3 solarPickSource");
 
 testRouteImportKeepsCuratedIcaoAliases()
   .then(testFetchSolarManifestRetriesAfterHttpError)
+  .then(testFetchNcei)
   .then(function () {
   console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");
   process.exit(fail === 0 ? 0 : 1);

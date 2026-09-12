@@ -2786,6 +2786,49 @@ function fetchSolarDay(day) {
   _solarDayCache.set(day, p);
   return p;
 }
+// Archivo historico NCEI. El manifiesto (272 KB) se descarga de forma perezosa:
+// solo lo pide solarPickSource cuando SWPC no cubre la ventana, asi que un
+// vuelo reciente no paga nada.
+var _nceiManifestPromise = null;
+var _nceiDayCache = new Map();
+function fetchNceiManifest() {
+  if (_nceiManifestPromise) return _nceiManifestPromise;
+  _nceiManifestPromise = fetch(SOLAR_ARCHIVE_BASE + "ncei/manifest.json").then(function (res) {
+    if (!res || !res.ok) throw new Error("ncei manifest HTTP " + (res && res.status));
+    return res.json();
+  }).catch(function (err) {
+    _nceiManifestPromise = null;
+    throw err;
+  });
+  return _nceiManifestPromise;
+}
+// fetchNceiDay(day, sat, manifest): la ruta sale del manifiesto, no se
+// construye: el lector no conoce el esquema de directorios ni la version de
+// producto. 404 es dato ausente, no error.
+function fetchNceiDay(day, sat, manifest) {
+  var key = day + "|" + sat;
+  if (_nceiDayCache.has(key)) return _nceiDayCache.get(key);
+  var days = manifest && manifest.days && typeof manifest.days === "object" ? manifest.days : null;
+  var entry = days ? days[day] : null;
+  var path = null;
+  if (entry && Array.isArray(entry.candidates)) {
+    for (var i = 0; i < entry.candidates.length; i++) {
+      var c = entry.candidates[i];
+      if (c && satKey(c.sat) === sat && typeof c.path === "string") { path = c.path; break; }
+    }
+  }
+  if (path === null) return Promise.resolve(null);
+  var p = fetch(SOLAR_ARCHIVE_BASE + path).then(function (res) {
+    if (!res || res.status === 404) return null;
+    if (!res.ok) throw new Error("ncei HTTP " + res.status);
+    return res.json();
+  }).catch(function (err) {
+    _nceiDayCache.delete(key);
+    throw err;
+  });
+  _nceiDayCache.set(key, p);
+  return p;
+}
 function loadArchiveFor(points, depMs) {
   if (!Array.isArray(points) || points.length < 2 || !isFinite(depMs)) {
     return Promise.resolve(null);
