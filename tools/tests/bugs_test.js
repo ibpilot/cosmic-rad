@@ -853,6 +853,45 @@ console.log("\nT11 ocurrencias UI");
   ok("U9b modelo_no_resoluble → no_estimable", r9f.state === "no_estimable", r9f.state);
   ok("U9b hueco_observacion sigue incompleto (un dato mejor lo arregla)",
      r9g.state === "incompleto" && ctx.occVisible(r9g.state) === "pendiente", r9g.state);
+  // U9c — dia anterior al inicio del archivo SWPC: su ausencia es permanente.
+  // El colector SWPC solo avanza; la historia la cubre NCEI. Sin esto los cuatro
+  // dias NCEI `partial` de agosto de 2026 se quedaban en esperando_datos para
+  // siempre, prometiendo un dato que no va a llegar.
+  const archNula = {
+    manifest: { coverage: { days: ["2026-08-30", "2026-08-31"], first_day: "2026-08-30" },
+                incomplete_days: [], differential: { coverage: { days: ["2026-08-30", "2026-08-31"] } } },
+    nceiManifest: { days: { "2026-08-18": { status: "partial" }, "2026-08-19": { status: "partial" } } },
+    source: null, days: {}
+  };
+  const archNulaPost = {
+    manifest: { coverage: { days: ["2026-08-30"], first_day: "2026-08-30" },
+                incomplete_days: [], differential: { coverage: { days: ["2026-08-30"] } } },
+    nceiManifest: { days: { "2026-09-02": { status: "partial" }, "2026-09-03": { status: "partial" } } },
+    source: null, days: {}
+  };
+  const r9h = ctx.occEvaluate(FLIGHT, occ("2026-08-19", "06:00"), archNula, NOW_AFTER,
+    () => ({ ok: true, state: "sin_senal" }));
+  const r9i = ctx.occEvaluate(FLIGHT, occ("2026-09-03", "06:00"), archNulaPost, NOW_AFTER,
+    () => ({ ok: true, state: "sin_senal" }));
+  ok("U9c dia antes del inicio SWPC + NCEI partial -> incompleto, no esperando_datos",
+     r9h.state === "incompleto", r9h.state);
+  // El limite: el propio first_day SI esta al alcance de SWPC, asi que su
+  // ausencia NO es permanente todavia. Con `<=` en vez de `<` este se rompe.
+  const archLimite = {
+    manifest: { coverage: { days: [], first_day: "2026-08-30" },
+                incomplete_days: [], differential: { coverage: { days: [] } } },
+    nceiManifest: { days: { "2026-08-30": { status: "partial" },
+                            "2026-08-31": { status: "partial" } } },
+    source: null, days: {}
+  };
+  const r9j = ctx.occEvaluate(FLIGHT, occ("2026-08-30", "13:00"), archLimite, NOW_AFTER,
+    () => ({ ok: true, state: "sin_senal" }));
+  ok("U9c el propio first_day no es ausencia permanente -> esperando_datos",
+     r9j.state === "esperando_datos", r9j.state);
+
+  ok("U9c dia DENTRO del rango SWPC pero ausente -> sigue esperando_datos",
+     r9i.state === "esperando_datos", r9i.state);
+
   ok("U9b hydrateOccurrence conserva no_estimable (no lo resetea a programado)",
      ctx.hydrateOccurrence(occ("2026-09-09", "06:00", "no_estimable")).state === "no_estimable");
   ok("U9b no_estimable tiene etiqueta en los dos idiomas",

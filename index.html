@@ -424,7 +424,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.22";
+var APP_VERSION = "1.23";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2720,8 +2720,15 @@ function occEvaluate(f, occ, archive, nowMs, routeFn) {
     // Ninguna fuente cubre la ventana: permanente => incompleto, si no espera.
     var nceiDays = archive.nceiManifest && archive.nceiManifest.days
       ? archive.nceiManifest.days : {};
+    // El archivo SWPC solo avanza: empieza en coverage.first_day y la historia
+    // la cubre NCEI. Un dia anterior a ese inicio no va a llegar NUNCA, asi que
+    // su ausencia es tan permanente como un incomplete_days marcado permanent.
+    // Sin esto, los cuatro dias NCEI `partial` que caen antes del 2026-08-30
+    // (17, 18, 19 y 24 de agosto) se quedaban en esperando_datos para siempre.
+    var swpcFirstDay = manifest.coverage && typeof manifest.coverage.first_day === "string"
+      ? manifest.coverage.first_day : null;
     for (i = 0; i < days.length; i++) {
-      var swpcPermanent = false;
+      var swpcPermanent = swpcFirstDay !== null && days[i] < swpcFirstDay;
       for (k = 0; k < inc.length; k++) {
         if (inc[k] && inc[k].day === days[i] && inc[k].permanent === true) swpcPermanent = true;
       }
