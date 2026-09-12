@@ -424,7 +424,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.23";
+var APP_VERSION = "1.24";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2929,7 +2929,14 @@ function loadArchiveFor(points, depMs) {
         return { manifest: manifest, nceiManifest: nceiManifest, source: source, days: dayMap };
       });
     });
-  }).catch(function () { return null; });
+  }).catch(function (err) {
+    // Sin esta traza, un 503 de raw.githubusercontent y un bloqueo del CSP dan
+    // exactamente el mismo mensaje en pantalla y no hay por donde empezar.
+    if (typeof console !== "undefined" && console.warn) {
+      console.warn("cosmic-rad: archivo solar no disponible —", err && err.message ? err.message : err);
+    }
+    return null;
+  });
 }
 
 // BEGIN SEP_MODEL_RUNTIME
@@ -4801,8 +4808,8 @@ var LANG = {
     occState_sin_evaluar: "sin evaluar",
     occState_hora_estimada: "hora estimada, incorpórala a mano",
     occSplit: "Desglosar por fecha",
-    occCollapse: "Agrupar",
-    occCantCollapse: "Hay cifras incorporadas: no se puede agrupar",
+    occCollapse: "Borrar fechas",
+    occCantCollapse: "Hay cifras incorporadas: borrar las fechas las perderia",
     occIncorporate: "Incorporar",
     occRecalc: "Recalcular",
     occRemove: "quitar",
@@ -5096,8 +5103,8 @@ var LANG = {
     occState_sin_evaluar: "not evaluated",
     occState_hora_estimada: "estimated time, incorporate it manually",
     occSplit: "Split by date",
-    occCollapse: "Group",
-    occCantCollapse: "Some figures are incorporated: cannot group",
+    occCollapse: "Clear dates",
+    occCantCollapse: "Some figures are incorporated: clearing the dates would lose them",
     occIncorporate: "Incorporate",
     occRecalc: "Recalculate",
     occRemove: "remove",
