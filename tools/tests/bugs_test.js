@@ -1327,6 +1327,127 @@ console.log("\nF6-2 nceiDayAdapt");
      negativosParts.samples[11].P1 === -0.25 && negativosParts.samples[11].int500 === -0.5);
 }
 
+console.log("\nF6-3 solarPickSource");
+{
+  // Manifiestos minimos, a mano: la funcion es pura y solo mira estos campos.
+  const swpcCon = (dias) => ({
+    coverage: { days: dias }, differential: { coverage: { days: dias } }
+  });
+  // Cifras reales del manifiesto NCEI publicado.
+  const NCEI = { days: {
+    "2026-09-08": { status: "complete", candidates: [
+      { sat: "g18", valid_diff_slots: 288, recommended: true },
+      { sat: "g19", valid_diff_slots: 276, recommended: false }] },
+    "2026-09-09": { status: "complete", candidates: [
+      { sat: "g18", valid_diff_slots: 288, recommended: true },
+      { sat: "g19", valid_diff_slots: 288, recommended: false }] },
+    "2026-03-24": { status: "complete", candidates: [
+      { sat: "g18", valid_diff_slots: 286, recommended: true },
+      { sat: "g19", valid_diff_slots: 253, recommended: false }] },
+    "2026-08-17": { status: "partial", candidates: [
+      { sat: "g18", valid_diff_slots: 0, recommended: true },
+      { sat: "g19", valid_diff_slots: 0, recommended: false }] }
+  } };
+
+  // 1. SWPC cubre la ventana entera -> SWPC manda.
+  ok("F6 SWPC cubre los dos dias -> 'swpc'",
+     ctx.solarPickSource(["2026-09-08", "2026-09-09"], swpcCon(["2026-09-08", "2026-09-09"]), NCEI) === "swpc");
+
+  // 2. Hueco en SWPC -> cae a NCEI para TODA la ventana, no solo el dia que falta.
+  const r2 = ctx.solarPickSource(["2026-09-08", "2026-09-09"], swpcCon(["2026-09-08"]), NCEI);
+  ok("F6 hueco SWPC -> ncei", r2 && r2.src === "ncei", JSON.stringify(r2));
+  ok("F6 desempate por slots elige g18 (576 vs 564)", r2 && r2.sat === "18", JSON.stringify(r2));
+
+  // 2b. En la ventana anterior el recommended del primer dia coincide con el
+  //     satelite de MAS slots, asi que un desempate que ignorase los slots
+  //     acertaria por casualidad. Esta ventana invierte la coincidencia: el
+  //     recommended apunta a g18 (200 slots) y gana g19 (576). Es el unico
+  //     caso que separa el criterio de slots del de recommended.
+  const recMenosSlots = { days: {
+    "2026-06-01": { status: "complete", candidates: [
+      { sat: "g18", valid_diff_slots: 100, recommended: true },
+      { sat: "g19", valid_diff_slots: 288, recommended: false }] },
+    "2026-06-02": { status: "complete", candidates: [
+      { sat: "g18", valid_diff_slots: 100, recommended: true },
+      { sat: "g19", valid_diff_slots: 288, recommended: false }] }
+  } };
+  const r2b = ctx.solarPickSource(["2026-06-01", "2026-06-02"], swpcCon([]), recMenosSlots);
+  ok("F6 slots mandan sobre recommended (g19 576 vs g18 200)",
+     r2b && r2b.src === "ncei" && r2b.sat === "19", JSON.stringify(r2b));
+
+  // 3. Dia con 286 slots pero status complete: SI es utilizable.
+  const r3 = ctx.solarPickSource(["2026-03-24"], swpcCon([]), NCEI);
+  ok("F6 dia complete con 286 slots es utilizable", r3 && r3.src === "ncei" && r3.sat === "18",
+     JSON.stringify(r3));
+
+  // 4. Dia partial: no hay fuente.
+  ok("F6 dia partial -> null",
+     ctx.solarPickSource(["2026-08-17"], swpcCon([]), NCEI) === null);
+
+  // 5. Dia ausente del manifiesto NCEI -> null.
+  ok("F6 dia desconocido -> null",
+     ctx.solarPickSource(["2024-01-01"], swpcCon([]), NCEI) === null);
+
+  // 6. Sin satelite comun -> null (nunca se mezcla dentro de una ventana).
+  const soloG18 = { days: {
+    "2026-05-01": { status: "complete", candidates: [{ sat: "g18", valid_diff_slots: 288, recommended: true }] },
+    "2026-05-02": { status: "complete", candidates: [{ sat: "g19", valid_diff_slots: 288, recommended: true }] }
+  } };
+  ok("F6 sin satelite comun -> null",
+     ctx.solarPickSource(["2026-05-01", "2026-05-02"], swpcCon([]), soloG18) === null);
+
+  // 7. El recommended cambia de satelite entre dias -> gana el COMUN, no el recomendado.
+  //    (pasa en 140 de los 364 pares consecutivos del archivo real)
+  const recCambia = { days: {
+    "2026-05-01": { status: "complete", candidates: [
+      { sat: "g18", valid_diff_slots: 288, recommended: true },
+      { sat: "g19", valid_diff_slots: 288, recommended: false }] },
+    "2026-05-02": { status: "complete", candidates: [
+      { sat: "g19", valid_diff_slots: 288, recommended: true },
+      { sat: "g18", valid_diff_slots: 288, recommended: false }] }
+  } };
+  const r7 = ctx.solarPickSource(["2026-05-01", "2026-05-02"], swpcCon([]), recCambia);
+  ok("F6 recommended discrepante -> desempate estable", r7 && r7.src === "ncei", JSON.stringify(r7));
+  ok("F6 empate a slots -> recommended del primer dia ('18')", r7 && r7.sat === "18", JSON.stringify(r7));
+
+  // 8. SWPC incompleto en el diferencial aunque el integral lo tenga -> no vale.
+  const soloIntegral = { coverage: { days: ["2026-09-08"] }, differential: { coverage: { days: [] } } };
+  const r8 = ctx.solarPickSource(["2026-09-08"], soloIntegral, NCEI);
+  ok("F6 SWPC sin diferencial no cuenta como cobertura", r8 && r8.src === "ncei", JSON.stringify(r8));
+
+  const soloDiferencial = {
+    coverage: { days: [] }, differential: { coverage: { days: ["2026-09-08"] } }
+  };
+  const r8b = ctx.solarPickSource(["2026-09-08"], soloDiferencial, NCEI);
+  ok("F6 SWPC sin integral no cuenta como cobertura", r8b && r8b.src === "ncei", JSON.stringify(r8b));
+
+  // 8b. Sin recommended y con slots iguales, gana el menor satelite.
+  const empateLexico = { days: {
+    "2026-04-01": { status: "complete", candidates: [
+      { sat: "g19", valid_diff_slots: 288 }, { sat: "g18", valid_diff_slots: 288 }] }
+  } };
+  const rLex = ctx.solarPickSource(["2026-04-01"], swpcCon([]), empateLexico);
+  ok("F6 empate sin recommended -> orden lexicografico ('18')",
+     rLex && rLex.src === "ncei" && rLex.sat === "18", JSON.stringify(rLex));
+
+  // 9. Manifiestos ausentes o basura: null, nunca excepcion.
+  ok("F6 manifiestos nulos -> null",
+     ctx.solarPickSource(["2026-09-08"], null, null) === null);
+  ok("F6 days vacio -> null", ctx.solarPickSource([], swpcCon([]), NCEI) === null);
+  const deformes = [
+    [null, {}, {}],
+    ["2026-09-08", {}, {}],
+    [["2026-09-08"], { coverage: { days: "x" }, differential: {} }, { days: [] }],
+    [["2026-09-08"], {}, { days: { "2026-09-08": { status: "complete", candidates: null } } }],
+    [["2026-09-08"], {}, { days: { "2026-09-08": { status: "complete", candidates: [null, 7, { sat: "g20" }] } } }]
+  ];
+  const deformesOk = deformes.every((args) => {
+    try { return ctx.solarPickSource(args[0], args[1], args[2]) === null; }
+    catch (e) { return false; }
+  });
+  ok("F6 entradas deformes -> null sin lanzar", deformesOk);
+}
+
 testRouteImportKeepsCuratedIcaoAliases()
   .then(testFetchSolarManifestRetriesAfterHttpError)
   .then(function () {

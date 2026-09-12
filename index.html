@@ -2372,6 +2372,79 @@ function nceiDayAdapt(file) {
   return { channels: channels, samples: samples };
 }
 
+// solarPickSource(days, swpcManifest, nceiManifest): elige la fuente para la
+// VENTANA ENTERA, no dia a dia. Mezclar SWPC y NCEI dentro de una ventana mete
+// un cambio de satelite falso (SWPC guarda 18, NCEI "g18") y el modelo la
+// cierra en CAMBIO_SATELITE. Devuelve "swpc", {src:"ncei",sat} o null.
+// Pura: recibe los manifiestos ya descargados. Nunca lanza.
+function solarPickSource(days, swpcManifest, nceiManifest) {
+  if (!Array.isArray(days) || !days.length) return null;
+  var i, j;
+  // 1. SWPC manda si cubre todos los dias en integral Y diferencial.
+  var sm = swpcManifest || {};
+  var covInt = sm.coverage && Array.isArray(sm.coverage.days) ? sm.coverage.days : [];
+  var covDiff = sm.differential && sm.differential.coverage &&
+    Array.isArray(sm.differential.coverage.days) ? sm.differential.coverage.days : [];
+  var todosSwpc = true;
+  for (i = 0; i < days.length; i++) {
+    if (covInt.indexOf(days[i]) === -1 || covDiff.indexOf(days[i]) === -1) { todosSwpc = false; break; }
+  }
+  if (todosSwpc) return "swpc";
+  // 2. NCEI: todos los dias deben existir y estar completos. El criterio de
+  // admision es `status`, no el recuento de slots: el modelo ya rechaza los
+  // huecos donde importan (baseline y observacion), asi que exigir 288 aqui
+  // tiraba 3 dias buenos del archivo real sin ganar nada.
+  var nm = nceiManifest && nceiManifest.days && typeof nceiManifest.days === "object"
+    ? nceiManifest.days : null;
+  if (!nm) return null;
+  var comun = null;          // satelites presentes en TODOS los dias
+  var slots = {};            // sat -> suma de valid_diff_slots en la ventana
+  var recPrimero = null;     // sat del candidato recommended del primer dia
+  for (i = 0; i < days.length; i++) {
+    var e = nm[days[i]];
+    if (!e || e.status !== "complete" || !Array.isArray(e.candidates)) return null;
+    var aqui = {};
+    for (j = 0; j < e.candidates.length; j++) {
+      var c = e.candidates[j];
+      if (!c || typeof c !== "object") continue;
+      var k = satKey(c.sat);
+      if (k === undefined) continue;
+      aqui[k] = true;
+      var n = typeof c.valid_diff_slots === "number" && isFinite(c.valid_diff_slots)
+        ? c.valid_diff_slots : 0;
+      slots[k] = (slots[k] || 0) + n;
+      if (i === 0 && c.recommended === true && recPrimero === null) recPrimero = k;
+    }
+    if (comun === null) {
+      comun = aqui;
+    } else {
+      var siguiente = {};
+      for (var s in comun) {
+        if (Object.prototype.hasOwnProperty.call(comun, s) &&
+            Object.prototype.hasOwnProperty.call(aqui, s)) siguiente[s] = true;
+      }
+      comun = siguiente;
+    }
+  }
+  var cands = [];
+  for (var sat in comun) {
+    if (Object.prototype.hasOwnProperty.call(comun, sat)) cands.push(sat);
+  }
+  if (!cands.length) return null;
+  // Desempate determinista, en este orden: mas slots en la ventana; el
+  // recommended del primer dia; orden lexicografico. El manifiesto NCEI es
+  // inmutable (ventana fija), asi que la misma ventana elige siempre lo mismo
+  // y una ocurrencia ya incorporada se puede reproducir.
+  cands.sort(function (a, b) {
+    var da = slots[a] || 0, db = slots[b] || 0;
+    if (da !== db) return db - da;
+    if (a === recPrimero && b !== recPrimero) return -1;
+    if (b === recPrimero && a !== recPrimero) return 1;
+    return a < b ? -1 : a > b ? 1 : 0;
+  });
+  return { src: "ncei", sat: cands[0] };
+}
+
 // occRoutePoints(f, occ): puntos {tMs, rcGV, altitudeKm} de la ruta de una
 // ocurrencia, o null si no hay ruta/rc utilizable. Punto con rcGV no finito se
 // descarta; con menos de dos puntos no hay ruta.
