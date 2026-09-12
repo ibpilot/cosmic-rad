@@ -424,7 +424,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.15";
+var APP_VERSION = "1.16";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2372,6 +2372,147 @@ function depDraftPatch(draft) {
   return { depDate: d, depTime: tm };
 }
 
+// T12: partes de la dosis mensual de una lista de vuelos. Con occurrences manda
+// su numero: un vuelo desglosado en 3 no vuela `legs` veces. Las cifras SEP solo
+// cuentan cuando la ocurrencia esta incorporada (lo garantiza occSepFigure).
+function monthDoseParts(flights, hpMV) {
+  var gcr = 0, lo = 0, hi = 0;
+  var list = Array.isArray(flights) ? flights : [];
+  for (var i = 0; i < list.length; i++) {
+    var f = list[i];
+    if (!f || !f.orig || !f.dest || f.orig === f.dest || !activeDB[f.orig] || !activeDB[f.dest]) continue;
+    var c = flightCalc(f, hpMV);
+    if (!c) continue;
+    var occs = Array.isArray(f.occurrences) ? f.occurrences : null;
+    // Con ocurrencias mandan ellas: un vuelo desglosado en 3 no vuela `legs` veces.
+    var n = occs ? occs.length : (f.legs || 1);
+    gcr += c.doseUsv * n;
+    if (occs) {
+      for (var j = 0; j < occs.length; j++) {
+        var fig = occSepFigure(occs[j]);
+        if (fig) { lo += fig.lowUsv; hi += fig.highUsv; }
+      }
+    }
+  }
+  return { gcrUsv: gcr, sepLowUsv: lo, sepHighUsv: hi };
+}
+
+// T12: clasifica las ocurrencias de un mes para el lote. `evals` es el mapa
+// occId -> {state, result} que devuelve occEvaluate. Devuelve {eligible, excluded}
+// con entradas {flightId, occId} (+result / +reason).
+function batchPlan(flights, evals) {
+  var eligible = [], excluded = [];
+  var list = Array.isArray(flights) ? flights : [];
+  var map = evals && typeof evals === "object" ? evals : {};
+  for (var i = 0; i < list.length; i++) {
+    var f = list[i];
+    var occs = f && Array.isArray(f.occurrences) ? f.occurrences : [];
+    for (var j = 0; j < occs.length; j++) {
+      var occ = occs[j];
+      if (!occ) continue;
+      var ev = map[occ.id];
+      var reason = null;
+      if (occ.state === "incorporada") {
+        reason = "ya_incorporada";
+      } else if (!ev) {
+        reason = "sin_evaluar";
+      } else if (ev.state === "estimacion_disponible") {
+        if (occ.timeKind !== "real") {
+          reason = "hora_estimada";
+        } else {
+          var r = ev.result;
+          var valid = r && typeof r === "object" && isFinite(r.lowUsv) && isFinite(r.highUsv) &&
+            r.lowUsv >= 0 && r.lowUsv <= r.highUsv;
+          if (!valid) reason = "incompleto";
+        }
+      } else {
+        reason = ev.state;
+      }
+      if (reason === null) {
+        eligible.push({ flightId: f.id, occId: occ.id,
+          result: { lowUsv: ev.result.lowUsv, highUsv: ev.result.highUsv } });
+      } else {
+        excluded.push({ flightId: f.id, occId: occ.id, reason: reason });
+      }
+    }
+  }
+  return { eligible: eligible, excluded: excluded };
+}
+
+// T12: aplica el lote. Devuelve {flights, batch}. `batch` guarda lo previo para
+// deshacer exacto. Copias nuevas de vuelos y ocurrencias afectados; el resto se
+// devuelve por identidad. `noaaCapture` no se toca.
+function applyBatch(flights, plan) {
+  var list = Array.isArray(flights) ? flights : [];
+  var eligible = plan && Array.isArray(plan.eligible) ? plan.eligible : [];
+  var byFlight = {};
+  for (var i = 0; i < eligible.length; i++) {
+    var e = eligible[i];
+    if (!e) continue;
+    if (!byFlight[e.flightId]) byFlight[e.flightId] = [];
+    byFlight[e.flightId].push(e);
+  }
+  var entries = [];
+  var out = list.map(function (f) {
+    var hits = f ? byFlight[f.id] : null;
+    if (!hits || !Array.isArray(f.occurrences)) return f;
+    var occs = f.occurrences.map(function (occ) {
+      var hit = null;
+      for (var k = 0; k < hits.length; k++) {
+        if (occ && hits[k].occId === occ.id && hits[k].result) { hit = hits[k]; break; }
+      }
+      if (!hit) return occ;
+      entries.push({ flightId: f.id, occId: occ.id, prevState: occ.state,
+        prevResult: occ.result, prevModelVersion: occ.modelVersion });
+      var copy = _objectSpread({}, occ);
+      copy.state = "incorporada";
+      copy.result = { lowUsv: hit.result.lowUsv, highUsv: hit.result.highUsv };
+      copy.modelVersion = SEP_MODEL_VERSION;
+      return copy;
+    });
+    var copyF = _objectSpread({}, f);
+    copyF.occurrences = occs;
+    return copyF;
+  });
+  return { flights: out, batch: { entries: entries } };
+}
+
+// T12: deshace un lote restaurando el estado previo. Restaura la AUSENCIA de las
+// claves que no existian (nunca `clave: undefined`) y conserva noaaCapture. Un
+// batch vacio o nulo devuelve el mismo array sin tocar.
+function undoBatch(flights, batch) {
+  var entries = batch && Array.isArray(batch.entries) ? batch.entries : [];
+  if (entries.length === 0) return flights;
+  var list = Array.isArray(flights) ? flights : [];
+  var byFlight = {};
+  for (var i = 0; i < entries.length; i++) {
+    var e = entries[i];
+    if (!e) continue;
+    if (!byFlight[e.flightId]) byFlight[e.flightId] = [];
+    byFlight[e.flightId].push(e);
+  }
+  return list.map(function (f) {
+    var hits = f ? byFlight[f.id] : null;
+    if (!hits || !Array.isArray(f.occurrences)) return f;
+    var occs = f.occurrences.map(function (occ) {
+      var hit = null;
+      for (var k = 0; k < hits.length; k++) {
+        if (occ && hits[k].occId === occ.id) { hit = hits[k]; break; }
+      }
+      if (!hit) return occ;
+      var copy = _objectSpread({}, occ);
+      if (hit.prevState === undefined) delete copy.state; else copy.state = hit.prevState;
+      if (hit.prevResult === undefined) delete copy.result; else copy.result = hit.prevResult;
+      if (hit.prevModelVersion === undefined) delete copy.modelVersion;
+      else copy.modelVersion = hit.prevModelVersion;
+      return copy;
+    });
+    var copyF = _objectSpread({}, f);
+    copyF.occurrences = occs;
+    return copyF;
+  });
+}
+
 // true solo si occEvaluate llegaria a necesitar el archivo (pasa las reglas 1-5).
 function occNeedsArchive(f, occ, nowMs) {
   if (!occ || typeof occ !== "object" || occ.state === "incorporada") return false;
@@ -4310,6 +4451,9 @@ var LANG = {
     occState_modelo_nuevo: "modelo actualizado",
     occState_esperando_fecha: "sin fecha",
     occState_sin_senal_evento: "evento solar activo sin contribución estimable en esta ruta",
+    occState_ya_incorporada: "ya incorporada",
+    occState_sin_evaluar: "sin evaluar",
+    occState_hora_estimada: "hora estimada, incorpórala a mano",
     occSplit: "Desglosar por fecha",
     occCollapse: "Agrupar",
     occCantCollapse: "Hay cifras incorporadas: no se puede agrupar",
@@ -4318,6 +4462,14 @@ var LANG = {
     occRemove: "quitar",
     occConfirm: "Confirmar",
     occChecking: "comprobando…",
+    batchAdd: "Añadir todas",
+    batchUndo: "Deshacer",
+    batchChecking: "comprobando…",
+    batchCount: "{n} ocurrencias afectadas",
+    batchExcluded: "No se incorporan",
+    batchConfirm: "Añadir",
+    batchCancel: "Cancelar",
+    monthSepRange: "incluye evento solar {low}–{high}",
     occNoaaFail: "calculado sin datos de llamaradas solares — no se pudo leer el archivo GOES",
     occNoDate: "sin fecha",
     occSepTitle: "Radiación por evento solar: estimación a partir de protones solares medidos por GOES",
@@ -4593,6 +4745,9 @@ var LANG = {
     occState_modelo_nuevo: "model updated",
     occState_esperando_fecha: "no date",
     occState_sin_senal_evento: "active solar event with no estimable contribution on this route",
+    occState_ya_incorporada: "already incorporated",
+    occState_sin_evaluar: "not evaluated",
+    occState_hora_estimada: "estimated time, incorporate it manually",
     occSplit: "Split by date",
     occCollapse: "Group",
     occCantCollapse: "Some figures are incorporated: cannot group",
@@ -4601,6 +4756,14 @@ var LANG = {
     occRemove: "remove",
     occConfirm: "Confirm",
     occChecking: "checking…",
+    batchAdd: "Add all",
+    batchUndo: "Undo",
+    batchChecking: "checking…",
+    batchCount: "{n} occurrences affected",
+    batchExcluded: "Not incorporated",
+    batchConfirm: "Add",
+    batchCancel: "Cancel",
+    monthSepRange: "includes solar event {low}–{high}",
     occNoaaFail: "calculated without solar flare data — the GOES archive could not be read",
     occNoDate: "no date",
     occSepTitle: "Solar event radiation: estimate from solar protons measured by GOES",
@@ -5296,7 +5459,7 @@ function OccList(_refOcc) {
   var tempRef = useRef(null);
   if (single && (tempRef.current === null ||
       tempRef.current.depDate !== flight.depDate || tempRef.current.depTime !== flight.depTime)) {
-    tempRef.current = makeOccurrence(flight.depDate, flight.depTime, "programada");
+    tempRef.current = makeOccurrence(flight.depDate, flight.depTime, "real");
   }
   var rows = single ? [tempRef.current] : occs;
   var _useStateD = useState(function () {
@@ -5422,7 +5585,7 @@ function OccList(_refOcc) {
         onClick: function () {
           var p = depDraftPatch(draft);
           if (p === null) return;
-          patch(occ, _objectSpread(p, { state: "programado", result: null }));
+          patch(occ, _objectSpread(p, { state: "programado", result: null, timeKind: "real" }));
           setDrafts(function (m) {
             var n = _objectSpread({}, m);
             delete n[occ.id];
@@ -6081,6 +6244,20 @@ function App() {
     _useState28 = _slicedToArray(_useState27, 2),
     savedAt = _useState28[0],
     setSavedAt = _useState28[1];
+  // T12: lote "Añadir todas". `batch` guarda lo previo para deshacer (no se
+  // persiste); `batchModal` es el plan pendiente de confirmar.
+  var _useStateBatch = useState(null),
+    _useStateBatch2 = _slicedToArray(_useStateBatch, 2),
+    batch = _useStateBatch2[0],
+    setBatch = _useStateBatch2[1];
+  var _useStateBatchM = useState(null),
+    _useStateBatchM2 = _slicedToArray(_useStateBatchM, 2),
+    batchModal = _useStateBatchM2[0],
+    setBatchModal = _useStateBatchM2[1];
+  var _useStateBatchC = useState(false),
+    _useStateBatchC2 = _slicedToArray(_useStateBatchC, 2),
+    batchChecking = _useStateBatchC2[0],
+    setBatchChecking = _useStateBatchC2[1];
 
   // ── Real-time space weather (SWPC) ────────────────────────────────────────
   // Estado inicial desde cache y fetch en background; un fallo de red queda en
@@ -6237,6 +6414,7 @@ function App() {
     saveAllMonths(all);
     setCurrentMonth(key);
     setFlights(loadMonthFlights(key));
+    setBatch(null);
   }
 
   // Count months that have saved flights
@@ -6327,12 +6505,69 @@ function App() {
     return f.orig && f.dest && f.orig !== f.dest && activeDB[f.orig] && activeDB[f.dest];
   });
   var monthGles = gleForMonth(currentMonth);
-  var monthlyUsv = validFlights.reduce(function (s, f) {
-    return s + flightCalc(f, hpMV).doseUsv * f.legs;
-  }, 0);
+  var monthParts = monthDoseParts(validFlights, hpMV);
+  var monthlyUsv = monthParts.gcrUsv + (monthParts.sepLowUsv + monthParts.sepHighUsv) / 2;
   var monthlyHours = validFlights.reduce(function (s, f) {
-    return s + flightCalc(f, hpMV).timeH * f.legs;
+    var occs = Array.isArray(f.occurrences) ? f.occurrences : null;
+    var n = occs ? occs.length : (f.legs || 1);
+    return s + flightCalc(f, hpMV).timeH * n;
   }, 0);
+  // T12: lote "Añadir todas".
+  var hasMonthOcc = validFlights.some(function (f) { return Array.isArray(f.occurrences); });
+  // Evalua todas las ocurrencias del mes. No lanza: un fallo de una ocurrencia la
+  // deja fuera del mapa (y batchPlan la excluira como "sin_evaluar").
+  function evaluateMonthOccurrences(flights, nowMs) {
+    var now = nowMs == null ? Date.now() : nowMs;
+    var list = Array.isArray(flights) ? flights : [];
+    var jobs = [];
+    var enqueue = function (f, occ) {
+      jobs.push(new Promise(function (resolve) {
+        try {
+          if (!occNeedsArchive(f, occ, now)) {
+            resolve({ id: occ.id, res: occEvaluate(f, occ, null, now) });
+            return;
+          }
+          loadArchiveFor(occRoutePoints(f, occ), depMsOf(occ)).then(function (archive) {
+            resolve({ id: occ.id, res: occEvaluate(f, occ, archive, now) });
+          })["catch"](function () { resolve(null); });
+        } catch (e) {
+          resolve(null);
+        }
+      }));
+    };
+    for (var i = 0; i < list.length; i++) {
+      var f = list[i];
+      if (!f || !Array.isArray(f.occurrences)) continue;
+      for (var j = 0; j < f.occurrences.length; j++) enqueue(f, f.occurrences[j]);
+    }
+    return Promise.all(jobs).then(function (items) {
+      var m = {};
+      for (var k = 0; k < items.length; k++) {
+        if (items[k]) m[items[k].id] = items[k].res;
+      }
+      return m;
+    });
+  }
+  function startBatch() {
+    if (batchChecking) return;
+    setBatchChecking(true);
+    evaluateMonthOccurrences(validFlights, Date.now()).then(function (evals) {
+      setBatchChecking(false);
+      setBatchModal(batchPlan(validFlights, evals));
+    });
+  }
+  function confirmBatch() {
+    if (!batchModal) return;
+    var res = applyBatch(flights, batchModal);
+    setFlights(res.flights);
+    setBatch(res.batch);
+    setBatchModal(null);
+  }
+  function undoBatchNow() {
+    if (!batch) return;
+    setFlights(undoBatch(flights, batch));
+    setBatch(null);
+  }
   // Dynamic annual estimate: average dose across all recorded months of current year × 12
   var currentYear = currentMonth.split("-")[0];
   var pastMonthsTotal = 0, pastMonthsCount = 0;
@@ -6341,10 +6576,8 @@ function App() {
     var key = e[0], mf = e[1];
     if (!key.startsWith(currentYear) || key === currentMonth) return;
     if (!Array.isArray(mf) || mf.length === 0) return;
-    var dose = mf.reduce(function(s, f) {
-      if (!activeDB[f.orig] || !activeDB[f.dest] || f.orig === f.dest) return s;
-      return s + flightCalc(f, hpMV).doseUsv * (f.legs || 1);
-    }, 0);
+    var mp = monthDoseParts(mf, hpMV);
+    var dose = mp.gcrUsv + (mp.sepLowUsv + mp.sepHighUsv) / 2;
     if (dose > 0) { pastMonthsTotal += dose; pastMonthsCount++; computedMonthKeys.push(key); }
   });
   if (monthlyUsv > 0) computedMonthKeys.push(currentMonth);
@@ -6908,7 +7141,26 @@ function App() {
       color: "#3b9ede",
       margin: "5px 0 3px"
     }
-  }, fmtDose(monthlyUsv)), /*#__PURE__*/React.createElement("div", {
+  }, fmtDose(monthlyUsv)), monthParts.sepHighUsv > 0 && /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#6a8fa8"
+    }
+  }, t.monthSepRange.replace("{low}", fmtDose(monthParts.sepLowUsv)).replace("{high}", fmtDose(monthParts.sepHighUsv))), (hasMonthOcc || batch) && /*#__PURE__*/React.createElement("div", {
+    style: {
+      marginTop: 6,
+      display: "flex",
+      gap: 8,
+      justifyContent: "center"
+    }
+  }, hasMonthOcc && /*#__PURE__*/React.createElement("button", {
+    className: "occ-confirm",
+    disabled: batchChecking,
+    onClick: startBatch
+  }, batchChecking ? t.batchChecking : t.batchAdd), batch && /*#__PURE__*/React.createElement("button", {
+    className: "occ-confirm",
+    onClick: undoBatchNow
+  }, t.batchUndo)), /*#__PURE__*/React.createElement("div", {
     style: {
       fontSize: 11.5,
       color: "#6a8fa8"
@@ -7561,6 +7813,17 @@ function App() {
     onSetRoute: function onSetRoute(o, d) {
       if (o) updateFlight(trackModalFor, "orig", o);
       if (d) updateFlight(trackModalFor, "dest", d);
+    }
+  }), batchModal && /*#__PURE__*/React.createElement(BatchModal, {
+    t: t,
+    plan: batchModal,
+    gcrUsv: monthParts.gcrUsv,
+    sepLowUsv: monthParts.sepLowUsv,
+    sepHighUsv: monthParts.sepHighUsv,
+    currentUsv: monthlyUsv,
+    onConfirm: confirmBatch,
+    onClose: function onClose() {
+      return setBatchModal(null);
     }
   }), showInfo && /*#__PURE__*/React.createElement(InfoModal, {
     t: t,
@@ -8272,6 +8535,165 @@ function CalcInfoModal(_refCalcInfo) {
       lineHeight: 1.6
     }
   }, t.calcInfoFootnote)));
+}
+// ── BatchModal (T12): confirmacion del lote "Añadir todas" ────────────────────
+function BatchModal(_refBatch) {
+  var t = _refBatch.t,
+    plan = _refBatch.plan,
+    gcrUsv = _refBatch.gcrUsv,
+    sepLowUsv = _refBatch.sepLowUsv,
+    sepHighUsv = _refBatch.sepHighUsv,
+    currentUsv = _refBatch.currentUsv,
+    onConfirm = _refBatch.onConfirm,
+    onClose = _refBatch.onClose;
+  var eligible = plan && Array.isArray(plan.eligible) ? plan.eligible : [];
+  var excluded = plan && Array.isArray(plan.excluded) ? plan.excluded : [];
+  var addLow = 0, addHigh = 0;
+  for (var i = 0; i < eligible.length; i++) {
+    addLow += eligible[i].result.lowUsv;
+    addHigh += eligible[i].result.highUsv;
+  }
+  var newLow = sepLowUsv + addLow, newHigh = sepHighUsv + addHigh;
+  var nuevo = gcrUsv + (newLow + newHigh) / 2;
+  var groups = {}, order = [];
+  for (var j = 0; j < excluded.length; j++) {
+    var reason = excluded[j].reason;
+    if (groups[reason] == null) { groups[reason] = 0; order.push(reason); }
+    groups[reason]++;
+  }
+  var sectionStyle = {
+    marginBottom: 8,
+    background: "rgba(255,255,255,0.04)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: 12,
+    padding: "12px 14px"
+  };
+  var rowStyle = {
+    display: "flex",
+    justifyContent: "space-between",
+    gap: 12,
+    fontSize: 12,
+    color: "#90b8cc",
+    lineHeight: 1.8
+  };
+  return /*#__PURE__*/React.createElement("div", {
+    className: "modal-wrap",
+    style: {
+      position: "fixed",
+      inset: 0,
+      zIndex: 1000,
+      background: "rgba(0,0,0,0.7)",
+      display: "flex",
+      alignItems: "flex-end",
+      justifyContent: "center",
+      backdropFilter: "blur(4px)",
+      padding: 0
+    },
+    onClick: function onClick(e) {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    className: "modal-sheet",
+    style: {
+      width: "100%",
+      maxWidth: 500,
+      background: "linear-gradient(180deg,#0d1e2e,#091622)",
+      border: "1px solid rgba(255,255,255,0.1)",
+      borderRadius: "18px 18px 0 0",
+      maxHeight: "88vh",
+      overflowY: "auto",
+      WebkitOverflowScrolling: "touch",
+      padding: "0 0 32px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "center",
+      padding: "12px 0 4px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      width: 36,
+      height: 4,
+      borderRadius: 2,
+      background: "rgba(255,255,255,0.2)"
+    }
+  })), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      padding: "8px 18px 14px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 16,
+      fontWeight: 800,
+      color: "#e8f4fc"
+    }
+  }, "\u2795 ", t.batchAdd), /*#__PURE__*/React.createElement("button", {
+    onClick: onClose,
+    style: {
+      background: "rgba(255,255,255,0.07)",
+      border: "1px solid rgba(255,255,255,0.12)",
+      borderRadius: 8,
+      color: "#6a8fa8",
+      cursor: "pointer",
+      fontSize: 16,
+      padding: "4px 10px",
+      fontWeight: 700
+    }
+  }, "\u2715")), /*#__PURE__*/React.createElement("div", {
+    style: {
+      padding: "0 14px"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: sectionStyle
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: "#d0e8f4",
+      marginBottom: 6
+    }
+  }, t.batchCount.replace("{n}", String(eligible.length))), /*#__PURE__*/React.createElement("div", {
+    style: rowStyle
+  }, /*#__PURE__*/React.createElement("span", null, fmtDose(currentUsv)), /*#__PURE__*/React.createElement("span", null, "\u2192 ", fmtDose(nuevo))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 11,
+      color: "#6a8fa8",
+      textAlign: "right"
+    }
+  }, fmtDose(gcrUsv + newLow), "\u2013", fmtDose(gcrUsv + newHigh))), excluded.length > 0 && /*#__PURE__*/React.createElement("div", {
+    style: sectionStyle
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      fontSize: 12.5,
+      fontWeight: 700,
+      color: "#d0e8f4",
+      marginBottom: 6
+    }
+  }, t.batchExcluded), order.map(function (reason) {
+    return /*#__PURE__*/React.createElement("div", {
+      key: reason,
+      style: rowStyle
+    }, /*#__PURE__*/React.createElement("span", null, t["occState_" + reason] || reason), /*#__PURE__*/React.createElement("span", null, groups[reason]));
+  }))), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 8,
+      padding: "6px 14px 0"
+    }
+  }, /*#__PURE__*/React.createElement("button", {
+    className: "occ-confirm",
+    disabled: eligible.length === 0,
+    onClick: onConfirm,
+    style: { flex: 1 }
+  }, t.batchConfirm), /*#__PURE__*/React.createElement("button", {
+    className: "occ-confirm",
+    onClick: onClose,
+    style: { flex: 1 }
+  }, t.cancel || t.batchCancel))));
 }
 // ── InfoModal ─────────────────────────────────────────────────────────────────
 // ── InfoModal ─────────────────────────────────────────────────────────────────

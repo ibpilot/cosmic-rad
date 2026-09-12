@@ -1036,6 +1036,178 @@ async function testFetchSolarManifestRetriesAfterHttpError() {
   }
 }
 
+console.log("\nT12 lote");
+{
+  const hp = 650;
+  // Vuelos a mano con ids fijos; `evals` inventados: estos tests no tocan red.
+  const mkOcc = (fields) =>
+    Object.assign(ctx.makeOccurrence(fields.depDate, fields.depTime, fields.timeKind), fields);
+
+  // B1 — monthDoseParts: manda el numero de ocurrencias, no `legs`.
+  {
+    const fNo = { id: 901, orig: "MAD", dest: "JFK", legs: 3, flIdx: 1 };
+    const c = ctx.flightCalc(fNo, hp).doseUsv;
+    ok("B1 legs:3 sin occurrences → gcrUsv === flightCalc×3",
+       ctx.monthDoseParts([fNo], hp).gcrUsv === c * 3, ctx.monthDoseParts([fNo], hp).gcrUsv);
+    const fOcc = { id: 902, orig: "MAD", dest: "JFK", legs: 3, flIdx: 1, occurrences: [
+      mkOcc({ id: 9021, depDate: "2026-09-01", depTime: "10:00", timeKind: "real" }),
+      mkOcc({ id: 9022, depDate: "2026-09-02", depTime: "10:00", timeKind: "real" })
+    ]};
+    ok("B1 mismo vuelo con 2 occurrences → gcrUsv === flightCalc×2",
+       ctx.monthDoseParts([fOcc], hp).gcrUsv === c * 2, ctx.monthDoseParts([fOcc], hp).gcrUsv);
+  }
+
+  // B2 — solo las incorporadas con cifra suman al rango SEP.
+  {
+    const oInc = mkOcc({ id: 9031, depDate: "2026-09-01", depTime: "10:00", timeKind: "real",
+      state: "incorporada", result: { lowUsv: 2, highUsv: 5 }, modelVersion: ctx.SEP_MODEL_VERSION });
+    const oDisp = mkOcc({ id: 9032, depDate: "2026-09-02", depTime: "10:00", timeKind: "real",
+      state: "estimacion_disponible", result: { lowUsv: 100, highUsv: 200 } });
+    const f = { id: 903, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oInc, oDisp] };
+    const p = ctx.monthDoseParts([f], hp);
+    ok("B2 sepLowUsv solo de la incorporada", p.sepLowUsv === 2, p.sepLowUsv);
+    ok("B2 sepHighUsv solo de la incorporada", p.sepHighUsv === 5, p.sepHighUsv);
+  }
+
+  // B3 — elegible solo con estimacion_disponible Y timeKind real.
+  {
+    const oReal = mkOcc({ id: 9041, depDate: "2026-09-01", depTime: "10:00", timeKind: "real" });
+    const oProg = mkOcc({ id: 9042, depDate: "2026-09-02", depTime: "10:00", timeKind: "programada" });
+    const f = { id: 904, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oReal, oProg] };
+    const evals = {
+      9041: { state: "estimacion_disponible", result: { lowUsv: 1, highUsv: 2 } },
+      9042: { state: "estimacion_disponible", result: { lowUsv: 1, highUsv: 2 } }
+    };
+    const plan = ctx.batchPlan([f], evals);
+    ok("B3 real es elegible",
+       plan.eligible.length === 1 && plan.eligible[0].occId === 9041, JSON.stringify(plan.eligible));
+    ok("B3 programada excluida por hora_estimada",
+       plan.excluded.length === 1 && plan.excluded[0].reason === "hora_estimada",
+       JSON.stringify(plan.excluded));
+  }
+
+  // B4 — motivos por orden: incorporada, sin evaluar y el estado del eval.
+  {
+    const oInc = mkOcc({ id: 9051, depDate: "2026-09-01", depTime: "10:00", timeKind: "real",
+      state: "incorporada", result: { lowUsv: 1, highUsv: 2 } });
+    const oNoEval = mkOcc({ id: 9052, depDate: "2026-09-02", depTime: "10:00", timeKind: "real" });
+    const oWait = mkOcc({ id: 9053, depDate: "2026-09-03", depTime: "10:00", timeKind: "real" });
+    const f = { id: 905, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oInc, oNoEval, oWait] };
+    const plan = ctx.batchPlan([f], { 9053: { state: "esperando_datos", result: null } });
+    const byId = {};
+    plan.excluded.forEach((e) => { byId[e.occId] = e.reason; });
+    ok("B4 incorporada → ya_incorporada", byId[9051] === "ya_incorporada", byId[9051]);
+    ok("B4 sin entrada en evals → sin_evaluar", byId[9052] === "sin_evaluar", byId[9052]);
+    ok("B4 esperando_datos → esperando_datos", byId[9053] === "esperando_datos", byId[9053]);
+    ok("B4 nada elegible", plan.eligible.length === 0, JSON.stringify(plan.eligible));
+  }
+
+  // B5 — result invalido con estado disponible: no elegible.
+  {
+    const o1 = mkOcc({ id: 9061, depDate: "2026-09-01", depTime: "10:00", timeKind: "real" });
+    const o2 = mkOcc({ id: 9062, depDate: "2026-09-02", depTime: "10:00", timeKind: "real" });
+    const f = { id: 906, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [o1, o2] };
+    const plan = ctx.batchPlan([f], {
+      9061: { state: "estimacion_disponible", result: { lowUsv: 5, highUsv: 2 } },
+      9062: { state: "estimacion_disponible", result: { lowUsv: Infinity, highUsv: 2 } }
+    });
+    ok("B5 high<low no elegible", plan.eligible.length === 0, JSON.stringify(plan.eligible));
+    ok("B5 lowUsv no finito no elegible", plan.excluded.length === 2, JSON.stringify(plan.excluded));
+  }
+
+  // B6 — applyBatch marca solo las elegibles y conserva noaaCapture.
+  {
+    const cap = { sample: 1 };
+    const oElig = mkOcc({ id: 9071, depDate: "2026-09-01", depTime: "10:00", timeKind: "real",
+      state: "estimacion_disponible", result: null, noaaCapture: cap });
+    const oOther = mkOcc({ id: 9072, depDate: "2026-09-02", depTime: "10:00", timeKind: "real" });
+    const f = { id: 907, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oElig, oOther] };
+    const plan = { eligible: [{ flightId: 907, occId: 9071, result: { lowUsv: 3, highUsv: 7 } }], excluded: [] };
+    const res = ctx.applyBatch([f], plan);
+    const out = res.flights[0].occurrences;
+    ok("B6 elegible → incorporada", out[0].state === "incorporada", out[0].state);
+    ok("B6 result copiado", JSON.stringify(out[0].result) === '{"lowUsv":3,"highUsv":7}',
+       JSON.stringify(out[0].result));
+    ok("B6 modelVersion === SEP_MODEL_VERSION", out[0].modelVersion === ctx.SEP_MODEL_VERSION,
+       out[0].modelVersion);
+    ok("B6 noaaCapture intacto (===)", out[0].noaaCapture === cap, out[0].noaaCapture);
+    ok("B6 la no elegible sale por identidad", out[1] === oOther, out[1] === oOther);
+    ok("B6 result es objeto nuevo", out[0].result !== plan.eligible[0].result,
+       out[0].result === plan.eligible[0].result);
+  }
+
+  // B7 — ida y vuelta byte a byte, con una ocurrencia sin clave modelVersion.
+  {
+    const oSinVer = { id: 9081, depDate: "2026-09-01", depTime: "10:00", timeKind: "real",
+      state: "estimacion_disponible", noaaCapture: null, result: null };
+    const f = { id: 908, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oSinVer] };
+    const before = JSON.stringify([f]);
+    const plan = { eligible: [{ flightId: 908, occId: 9081, result: { lowUsv: 4, highUsv: 9 } }], excluded: [] };
+    const applied = ctx.applyBatch([f], plan);
+    const undone = ctx.undoBatch(applied.flights, applied.batch);
+    ok("B7 JSON antes === JSON después del lote y deshacer",
+       JSON.stringify(undone) === before, JSON.stringify(undone) + " vs " + before);
+    ok("B7 la clave modelVersion no reaparece", !("modelVersion" in undone[0].occurrences[0]),
+       JSON.stringify(Object.keys(undone[0].occurrences[0])));
+  }
+
+  // B8 — no se clona lo que no se toca.
+  {
+    const fNo = { id: 909, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
+    const fElig = { id: 910, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1,
+      occurrences: [mkOcc({ id: 9101, depDate: "2026-09-01", depTime: "10:00", timeKind: "real" })] };
+    const plan = { eligible: [{ flightId: 910, occId: 9101, result: { lowUsv: 1, highUsv: 2 } }], excluded: [] };
+    const res = ctx.applyBatch([fNo, fElig], plan);
+    ok("B8 vuelo sin elegibles sale === al de entrada", res.flights[0] === fNo, res.flights[0] === fNo);
+    ok("B8 vuelo tocado sí es copia", res.flights[1] !== fElig, res.flights[1] === fElig);
+  }
+
+  // B9 — batch vacio o nulo devuelve el mismo array.
+  {
+    const arr = [{ id: 911 }];
+    ok("B9 undoBatch(flights, null) === flights", ctx.undoBatch(arr, null) === arr);
+    ok("B9 undoBatch(flights, {entries:[]}) === flights", ctx.undoBatch(arr, { entries: [] }) === arr);
+  }
+
+  // B11 — deshacer devuelve la cifra ANTERIOR, no null. B7 no lo cubre: alli la
+  // ocurrencia previa tenia result null, asi que restaurar null parecia correcto.
+  {
+    const oPrev = { id: 9121, depDate: "2026-09-01", depTime: "10:00", timeKind: "real",
+      state: "estimacion_disponible", noaaCapture: null,
+      result: { lowUsv: 1, highUsv: 2 }, modelVersion: "modelo-viejo" };
+    const f = { id: 912, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oPrev] };
+    const before = JSON.stringify([f]);
+    const plan = { eligible: [{ flightId: 912, occId: 9121, result: { lowUsv: 4, highUsv: 9 } }], excluded: [] };
+    const res = ctx.applyBatch([f], plan);
+    const applied = res.flights[0].occurrences[0];
+    ok("T12-B11el lote pisa la cifra con la nueva", applied.result.lowUsv === 4 && applied.result.highUsv === 9,
+       JSON.stringify(applied.result));
+    const undone = ctx.undoBatch(res.flights, res.batch);
+    const back = undone[0].occurrences[0];
+    ok("T12-B11deshacer restaura la cifra anterior", back.result && back.result.lowUsv === 1 && back.result.highUsv === 2,
+       JSON.stringify(back.result));
+    ok("T12-B11deshacer restaura la version anterior", back.modelVersion === "modelo-viejo", back.modelVersion);
+    ok("T12-B11JSON antes === JSON despues", JSON.stringify(undone) === before,
+       JSON.stringify(undone) + " vs " + before);
+  }
+
+  // B10 — textos nuevos en ES y EN.
+  {
+    const keys = ["occState_hora_estimada", "occState_ya_incorporada", "occState_sin_evaluar",
+      "batchAdd", "batchUndo", "monthSepRange"];
+    keys.forEach((k) => {
+      ok("B10 ES tiene " + k, typeof ctx.LANG.es[k] === "string" && ctx.LANG.es[k].length > 0, ctx.LANG.es[k]);
+      ok("B10 EN tiene " + k, typeof ctx.LANG.en[k] === "string" && ctx.LANG.en[k].length > 0, ctx.LANG.en[k]);
+    });
+    ok("B10 monthSepRange ES con {low} y {high}",
+       (ctx.LANG.es.monthSepRange || "").indexOf("{low}") !== -1 &&
+         (ctx.LANG.es.monthSepRange || "").indexOf("{high}") !== -1, ctx.LANG.es.monthSepRange);
+    ok("B10 monthSepRange EN con {low} y {high}",
+       (ctx.LANG.en.monthSepRange || "").indexOf("{low}") !== -1 &&
+         (ctx.LANG.en.monthSepRange || "").indexOf("{high}") !== -1, ctx.LANG.en.monthSepRange);
+  }
+}
+
 testRouteImportKeepsCuratedIcaoAliases()
   .then(testFetchSolarManifestRetriesAfterHttpError)
   .then(function () {
