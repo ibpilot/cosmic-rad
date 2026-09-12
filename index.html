@@ -7,9 +7,9 @@
   frame-ancestors (anti-clickjacking) no se puede expresar aquí — requeriría
   un CDN/header delante. El resto de la política aplica: sin workers
   (worker-src 'none'), sin object/embed, sin forms, base-uri fija y red solo
-  con raw.githubusercontent.com.
+  con ibpilot.github.io y services.swpc.noaa.gov.
 -->
-<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://raw.githubusercontent.com https://services.swpc.noaa.gov; manifest-src 'self' data:; base-uri 'none'; object-src 'none'; form-action 'none'; worker-src 'none'; upgrade-insecure-requests"/>
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self' https://ibpilot.github.io https://services.swpc.noaa.gov; manifest-src 'self' data:; base-uri 'none'; object-src 'none'; form-action 'none'; worker-src 'none'; upgrade-insecure-requests"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0"/>
 <meta name="apple-mobile-web-app-capable" content="yes"/>
 <meta name="mobile-web-app-capable" content="yes"/>
@@ -424,7 +424,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.24";
+var APP_VERSION = "1.25";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -1449,7 +1449,9 @@ function _loadOpenFlights() {
       while (1) switch (_context.p = _context.n) {
         case 0:
           _context.p = 0;
-          url = "https://raw.githubusercontent.com/jpatokal/openflights/master/data/airports.dat?v=".concat(APP_VERSION);
+          // Copia local: ver data/airports.ATTRIBUTION.md (OpenFlights, ODbL 1.0).
+          // Antes se pedia en caliente a raw, que da 503 en frio.
+          url = "data/airports.dat?v=".concat(APP_VERSION);
           _context.n = 1;
           return fetch(url, {
             cache: "force-cache"
@@ -2215,7 +2217,11 @@ var OCC_MAX = 100;
 // NCEI (ncei/, ventana fija 2025-09-11 -> 2026-09-10); los dias posteriores
 // los cubre el colector SWPC en solar/.
 var SOLAR_ARCHIVE_START_MS = Date.UTC(2025, 8, 11);
-var SOLAR_ARCHIVE_BASE = "https://raw.githubusercontent.com/ibpilot/cosmic-rad-data/main/";
+// Pages y no raw: raw cachea 600 s y en cada MISS va al
+// almacen de GitHub, que devuelve 503 "Backend.max_conn reached". Medido el
+// 2026-09-12: en raw los ficheros frios fallan siempre; en Pages los mismos
+// ficheros dan 200, en frio, en paralelo y desde el mismo edge.
+var SOLAR_ARCHIVE_BASE = "https://ibpilot.github.io/cosmic-rad-data/";
 // Version del modelo con que se incorpora una cifra; si cambia, la ocurrencia pasa a modelo_nuevo.
 var SEP_MODEL_VERSION = "t14-2026-09-12";
 var BASELINE_MS = 12 * 3600 * 1000;
@@ -2820,9 +2826,39 @@ function occEvaluate(f, occ, archive, nowMs, routeFn) {
 // Carga del archivo solar publico. Un 404 es "dato ausente", no un error.
 var _solarManifestPromise = null;
 var _solarDayCache = new Map();
+// Espera sin depender de setTimeout: el vm de los tests no lo define, y ahi
+// resolver de inmediato hace que el reintento se pruebe sin frenar la suite.
+function solarDelay(ms) {
+  return new Promise(function (resolve) {
+    if (typeof setTimeout === "function") setTimeout(resolve, ms); else resolve();
+  });
+}
+
+// fetchRetry(url, intentos): reintenta SOLO lo transitorio — fetch que rechaza
+// (red) o respuesta 5xx. Un 404 o cualquier otro 4xx se devuelve tal cual para
+// que el llamador lo interprete; reintentarlo no lo va a arreglar.
+var SOLAR_RETRY_DELAYS_MS = [400, 1200];
+function fetchRetry(url, attempt) {
+  var n = attempt === undefined ? 0 : attempt;
+  return fetch(url).then(function (res) {
+    if (res && res.status >= 500 && n < SOLAR_RETRY_DELAYS_MS.length) {
+      return solarDelay(SOLAR_RETRY_DELAYS_MS[n]).then(function () {
+        return fetchRetry(url, n + 1);
+      });
+    }
+    return res;
+  }, function (err) {
+    if (n < SOLAR_RETRY_DELAYS_MS.length) {
+      return solarDelay(SOLAR_RETRY_DELAYS_MS[n]).then(function () {
+        return fetchRetry(url, n + 1);
+      });
+    }
+    throw err;
+  });
+}
 function fetchSolarManifest() {
   if (_solarManifestPromise) return _solarManifestPromise;
-  _solarManifestPromise = fetch(SOLAR_ARCHIVE_BASE + "manifest.json").then(function (res) {
+  _solarManifestPromise = fetchRetry(SOLAR_ARCHIVE_BASE + "manifest.json").then(function (res) {
     if (!res || !res.ok) throw new Error("solar manifest HTTP " + (res && res.status));
     return res.json();
   }).catch(function (err) {
@@ -2832,7 +2868,7 @@ function fetchSolarManifest() {
   return _solarManifestPromise;
 }
 function fetchSolarPart(url) {
-  return fetch(url).then(function (res) {
+  return fetchRetry(url).then(function (res) {
     if (!res || res.status === 404) return null;
     if (!res.ok) throw new Error("solar HTTP " + res.status);
     return res.json();
@@ -2860,7 +2896,7 @@ var _nceiManifestPromise = null;
 var _nceiDayCache = new Map();
 function fetchNceiManifest() {
   if (_nceiManifestPromise) return _nceiManifestPromise;
-  _nceiManifestPromise = fetch(SOLAR_ARCHIVE_BASE + "ncei/manifest.json").then(function (res) {
+  _nceiManifestPromise = fetchRetry(SOLAR_ARCHIVE_BASE + "ncei/manifest.json").then(function (res) {
     if (!res || !res.ok) throw new Error("ncei manifest HTTP " + (res && res.status));
     return res.json();
   }).catch(function (err) {
@@ -2885,7 +2921,7 @@ function fetchNceiDay(day, sat, manifest) {
     }
   }
   if (path === null) return Promise.resolve(null);
-  var p = fetch(SOLAR_ARCHIVE_BASE + path).then(function (res) {
+  var p = fetchRetry(SOLAR_ARCHIVE_BASE + path).then(function (res) {
     if (!res || res.status === 404) return null;
     if (!res.ok) throw new Error("ncei HTTP " + res.status);
     // Un cuerpo descargado pero ilegible es un fichero invalido, no un fallo
@@ -2930,7 +2966,7 @@ function loadArchiveFor(points, depMs) {
       });
     });
   }).catch(function (err) {
-    // Sin esta traza, un 503 de raw.githubusercontent y un bloqueo del CSP dan
+    // Sin esta traza, un 503 del archivo y un bloqueo del CSP dan
     // exactamente el mismo mensaje en pantalla y no hay por donde empezar.
     if (typeof console !== "undefined" && console.warn) {
       console.warn("cosmic-rad: archivo solar no disponible —", err && err.message ? err.message : err);
@@ -4289,7 +4325,7 @@ function flightCalc(f, hpMV) {
 // ── Base de datos de fixes/waypoints (rutas de plan de vuelo FPL) ────────────
 // fixes.json: { NOMBRE: [latE4, lonE4, latE4, lonE4, ...] } con todas las variantes
 // globales de cada fix (hay nombres ambiguos: BDR=Bridgeport|Milas, etc.). Se
-// descarga bajo demanda (raw.githubusercontent, CSP ya lo permite) y se cachea.
+// descarga bajo demanda (mismo origen, CSP ya lo permite) y se cachea.
 var FIXES = null;
 var _fixesLoading = false;
 var _fixesCbs = [];
@@ -4336,7 +4372,7 @@ function ensureFixes(cb) {
   if (cb) _fixesCbs.push(cb);
   if (_fixesLoading) return;
   _fixesLoading = true;
-  fetch("https://raw.githubusercontent.com/ibpilot/cosmic-rad/main/fixes.json?v=" + APP_VERSION)
+  fetch("fixes.json?v=" + APP_VERSION)
     .then(function (r) { return r.json(); })
     .then(function (d) {
       FIXES = sanitizeFixes(d);

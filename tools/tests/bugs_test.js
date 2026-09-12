@@ -1084,7 +1084,7 @@ async function testFetchSolarManifestRetriesAfterHttpError() {
   let calls = 0;
   ctx.fetch = function () {
     calls++;
-    if (calls === 1) return Promise.resolve({ ok: false, status: 500 });
+    if (calls <= 3) return Promise.resolve({ ok: false, status: 500 });
     return Promise.resolve({ ok: true, json: function () { return Promise.resolve({ coverage: { days: [] } }); } });
   };
   try {
@@ -1093,7 +1093,7 @@ async function testFetchSolarManifestRetriesAfterHttpError() {
     ok("T8 la primera llamada rechaza", firstErr !== null);
     let secondErr = null;
     try { await ctx.fetchSolarManifest(); } catch (e) { secondErr = e; }
-    ok("T8 fetch llamado 2 veces (caché no envenenada)", calls === 2, calls);
+    ok("T8 fetch llamado 4 veces (caché no envenenada)", calls === 4, calls);
   } finally {
     ctx.fetch = realFetch;
   }
@@ -1112,17 +1112,17 @@ async function testFetchNcei() {
     let calls = 0, urls = [];
     ctx.fetch = function (u) {
       calls++; urls.push(u);
-      if (calls === 1) return Promise.resolve({ ok: false, status: 500 });
+      if (calls <= 3) return Promise.resolve({ ok: false, status: 500 });
       return Promise.resolve({ ok: true, json: () => Promise.resolve(MAN) });
     };
     let err = null;
     try { await ctx.fetchNceiManifest(); } catch (e) { err = e; }
     ok("F6 fallo HTTP del manifiesto rechaza", err !== null);
     const m = await ctx.fetchNceiManifest();
-    ok("F6 reintenta tras el fallo (cache no envenenada)", calls === 2, calls);
+    ok("F6 reintenta tras el fallo (cache no envenenada)", calls === 4, calls);
     ok("F6 pide ncei/manifest.json", urls[0].indexOf("ncei/manifest.json") !== -1, urls[0]);
     const m2 = await ctx.fetchNceiManifest();
-    ok("F6 segunda llamada usa cache", calls === 2 && m2 === m, calls);
+    ok("F6 segunda llamada usa cache", calls === 4 && m2 === m, calls);
 
     // La ruta sale del manifiesto, no se construye.
     ctx._nceiDayCache.clear();
@@ -1156,14 +1156,14 @@ async function testFetchNcei() {
     calls = 0;
     ctx.fetch = function () {
       calls++;
-      if (calls === 1) return Promise.resolve({ ok: false, status: 500 });
+      if (calls <= 3) return Promise.resolve({ ok: false, status: 500 });
       return Promise.resolve({ ok: true, json: () => Promise.resolve({ sat: "g18" }) });
     };
     err = null;
     try { await ctx.fetchNceiDay("2026-09-08", "18", MAN); } catch (e) { err = e; }
     ok("F6 fallo HTTP del dia rechaza", err !== null);
     const trasHttp = await ctx.fetchNceiDay("2026-09-08", "18", MAN);
-    ok("F6 dia reintenta tras fallo HTTP", calls === 2 && trasHttp.sat === "g18", calls);
+    ok("F6 dia reintenta tras fallo HTTP", calls === 4 && trasHttp.sat === "g18", calls);
 
     ctx._nceiDayCache.clear();
     calls = 0;
@@ -1826,11 +1826,102 @@ async function testLoadArchiveForNceiEndToEnd() {
   }
 }
 
+async function testSolarRetry() {
+console.log("\nF7 reintento de los 5xx transitorios");
+{
+  const realFetch = ctx.fetch;
+  const reset = () => {
+    ctx._solarManifestPromise = null;
+    ctx._nceiManifestPromise = null;
+    ctx._solarDayCache.clear();
+    ctx._nceiDayCache.clear();
+  };
+  const run = async (fn) => { reset(); try { return await fn(); } finally { ctx.fetch = realFetch; reset(); } };
+
+  await (async () => {
+    // 503 y luego 200: el manifiesto llega, y se han hecho DOS peticiones.
+    let n1 = 0;
+    const m1 = await run(async () => {
+      ctx.fetch = () => {
+        n1++;
+        return Promise.resolve(n1 === 1
+          ? { ok: false, status: 503 }
+          : { ok: true, status: 200, json: () => Promise.resolve({ coverage: { days: [] } }) });
+      };
+      return ctx.fetchSolarManifest();
+    });
+    ok("F7 un 503 se reintenta y la segunda vez entra", !!m1 && n1 === 2, n1);
+
+    // 503 siempre: se agotan los reintentos (3 peticiones) y propaga.
+    let n2 = 0, err2 = null;
+    await run(async () => {
+      ctx.fetch = () => { n2++; return Promise.resolve({ ok: false, status: 503 }); };
+      try { await ctx.fetchSolarManifest(); } catch (e) { err2 = e; }
+    });
+    ok("F7 503 permanente -> 1 + 2 reintentos y falla", err2 !== null && n2 === 3, n2 + " peticiones");
+
+    // 404 NO se reintenta: es dato ausente.
+    let n3 = 0;
+    const d3 = await run(async () => {
+      ctx.fetch = () => { n3++; return Promise.resolve({ ok: false, status: 404 }); };
+      return ctx.fetchSolarDay("2026-09-07");
+    });
+    ok("F7 un 404 no se reintenta", n3 === 2 && d3 === null, n3 + " peticiones");
+
+    // fetch que rechaza (red caida) tambien se reintenta.
+    let n4 = 0;
+    const m4 = await run(async () => {
+      ctx.fetch = () => {
+        n4++;
+        return n4 < 3 ? Promise.reject(new Error("red")) : Promise.resolve(
+          { ok: true, status: 200, json: () => Promise.resolve({ coverage: { days: [] } }) });
+      };
+      return ctx.fetchSolarManifest();
+    });
+    ok("F7 un fallo de red se reintenta", !!m4 && n4 === 3, n4);
+
+    // Un 503 en un fichero de dia tambien se reintenta: era el caso real que
+    // rompio la app el 2026-09-12 (los -diff.json frios daban 503 en raw).
+    let n5 = 0;
+    const d5 = await run(async () => {
+      ctx.fetch = (u) => {
+        n5++;
+        return Promise.resolve(n5 <= 2
+          ? { ok: false, status: 503 }
+          : { ok: true, status: 200, json: () => Promise.resolve({ sat: 18 }) });
+      };
+      return ctx.fetchSolarDay("2026-09-07");
+    });
+    ok("F7 un 503 en un fichero de dia se reintenta", !!d5 && n5 > 2, n5 + " peticiones");
+  })();
+}
+}
+
+// F7b — el HOST del archivo esta fijado. Sin esto, volver la base a
+// raw.githubusercontent no rompia ni un test, y es justo el cambio que arregla
+// el 503: raw cachea 600 s y en cada MISS va a un backend saturado.
+console.log("\nF7b el archivo se sirve desde Pages, no desde raw");
+{
+  ok("F7b SOLAR_ARCHIVE_BASE apunta a Pages del repo de datos",
+     ctx.SOLAR_ARCHIVE_BASE === "https://ibpilot.github.io/cosmic-rad-data/",
+     ctx.SOLAR_ARCHIVE_BASE);
+  ok("F7b ninguna peticion va a raw.githubusercontent",
+     html.indexOf("raw.githubusercontent") === -1,
+     html.indexOf("raw.githubusercontent"));
+  ok("F7b el CSP permite el host de Pages y NO raw",
+     /connect-src[^;]*https:\/\/ibpilot\.github\.io/.test(html) &&
+     !/connect-src[^;]*raw\.githubusercontent/.test(html));
+  ok("F7b airports.dat y fixes.json son del mismo origen",
+     html.indexOf('"data/airports.dat?v="') !== -1 &&
+     html.indexOf('fetch("fixes.json?v=" + APP_VERSION)') !== -1);
+}
+
 testRouteImportKeepsCuratedIcaoAliases()
   .then(testFetchSolarManifestRetriesAfterHttpError)
   .then(testFetchNcei)
   .then(testLoadArchiveForSwpcNoPideNcei)
   .then(testLoadArchiveForNceiEndToEnd)
+  .then(testSolarRetry)
   .then(function () {
   console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");
   process.exit(fail === 0 ? 0 : 1);
