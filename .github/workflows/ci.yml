@@ -27,7 +27,31 @@ jobs:
           let n=0;for(const s of h.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/g)){n++;
           try{new vm.Script(s[1])}catch(e){console.log("FAIL "+n+": "+e.message);process.exit(1)}}
           console.log("SYNTAX OK ("+n+")")'
+      - name: Sintaxis de todos los scripts del operador
+        run: |
+          python3 -m py_compile tools/*.py tools/tests/*.py
+          find tools -name '*.js' -print0 | xargs -0 -n1 node --check
+      - name: El runtime SEP-2 embebido coincide con su fuente
+        run: python3 tools/embed_sep_runtime.py --check
       - name: Suite de regresión (bugs)
         run: node tools/tests/bugs_test.js
       - name: Suite de la rejilla de dosis
         run: node tools/tests/grid_test.js
+      - name: Suite de eventos solares (GLE)
+        run: node tools/tests/sep_test.js
+      - name: Tests del pipeline de GLE
+        run: |
+          cd tools
+          python3 -m unittest test_gle_nmdb test_gle_fit test_build_gle test_holdout_gle test_embed_gle -v
+      - name: Tests del driver SEP (MY_MODEL.OUT + puerta de unidades)
+        run: |
+          cd tools
+          python3 -m unittest test_cari7_sep -v
+      - name: Tests de las puertas de linealidad (T5)
+        run: |
+          cd tools
+          python3 -m unittest test_cari7_sep_linearity -v
+      - name: Tests del operador nodal SEP-2 (Python)
+        run: python3 -m unittest tools.test_cari7_sep_operator -v
+      - name: Tests del Module runtime SEP-2 (Node)
+        run: node tools/tests/sep_operator_test.js

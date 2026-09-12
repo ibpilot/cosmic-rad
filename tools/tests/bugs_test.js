@@ -13,7 +13,7 @@ let app = scripts[scripts.length - 1].replace(/ReactDOM\.createRoot\([\s\S]*$/, 
 
 const ctx = {
   console, atob, Math, JSON, Date, isFinite, parseInt, parseFloat, String, Number,
-  Array, Object, Boolean, Error, TypeError, RegExp, Float32Array, Uint8Array,
+  Array, Object, Boolean, Error, TypeError, RegExp, Float32Array, Uint8Array, Map, Promise,
   fetch: () => Promise.reject(new Error("no net in tests")),
   navigator: { userAgent: "node" },
   localStorage: { getItem: () => null, setItem: () => {}, removeItem: () => {} },
@@ -625,7 +625,592 @@ async function testRouteImportKeepsCuratedIcaoAliases() {
      calculated && calculated.distKm);
 }
 
-testRouteImportKeepsCuratedIcaoAliases().then(function () {
+console.log("\nT10 ocurrencias");
+{
+  // Vuelos del Paso 0 (dosis de referencia fijadas con el código sin cambios).
+  const A = { orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
+  const B = { orig: "MAD", dest: "JFK", legs: 3, flIdx: 2, depDate: "2021-10-28", depTime: "14:00" };
+  const C = { orig: "LHR", dest: "NRT", legs: 2, flIdx: 1,
+    track: [[null, 51.5, -0.4, 10.668], [null, 60, 60, 11.0], [null, 35.7, 139.8, 10.668]] };
+  const REF = { A: 27.521219708117496, B: 35.435214508544320, C: 45.904099010735550 };
+  const Bh = ctx.hydrateFlight(B);
+
+  // M1 — la migración no cambia ninguna dosis (igualdad exacta).
+  ok("M1 migración A idéntica", ctx.flightCalc(ctx.hydrateFlight(A), 650).doseUsv === REF.A,
+     ctx.flightCalc(ctx.hydrateFlight(A), 650).doseUsv);
+  ok("M1 migración B idéntica", ctx.flightCalc(ctx.hydrateFlight(B), 650).doseUsv === REF.B,
+     ctx.flightCalc(ctx.hydrateFlight(B), 650).doseUsv);
+  ok("M1 migración C idéntica", ctx.flightCalc(ctx.hydrateFlight(C), 650).doseUsv === REF.C,
+     ctx.flightCalc(ctx.hydrateFlight(C), 650).doseUsv);
+
+  // M2 — un vuelo sin occurrences hidrata SIN la clave.
+  const months = ctx.parseBackup(JSON.stringify({ version: 1, months: { "2024-05": [A, B, C] } }));
+  ok("M2 backup parseado", months && months["2024-05"] && months["2024-05"].length === 3);
+  months["2024-05"].forEach((fl, i) => {
+    const h = ctx.hydrateFlight(fl);
+    ok("M2 vuelo " + i + " sin clave occurrences", !("occurrences" in h));
+  });
+
+  // M3 — ida y vuelta split → collapse devuelve el vuelo original.
+  const back = ctx.collapseOccurrences(ctx.splitLegs(Bh));
+  const canon = o => JSON.stringify(o, Object.keys(o).sort());
+  ok("M3 round-trip deep-equal", back !== null && canon(back) === canon(Bh),
+     back && canon(back) + " vs " + canon(Bh));
+
+  // M4 — reparto de legs: la primera ocurrencia hereda fecha, el resto no.
+  const sp = ctx.splitLegs(Bh);
+  ok("M4 tres ocurrencias", sp.occurrences.length === 3, sp.occurrences.length);
+  ok("M4 [0] con fecha y programado",
+     sp.occurrences[0].depDate === "2021-10-28" && sp.occurrences[0].state === "programado",
+     JSON.stringify(sp.occurrences[0]));
+  ok("M4 [1] sin fecha y esperando_fecha",
+     sp.occurrences[1].depDate === undefined && sp.occurrences[1].state === "esperando_fecha",
+     JSON.stringify(sp.occurrences[1]));
+  ok("M4 [2] sin fecha y esperando_fecha",
+     sp.occurrences[2].depDate === undefined && sp.occurrences[2].state === "esperando_fecha",
+     JSON.stringify(sp.occurrences[2]));
+
+  // M5 — legs:1 no se desglosa: mismo objeto.
+  const f1 = { orig: "MAD", dest: "JFK", legs: 1 };
+  ok("M5 legs:1 devuelve el mismo objeto", ctx.splitLegs(f1) === f1);
+
+  // M6 — con una ocurrencia incorporada no se puede colapsar.
+  const conInc = { orig: "MAD", dest: "JFK", legs: 2, occurrences: [
+    ctx.makeOccurrence("2024-05-11", "02:00"),
+    { id: 1, depDate: "2024-05-11", depTime: "03:00", state: "incorporada", result: { lowUsv: 1, highUsv: 2 } }
+  ] };
+  ok("M6 collapse null con incorporada", ctx.collapseOccurrences(conInc) === null);
+  ok("M6 collapse OK sin incorporada",
+     ctx.collapseOccurrences({ orig: "MAD", occurrences: [{ state: "programado" }] }) !== null);
+
+  // M7 — sin fecha u hora no hay cifra SEP.
+  ok("M7 sin fecha nunca da cifra",
+     ctx.occSepFigure({ state: "incorporada", result: { lowUsv: 1, highUsv: 3 } }) === null);
+  ok("M7 con fecha da la cifra",
+     JSON.stringify(ctx.occSepFigure({ state: "incorporada", depDate: "2024-05-11", depTime: "02:00",
+       result: { lowUsv: 1, highUsv: 3 } })) === '{"lowUsv":1,"highUsv":3}');
+
+  // M8 — resultado invertido (low > high) se descarta y marca incompleto.
+  const inv = ctx.hydrateOccurrence({ state: "incorporada", depDate: "2024-05-11", depTime: "02:00",
+    result: { lowUsv: 5, highUsv: 2 } });
+  ok("M8 result invertido → null", inv.result === null, JSON.stringify(inv.result));
+  ok("M8 state → incompleto", inv.state === "incompleto", inv.state);
+
+  // M9 — estados y objetos basura se sanean.
+  ok("M9 state desconocido → esperando_fecha", ctx.hydrateOccurrence({ state: "hackeado" }).state === "esperando_fecha");
+  ok("M9 no-objeto → null", ctx.hydrateOccurrence("x") === null);
+
+  // M10 — persistencia: las ocurrencias sobreviven al JSON.
+  const round = ctx.hydrateFlight(JSON.parse(JSON.stringify(ctx.serializeFlight(ctx.splitLegs(Bh)))));
+  ok("M10 tres ocurrencias tras round-trip",
+     Array.isArray(round.occurrences) && round.occurrences.length === 3,
+     round.occurrences && round.occurrences.length);
+  ok("M10 depDate/state intactos",
+     Array.isArray(round.occurrences) &&
+       round.occurrences.map(o => o.depDate + "/" + o.state).join(",") ===
+         "2021-10-28/programado,undefined/esperando_fecha,undefined/esperando_fecha",
+     round.occurrences && round.occurrences.map(o => o.depDate + "/" + o.state).join(","));
+
+  // M11 — instante UTC canónico y hora imposible.
+  ok("M11 depMsOf(makeOccurrence) === Date.UTC",
+     ctx.depMsOf(ctx.makeOccurrence("2024-05-11", "01:30")) === Date.UTC(2024, 4, 11, 1, 30));
+  ok("M11 hora 25:00 → esperando_fecha",
+     ctx.makeOccurrence("2024-05-11", "25:00").state === "esperando_fecha");
+
+  // M12 — un backup con `occurrences` que no es array no deja basura en el vuelo.
+  ok("M12 occurrences no-array se elimina al hidratar",
+     ["x", {}, 7, null].every(v => !("occurrences" in ctx.hydrateFlight({orig: "MAD", dest: "JFK", occurrences: v}))));
+}
+
+console.log("\nT11 ocurrencias UI");
+{
+  const FIXA = path.join(REPO, "tools", "fixtures", "goes", "archive");
+  const readJ = (n) => JSON.parse(fs.readFileSync(path.join(FIXA, n), "utf8"));
+  const OCCVIS = {
+    esperando_fecha: "pendiente", programado: "pendiente", esperando_datos: "pendiente",
+    incompleto: "pendiente", estimacion_disponible: "disponible", modelo_nuevo: "disponible",
+    incorporada: "revisada", sin_senal: "revisada", fuera_de_rango: "revisada",
+    noaa_no_disponible: "aviso"
+  };
+  const occ = (date, time, state, extra) => Object.assign({
+    id: 1, depDate: date, depTime: time, timeKind: "programada",
+    state: state || "programado", noaaCapture: null, modelVersion: null, result: null
+  }, extra || {});
+  const FLIGHT = { orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
+  const DEP = Date.UTC(2026, 8, 9, 6, 0);
+  const NOW_AFTER = DEP + 24 * 3600 * 1000;
+
+  // U1 — la tabla cubre los 10 estados y solo devuelve uno de los cuatro visibles.
+  const u1ok = ctx.OCC_STATES.every((s) =>
+    ["pendiente", "disponible", "revisada", "aviso"].indexOf(ctx.occVisible(s)) !== -1 &&
+    ctx.occVisible(s) === OCCVIS[s]);
+  ok("U1 occVisible cubre los 10 estados según la tabla C2", u1ok,
+     ctx.OCC_STATES.map((s) => s + "=" + ctx.occVisible(s)).join(","));
+
+  // U2 — estado desconocido: error, nunca un valor por defecto.
+  let u2 = null;
+  try { ctx.occVisible("hackeado"); } catch (e) { u2 = e.message; }
+  ok("U2 occVisible('hackeado') lanza", typeof u2 === "string" && u2.indexOf("hackeado") !== -1, u2);
+
+  // U3 — adaptador contra los fixtures reales 09-08 + 09-09.
+  const d08 = readJ("2026-09-08-diff.json"), i08 = readJ("2026-09-08.json");
+  const d09 = readJ("2026-09-09-diff.json"), i09 = readJ("2026-09-09.json");
+  const adapted = ctx.solarDayAdapt([d08, d09], [i08, i09]);
+  const sortedOk = adapted.samples.every((s, i) => i === 0 || s.tMs >= adapted.samples[i - 1].tMs);
+  ok("U3 13 canales en orden",
+     adapted.channels.length === 13 &&
+     adapted.channels.map((c) => c.name).join(",") ===
+       "P1,P2A,P2B,P3,P4,P5,P6,P7,P8A,P8B,P8C,P9,P10",
+     adapted.channels.map((c) => c.name).join(","));
+  ok("U3 P1 1020/1860 keV",
+     adapted.channels[0].lo_keV === 1020 && adapted.channels[0].hi_keV === 1860,
+     JSON.stringify(adapted.channels[0]));
+  ok("U3 576 muestras ordenadas", adapted.samples.length === 576 && sortedOk, adapted.samples.length);
+  const int0 = i08.samples[0].flux[">=500 MeV"];
+  ok("U3 int500 de la muestra 0 = integral del mismo t",
+     adapted.samples[0].tMs === Date.parse("2026-09-08T00:00:00Z") && adapted.samples[0].int500 === int0,
+     adapted.samples[0].int500 + " vs " + int0);
+
+  // U4 — sin integral para ese t: undefined, nunca 0.
+  const noInt = ctx.solarDayAdapt([d08], []);
+  ok("U4 sin integral int500 es undefined (no 0)",
+     noInt.samples.length > 0 && noInt.samples[0].int500 === undefined, noInt.samples[0].int500);
+
+  const spy = { calls: 0, fn: function () { spy.calls++; return { ok: true, state: "sin_senal" }; } };
+
+  // U5 — regla 3: la baseline entera debe caer dentro del archivo.
+  const r5 = ctx.occEvaluate(FLIGHT, occ("2026-08-30", "00:30"), null, NOW_AFTER, spy.fn);
+  ok("U5 occ del 08-30 00:30 → fuera_de_rango", r5.state === "fuera_de_rango", r5.state);
+  ok("U5 routeFn no se llama", spy.calls === 0, spy.calls);
+
+  // U6 — regla 5: vuelo aun no aterrizado.
+  const r6 = ctx.occEvaluate(FLIGHT, occ("2026-09-09", "06:00"), null, DEP, spy.fn);
+  ok("U6 aterriza despues de nowMs → programado", r6.state === "programado", r6.state);
+  ok("U6 routeFn no se llama", spy.calls === 0, spy.calls);
+
+  // U7 — regla 6: sin archivo (red caida).
+  const r7 = ctx.occEvaluate(FLIGHT, occ("2026-09-09", "06:00"), null, NOW_AFTER, spy.fn);
+  ok("U7 archive null → noaa_no_disponible", r7.state === "noaa_no_disponible", r7.state);
+
+  // U8 — regla 7: dia provisional → esperando_datos; permanente → incompleto.
+  const archProv = {
+    manifest: { coverage: { days: ["2026-09-08"] },
+                differential: { coverage: { days: ["2026-09-08"] },
+                                incomplete_days: [{ day: "2026-09-09", permanent: false }] } },
+    days: { "2026-09-08": { diff: { samples: [] }, int: { samples: [] } } }
+  };
+  const archPerm = {
+    manifest: { coverage: { days: ["2026-09-08"] },
+                differential: { coverage: { days: ["2026-09-08"] },
+                                incomplete_days: [{ day: "2026-09-09", permanent: true }] } },
+    days: { "2026-09-08": { diff: { samples: [] }, int: { samples: [] } } }
+  };
+  const r8a = ctx.occEvaluate(FLIGHT, occ("2026-09-09", "06:00"), archProv, NOW_AFTER, spy.fn);
+  const r8b = ctx.occEvaluate(FLIGHT, occ("2026-09-09", "06:00"), archPerm, NOW_AFTER, spy.fn);
+  ok("U8 dia provisional → esperando_datos", r8a.state === "esperando_datos", r8a.state);
+  ok("U8 dia permanente → incompleto", r8b.state === "incompleto", r8b.state);
+
+  // U9 — regla 8: mapeo de SepModel.route.
+  const archOk = {
+    manifest: { coverage: { days: ["2026-09-08", "2026-09-09"] },
+                differential: { coverage: { days: ["2026-09-08", "2026-09-09"] } } },
+    days: {
+      "2026-09-08": { diff: { samples: [] }, int: { samples: [] } },
+      "2026-09-09": { diff: { samples: [] }, int: { samples: [] } }
+    }
+  };
+  const U9O = occ("2026-09-09", "06:00");
+  const r9a = ctx.occEvaluate(FLIGHT, U9O, archOk, NOW_AFTER,
+    () => ({ ok: true, state: "detectado", range: { lowUsv: 2, highUsv: 5 } }));
+  const r9b = ctx.occEvaluate(FLIGHT, U9O, archOk, NOW_AFTER,
+    () => ({ ok: false, state: "pendiente" }));
+  const r9c = ctx.occEvaluate(FLIGHT, U9O, archOk, NOW_AFTER,
+    () => { throw new Error("boom"); });
+  const r9d = ctx.occEvaluate(FLIGHT, U9O, archOk, NOW_AFTER,
+    () => ({ ok: true, state: "detectado" }));
+  ok("U9 rango → estimacion_disponible {2,5}",
+     r9a.state === "estimacion_disponible" && r9a.result &&
+     r9a.result.lowUsv === 2 && r9a.result.highUsv === 5, JSON.stringify(r9a));
+  ok("U9 !r.ok → incompleto", r9b.state === "incompleto", r9b.state);
+  ok("U9 route lanzando → incompleto", r9c.state === "incompleto", r9c.state);
+  ok("U9 detectado sin rango → sin_senal", r9d.state === "sin_senal", r9d.state);
+
+  // U10 — regla 1: version del modelo.
+  const spy10 = { calls: 0, fn: function () { spy10.calls++; return { ok: true, state: "sin_senal" }; } };
+  const incOld = occ("2026-09-09", "06:00", "incorporada",
+    { modelVersion: "viejo", result: { lowUsv: 1, highUsv: 2 } });
+  const r10a = ctx.occEvaluate(FLIGHT, incOld, null, NOW_AFTER, spy10.fn);
+  const incCur = occ("2026-09-09", "06:00", "incorporada",
+    { modelVersion: ctx.SEP_MODEL_VERSION, result: { lowUsv: 1, highUsv: 2 } });
+  const r10b = ctx.occEvaluate(FLIGHT, incCur, null, NOW_AFTER, spy10.fn);
+  ok("U10 version vieja → modelo_nuevo con su result",
+     r10a.state === "modelo_nuevo" && r10a.result && r10a.result.lowUsv === 1 && r10a.result.highUsv === 2,
+     JSON.stringify(r10a));
+  ok("U10 version actual → incorporada intacta",
+     r10b.state === "incorporada" && r10b.result && r10b.result.highUsv === 2, JSON.stringify(r10b));
+  ok("U10 routeFn no se llama", spy10.calls === 0, spy10.calls);
+
+  // U11 — occRoutePoints: track con minutos y ortodromica MAD→JFK.
+  const O11 = occ("2026-09-09", "06:00");
+  const withTrack = { orig: "MAD", dest: "JFK", flIdx: 1,
+    track: [[0, 40, -3, 10.668], [60, 41, -10, 10.668]] };
+  const p11 = ctx.occRoutePoints(withTrack, O11);
+  const depMs = ctx.depMsOf(O11);
+  ok("U11 track: tMs = depMs y depMs + 3600000",
+     p11 && p11.length === 2 && p11[0].tMs === depMs && p11[1].tMs === depMs + 3600000,
+     p11 && JSON.stringify(p11.map((p) => p.tMs)));
+  const p11b = ctx.occRoutePoints(FLIGHT, O11);
+  const A = ctx.activeDB["MAD"], B = ctx.activeDB["JFK"];
+  const expLast = depMs + ctx.gcDistance(A.lat, A.lon, B.lat, B.lon) / 830 * 3600000;
+  ok("U11 sin track: 32 puntos y el último aterriza a dist/830 h",
+     p11b && p11b.length === 32 && Math.abs(p11b[31].tMs - expLast) < 1,
+     p11b && p11b.length + " " + (p11b[31].tMs - expLast));
+
+  // U12 — invariante: los vuelos de T10 conservan su dosis exacta.
+  const A12 = { orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
+  const B12 = { orig: "MAD", dest: "JFK", legs: 3, flIdx: 2, depDate: "2021-10-28", depTime: "14:00" };
+  const C12 = { orig: "LHR", dest: "NRT", legs: 2, flIdx: 1,
+    track: [[null, 51.5, -0.4, 10.668], [null, 60, 60, 11.0], [null, 35.7, 139.8, 10.668]] };
+  const REF = { A: 27.521219708117496, B: 35.435214508544320, C: 45.904099010735550 };
+  ok("U12 A idéntica", ctx.flightCalc(ctx.hydrateFlight(A12), 650).doseUsv === REF.A,
+     ctx.flightCalc(ctx.hydrateFlight(A12), 650).doseUsv);
+  ok("U12 B idéntica", ctx.flightCalc(ctx.hydrateFlight(B12), 650).doseUsv === REF.B,
+     ctx.flightCalc(ctx.hydrateFlight(B12), 650).doseUsv);
+  ok("U12 C idéntica", ctx.flightCalc(ctx.hydrateFlight(C12), 650).doseUsv === REF.C,
+     ctx.flightCalc(ctx.hydrateFlight(C12), 650).doseUsv);
+
+  // T11-fixes — regresiones de la revisión (F1-F4).
+  const flightA = { orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
+  const OCC0909 = occ("2026-09-09", "06:00");
+  const mkManifest = (cov, covDiff, inc, incDiff) => ({
+    coverage: { days: cov.slice() },
+    differential: { coverage: { days: covDiff.slice() }, incomplete_days: (incDiff || []).slice() },
+    incomplete_days: (inc || []).slice()
+  });
+  const emptyDays = (days) => {
+    const m = {};
+    days.forEach((d) => { m[d] = { diff: { samples: [] }, int: { samples: [] } }; });
+    return m;
+  };
+  const spyOf = (res) => {
+    const s = { calls: 0, arg: null };
+    s.fn = function (a) { s.calls++; s.arg = a; return res || { ok: true, state: "sin_senal" }; };
+    return s;
+  };
+
+  // T1 — dia en coverage.days top-level pero no en differential.coverage.days.
+  {
+    const s = spyOf();
+    const arch = { manifest: mkManifest(["2026-09-08", "2026-09-09"], [], [], []),
+                   days: emptyDays(["2026-09-08", "2026-09-09"]) };
+    const r = ctx.occEvaluate(flightA, OCC0909, arch, NOW_AFTER, s.fn);
+    ok("T1 cov sin covDiff → esperando_datos", r.state === "esperando_datos", r.state);
+    ok("T1 routeFn no se llama", s.calls === 0, s.calls);
+  }
+
+  // T2 — la baseline de 12 h necesita el dia anterior (03:00Z → 09-08).
+  {
+    const s = spyOf();
+    const arch = { manifest: mkManifest(["2026-09-08", "2026-09-09"], ["2026-09-08", "2026-09-09"]),
+                   days: emptyDays(["2026-09-09"]) };
+    const r = ctx.occEvaluate(flightA, occ("2026-09-09", "03:00"), arch, NOW_AFTER, s.fn);
+    ok("T2 falta 09-08 → esperando_datos", r.state === "esperando_datos", r.state);
+    ok("T2 routeFn no se llama", s.calls === 0, s.calls);
+  }
+
+  // T3/T4 — el espía recibe la entrada exacta del modelo (fixtures reales).
+  {
+    const s = spyOf();
+    const arch = { manifest: mkManifest(["2026-09-08", "2026-09-09"], ["2026-09-08", "2026-09-09"]),
+                   days: { "2026-09-08": { diff: d08, int: i08 }, "2026-09-09": { diff: d09, int: i09 } } };
+    const o = occ("2026-09-09", "03:00");
+    const pts = ctx.occRoutePoints(flightA, o);
+    ctx.occEvaluate(flightA, o, arch, NOW_AFTER, s.fn);
+    ok("T3 startMs = depMsOf(occ)", s.arg && s.arg.startMs === ctx.depMsOf(o), s.arg && s.arg.startMs);
+    ok("T3 points = occRoutePoints(f, occ)", s.arg && s.arg.points.length === pts.length,
+       s.arg && s.arg.points.length);
+    ok("T3 channels = 13", s.arg && s.arg.channels.length === 13, s.arg && s.arg.channels.length);
+    ok("T4 operator = SEP_DOSE del contexto", s.arg && s.arg.operator === ctx.SEP_DOSE,
+       s.arg && s.arg.operator);
+  }
+
+  // T5 — detectado sin rango: evento activo, visible como sin_senal.
+  {
+    const arch = { manifest: mkManifest(["2026-09-08", "2026-09-09"], ["2026-09-08", "2026-09-09"]),
+                   days: emptyDays(["2026-09-08", "2026-09-09"]) };
+    const s = spyOf({ ok: true, state: "detectado", range: null });
+    const r = ctx.occEvaluate(flightA, OCC0909, arch, NOW_AFTER, s.fn);
+    ok("T5 detectado sin rango → sin_senal", r.state === "sin_senal", r.state);
+    ok("T5 eventActive true", r.eventActive === true, r.eventActive);
+  }
+
+  // T6 — manifest completo, archive.days sin uno de los dias.
+  {
+    const s = spyOf();
+    const arch = { manifest: mkManifest(["2026-09-08", "2026-09-09"], ["2026-09-08", "2026-09-09"]),
+                   days: emptyDays(["2026-09-09"]) };
+    const r = ctx.occEvaluate(flightA, OCC0909, arch, NOW_AFTER, s.fn);
+    ok("T6 archive.days incompleto → esperando_datos", r.state === "esperando_datos", r.state);
+    ok("T6 routeFn no se llama", s.calls === 0, s.calls);
+  }
+
+  // T7 — occNeedsArchive: solo se pide el archivo cuando hace falta.
+  {
+    const landed = occ("2026-09-09", "06:00");
+    ok("T7 antes del archivo → false",
+       ctx.occNeedsArchive(flightA, occ("2026-08-01", "06:00"), NOW_AFTER) === false);
+    ok("T7 vuelo no aterrizado → false",
+       ctx.occNeedsArchive(flightA, occ("2026-09-09", "06:00"),
+         ctx.depMsOf(occ("2026-09-09", "06:00"))) === false);
+    ok("T7 sin fecha → false", ctx.occNeedsArchive(flightA, occ(undefined, undefined), NOW_AFTER) === false);
+    ok("T7 incorporada → false",
+       ctx.occNeedsArchive(flightA, occ("2026-09-09", "06:00", "incorporada"), NOW_AFTER) === false);
+    ok("T7 aterrizado tras el archivo → true",
+       ctx.occNeedsArchive(flightA, landed, NOW_AFTER) === true);
+  }
+}
+
+console.log("\nSelectores fecha/hora — borrador local + confirmación");
+{
+  const dp = ctx.depDraftPatch;
+
+  // D1 — borrador completo y válido → los dos campos.
+  const d1 = dp({ depDate: "2026-09-01", depTime: "14:30" });
+  ok("D1 borrador completo devuelve los campos",
+     JSON.stringify(d1) === '{"depDate":"2026-09-01","depTime":"14:30"}',
+     JSON.stringify(d1));
+
+  // D2 — hora ausente o incompleta → null (la hora sin minutos no vale).
+  const d2 = [{ depDate: "2026-09-01" }, { depDate: "2026-09-01", depTime: "14" },
+    { depDate: "2026-09-01", depTime: "" }];
+  ok("D2 hora incompleta o ausente → null", d2.every((d) => dp(d) === null),
+     JSON.stringify(d2.map(dp)));
+
+  // D3 — fecha ausente o mal formada → null.
+  const d3 = [{ depTime: "14:30" }, { depDate: "1-9-2026", depTime: "14:30" }];
+  ok("D3 fecha ausente o mal formada → null", d3.every((d) => dp(d) === null),
+     JSON.stringify(d3.map(dp)));
+
+  // D4 — valores imposibles → null (hora 25:00, 31 de febrero).
+  const d4 = [{ depDate: "2026-09-01", depTime: "25:00" },
+    { depDate: "2026-02-31", depTime: "10:00" }];
+  ok("D4 valores imposibles → null", d4.every((d) => dp(d) === null),
+     JSON.stringify(d4.map(dp)));
+
+  // D5 — entradas basura: no lanzan y dan null.
+  let d5threw = null, d5out = null;
+  try { d5out = [dp(null), dp("x"), dp({ depDate: 5, depTime: 7 })]; }
+  catch (e) { d5threw = e.message; }
+  ok("D5 entradas basura no lanzan y dan null",
+     d5threw === null && d5out && d5out.every((v) => v === null),
+     d5threw === null ? JSON.stringify(d5out) : d5threw);
+
+  // D6 — el texto del estado cita la fecha de inicio y no dice "revisado".
+  const es6 = ctx.LANG.es.occState_fuera_de_rango;
+  const en6 = ctx.LANG.en.occState_fuera_de_rango;
+  ok("D6 ES menciona 2026 y no 'revis'",
+     es6.indexOf("2026") !== -1 && es6.toLowerCase().indexOf("revis") === -1, es6);
+  ok("D6 EN menciona 2026 y no 'review'",
+     en6.indexOf("2026") !== -1 && en6.toLowerCase().indexOf("review") === -1, en6);
+}
+
+// T8 — un fallo HTTP no envenena la caché del manifest (F1); requiere async.
+async function testFetchSolarManifestRetriesAfterHttpError() {
+  console.log("\nT8 — un fallo HTTP no envenena la caché del manifest");
+  const realFetch = ctx.fetch;
+  let calls = 0;
+  ctx.fetch = function () {
+    calls++;
+    if (calls === 1) return Promise.resolve({ ok: false, status: 500 });
+    return Promise.resolve({ ok: true, json: function () { return Promise.resolve({ coverage: { days: [] } }); } });
+  };
+  try {
+    let firstErr = null;
+    try { await ctx.fetchSolarManifest(); } catch (e) { firstErr = e; }
+    ok("T8 la primera llamada rechaza", firstErr !== null);
+    let secondErr = null;
+    try { await ctx.fetchSolarManifest(); } catch (e) { secondErr = e; }
+    ok("T8 fetch llamado 2 veces (caché no envenenada)", calls === 2, calls);
+  } finally {
+    ctx.fetch = realFetch;
+  }
+}
+
+console.log("\nT12 lote");
+{
+  const hp = 650;
+  // Vuelos a mano con ids fijos; `evals` inventados: estos tests no tocan red.
+  const mkOcc = (fields) =>
+    Object.assign(ctx.makeOccurrence(fields.depDate, fields.depTime, fields.timeKind), fields);
+
+  // B1 — monthDoseParts: manda el numero de ocurrencias, no `legs`.
+  {
+    const fNo = { id: 901, orig: "MAD", dest: "JFK", legs: 3, flIdx: 1 };
+    const c = ctx.flightCalc(fNo, hp).doseUsv;
+    ok("B1 legs:3 sin occurrences → gcrUsv === flightCalc×3",
+       ctx.monthDoseParts([fNo], hp).gcrUsv === c * 3, ctx.monthDoseParts([fNo], hp).gcrUsv);
+    const fOcc = { id: 902, orig: "MAD", dest: "JFK", legs: 3, flIdx: 1, occurrences: [
+      mkOcc({ id: 9021, depDate: "2026-09-01", depTime: "10:00", timeKind: "real" }),
+      mkOcc({ id: 9022, depDate: "2026-09-02", depTime: "10:00", timeKind: "real" })
+    ]};
+    ok("B1 mismo vuelo con 2 occurrences → gcrUsv === flightCalc×2",
+       ctx.monthDoseParts([fOcc], hp).gcrUsv === c * 2, ctx.monthDoseParts([fOcc], hp).gcrUsv);
+  }
+
+  // B2 — solo las incorporadas con cifra suman al rango SEP.
+  {
+    const oInc = mkOcc({ id: 9031, depDate: "2026-09-01", depTime: "10:00", timeKind: "real",
+      state: "incorporada", result: { lowUsv: 2, highUsv: 5 }, modelVersion: ctx.SEP_MODEL_VERSION });
+    const oDisp = mkOcc({ id: 9032, depDate: "2026-09-02", depTime: "10:00", timeKind: "real",
+      state: "estimacion_disponible", result: { lowUsv: 100, highUsv: 200 } });
+    const f = { id: 903, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oInc, oDisp] };
+    const p = ctx.monthDoseParts([f], hp);
+    ok("B2 sepLowUsv solo de la incorporada", p.sepLowUsv === 2, p.sepLowUsv);
+    ok("B2 sepHighUsv solo de la incorporada", p.sepHighUsv === 5, p.sepHighUsv);
+  }
+
+  // B3 — elegible solo con estimacion_disponible Y timeKind real.
+  {
+    const oReal = mkOcc({ id: 9041, depDate: "2026-09-01", depTime: "10:00", timeKind: "real" });
+    const oProg = mkOcc({ id: 9042, depDate: "2026-09-02", depTime: "10:00", timeKind: "programada" });
+    const f = { id: 904, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oReal, oProg] };
+    const evals = {
+      9041: { state: "estimacion_disponible", result: { lowUsv: 1, highUsv: 2 } },
+      9042: { state: "estimacion_disponible", result: { lowUsv: 1, highUsv: 2 } }
+    };
+    const plan = ctx.batchPlan([f], evals);
+    ok("B3 real es elegible",
+       plan.eligible.length === 1 && plan.eligible[0].occId === 9041, JSON.stringify(plan.eligible));
+    ok("B3 programada excluida por hora_estimada",
+       plan.excluded.length === 1 && plan.excluded[0].reason === "hora_estimada",
+       JSON.stringify(plan.excluded));
+  }
+
+  // B4 — motivos por orden: incorporada, sin evaluar y el estado del eval.
+  {
+    const oInc = mkOcc({ id: 9051, depDate: "2026-09-01", depTime: "10:00", timeKind: "real",
+      state: "incorporada", result: { lowUsv: 1, highUsv: 2 } });
+    const oNoEval = mkOcc({ id: 9052, depDate: "2026-09-02", depTime: "10:00", timeKind: "real" });
+    const oWait = mkOcc({ id: 9053, depDate: "2026-09-03", depTime: "10:00", timeKind: "real" });
+    const f = { id: 905, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oInc, oNoEval, oWait] };
+    const plan = ctx.batchPlan([f], { 9053: { state: "esperando_datos", result: null } });
+    const byId = {};
+    plan.excluded.forEach((e) => { byId[e.occId] = e.reason; });
+    ok("B4 incorporada → ya_incorporada", byId[9051] === "ya_incorporada", byId[9051]);
+    ok("B4 sin entrada en evals → sin_evaluar", byId[9052] === "sin_evaluar", byId[9052]);
+    ok("B4 esperando_datos → esperando_datos", byId[9053] === "esperando_datos", byId[9053]);
+    ok("B4 nada elegible", plan.eligible.length === 0, JSON.stringify(plan.eligible));
+  }
+
+  // B5 — result invalido con estado disponible: no elegible.
+  {
+    const o1 = mkOcc({ id: 9061, depDate: "2026-09-01", depTime: "10:00", timeKind: "real" });
+    const o2 = mkOcc({ id: 9062, depDate: "2026-09-02", depTime: "10:00", timeKind: "real" });
+    const f = { id: 906, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [o1, o2] };
+    const plan = ctx.batchPlan([f], {
+      9061: { state: "estimacion_disponible", result: { lowUsv: 5, highUsv: 2 } },
+      9062: { state: "estimacion_disponible", result: { lowUsv: Infinity, highUsv: 2 } }
+    });
+    ok("B5 high<low no elegible", plan.eligible.length === 0, JSON.stringify(plan.eligible));
+    ok("B5 lowUsv no finito no elegible", plan.excluded.length === 2, JSON.stringify(plan.excluded));
+  }
+
+  // B6 — applyBatch marca solo las elegibles y conserva noaaCapture.
+  {
+    const cap = { sample: 1 };
+    const oElig = mkOcc({ id: 9071, depDate: "2026-09-01", depTime: "10:00", timeKind: "real",
+      state: "estimacion_disponible", result: null, noaaCapture: cap });
+    const oOther = mkOcc({ id: 9072, depDate: "2026-09-02", depTime: "10:00", timeKind: "real" });
+    const f = { id: 907, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oElig, oOther] };
+    const plan = { eligible: [{ flightId: 907, occId: 9071, result: { lowUsv: 3, highUsv: 7 } }], excluded: [] };
+    const res = ctx.applyBatch([f], plan);
+    const out = res.flights[0].occurrences;
+    ok("B6 elegible → incorporada", out[0].state === "incorporada", out[0].state);
+    ok("B6 result copiado", JSON.stringify(out[0].result) === '{"lowUsv":3,"highUsv":7}',
+       JSON.stringify(out[0].result));
+    ok("B6 modelVersion === SEP_MODEL_VERSION", out[0].modelVersion === ctx.SEP_MODEL_VERSION,
+       out[0].modelVersion);
+    ok("B6 noaaCapture intacto (===)", out[0].noaaCapture === cap, out[0].noaaCapture);
+    ok("B6 la no elegible sale por identidad", out[1] === oOther, out[1] === oOther);
+    ok("B6 result es objeto nuevo", out[0].result !== plan.eligible[0].result,
+       out[0].result === plan.eligible[0].result);
+  }
+
+  // B7 — ida y vuelta byte a byte, con una ocurrencia sin clave modelVersion.
+  {
+    const oSinVer = { id: 9081, depDate: "2026-09-01", depTime: "10:00", timeKind: "real",
+      state: "estimacion_disponible", noaaCapture: null, result: null };
+    const f = { id: 908, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oSinVer] };
+    const before = JSON.stringify([f]);
+    const plan = { eligible: [{ flightId: 908, occId: 9081, result: { lowUsv: 4, highUsv: 9 } }], excluded: [] };
+    const applied = ctx.applyBatch([f], plan);
+    const undone = ctx.undoBatch(applied.flights, applied.batch);
+    ok("B7 JSON antes === JSON después del lote y deshacer",
+       JSON.stringify(undone) === before, JSON.stringify(undone) + " vs " + before);
+    ok("B7 la clave modelVersion no reaparece", !("modelVersion" in undone[0].occurrences[0]),
+       JSON.stringify(Object.keys(undone[0].occurrences[0])));
+  }
+
+  // B8 — no se clona lo que no se toca.
+  {
+    const fNo = { id: 909, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
+    const fElig = { id: 910, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1,
+      occurrences: [mkOcc({ id: 9101, depDate: "2026-09-01", depTime: "10:00", timeKind: "real" })] };
+    const plan = { eligible: [{ flightId: 910, occId: 9101, result: { lowUsv: 1, highUsv: 2 } }], excluded: [] };
+    const res = ctx.applyBatch([fNo, fElig], plan);
+    ok("B8 vuelo sin elegibles sale === al de entrada", res.flights[0] === fNo, res.flights[0] === fNo);
+    ok("B8 vuelo tocado sí es copia", res.flights[1] !== fElig, res.flights[1] === fElig);
+  }
+
+  // B9 — batch vacio o nulo devuelve el mismo array.
+  {
+    const arr = [{ id: 911 }];
+    ok("B9 undoBatch(flights, null) === flights", ctx.undoBatch(arr, null) === arr);
+    ok("B9 undoBatch(flights, {entries:[]}) === flights", ctx.undoBatch(arr, { entries: [] }) === arr);
+  }
+
+  // B11 — deshacer devuelve la cifra ANTERIOR, no null. B7 no lo cubre: alli la
+  // ocurrencia previa tenia result null, asi que restaurar null parecia correcto.
+  {
+    const oPrev = { id: 9121, depDate: "2026-09-01", depTime: "10:00", timeKind: "real",
+      state: "estimacion_disponible", noaaCapture: null,
+      result: { lowUsv: 1, highUsv: 2 }, modelVersion: "modelo-viejo" };
+    const f = { id: 912, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oPrev] };
+    const before = JSON.stringify([f]);
+    const plan = { eligible: [{ flightId: 912, occId: 9121, result: { lowUsv: 4, highUsv: 9 } }], excluded: [] };
+    const res = ctx.applyBatch([f], plan);
+    const applied = res.flights[0].occurrences[0];
+    ok("T12-B11el lote pisa la cifra con la nueva", applied.result.lowUsv === 4 && applied.result.highUsv === 9,
+       JSON.stringify(applied.result));
+    const undone = ctx.undoBatch(res.flights, res.batch);
+    const back = undone[0].occurrences[0];
+    ok("T12-B11deshacer restaura la cifra anterior", back.result && back.result.lowUsv === 1 && back.result.highUsv === 2,
+       JSON.stringify(back.result));
+    ok("T12-B11deshacer restaura la version anterior", back.modelVersion === "modelo-viejo", back.modelVersion);
+    ok("T12-B11JSON antes === JSON despues", JSON.stringify(undone) === before,
+       JSON.stringify(undone) + " vs " + before);
+  }
+
+  // B10 — textos nuevos en ES y EN.
+  {
+    const keys = ["occState_hora_estimada", "occState_ya_incorporada", "occState_sin_evaluar",
+      "batchAdd", "batchUndo", "monthSepRange"];
+    keys.forEach((k) => {
+      ok("B10 ES tiene " + k, typeof ctx.LANG.es[k] === "string" && ctx.LANG.es[k].length > 0, ctx.LANG.es[k]);
+      ok("B10 EN tiene " + k, typeof ctx.LANG.en[k] === "string" && ctx.LANG.en[k].length > 0, ctx.LANG.en[k]);
+    });
+    ok("B10 monthSepRange ES con {low} y {high}",
+       (ctx.LANG.es.monthSepRange || "").indexOf("{low}") !== -1 &&
+         (ctx.LANG.es.monthSepRange || "").indexOf("{high}") !== -1, ctx.LANG.es.monthSepRange);
+    ok("B10 monthSepRange EN con {low} y {high}",
+       (ctx.LANG.en.monthSepRange || "").indexOf("{low}") !== -1 &&
+         (ctx.LANG.en.monthSepRange || "").indexOf("{high}") !== -1, ctx.LANG.en.monthSepRange);
+  }
+}
+
+testRouteImportKeepsCuratedIcaoAliases()
+  .then(testFetchSolarManifestRetriesAfterHttpError)
+  .then(function () {
   console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");
   process.exit(fail === 0 ? 0 : 1);
 }).catch(function (err) {

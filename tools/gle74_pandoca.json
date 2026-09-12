@@ -1,0 +1,12 @@
+{
+ "n": 74,
+ "rc_gv": 0.0,
+ "alt_km": 11.6,
+ "dose_usv": 18.0,
+ "dose_range_usv": [
+  15.0,
+  21.0
+ ],
+ "cite": "Schennetten et al. 2024, https://doi.org/10.3389/fspas.2024.1498910",
+ "note": "PANDOCA SEP-only total effective dose, model flight FRA-LAX at FL380, Rc 0 GV worst case. Kept OUT of gle_published.json so it never enters fit_calibration. GLE74 is NOT evaluable with the current NMDB method: during the G5 storm the I0*exp(-Rc/R0) fit rejects most steps and the dose swings 1.9-12.2 uSv with a 5-min t0 change (docs/diag-gle74, 2026-09-11)."
+}

@@ -1,0 +1,215 @@
+
+<!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"
+   "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+<META http-equiv="Content-Style-Type" content="text/css" charset="UTF-8">
+<link rel="shortcut icon" type="image/x-icon" href="favicon.ico" />
+<style type="text/css">
+html, body {width:100%;height:100%;margin:0px;padding:0px;background-image:url("IMG/galaxy.jpg");}
+.container {min-height:100vh;margin:0 auto;width:965px;background-color:#fff;box-shadow:0 -2px 12px #000 inset;padding-left:30px;padding-top:10px;}
+legend { font-family:arial,verdana; font-size:80%;}
+h1 {font-family:arial,verdana; font-size:100%; color:#444444;}
+font.general {font-family:arial,verdana; font-size:80%;}
+fieldset{margin-bottom:12px;margin-left:20px;}
+input {font-family:arial,verdana; font-size:100%;}
+a.help {text-decoration:none;font-family:arial,verdana; color:#FF7200;background-color:#dddddd;}
+code {font-family: monospace;text-align: left;}
+table {width:900px;border: medium solid #777777;border-collapse: collapse}
+td, th {border: thin solid #6495ed;}
+table.menu {width:900px;border:0px;margin-bottom:10px;background-color:#FFFFFF;empty-cells:show;}
+td.menu {border:0px;background-color:#FFFFFF;text-align:center;padding:0px;}
+th.menu {border:0px;padding:0px;}
+div.disclaimer {width:900px;margin-bottom:15px;min-height:20px;}
+span.disclaimer {text-align:center;font-size:85%;color:#C63306;background-color:#f5f5f5;padding:5px;border:2px solid #cccccc;border-radius: 10px 10px; -moz-border-radius: 10px;}
+span.disclaimer:hover {text-align:center;font-size:85%;color:#C63306;padding:5px;border:2px solid #c63306;border-radius: 10px 10px; -moz-border-radius: 10px;}
+a.disclaimer {text-decoration:none;color:#675849;outline:0;}
+div#logdiv {display:none;margin-bottom:10px;margin-top:5px;}
+div#linkdiv {margin-bottom:10px;margin-top:5px;padding:4px;width:886px;max-height:200px;overflow:auto;font-family:monospace;background-color:#F3F3F3;border:#777777 solid 3px;line-height:1.8;}
+div#hidelink{display:none;}
+div#hidequery{display:none;}
+div#logquery {margin-bottom:10px;margin-top:5px;padding:4px;width:886px;max-height:200px;overflow:auto;font-family:monospace;background-color:#F3F3F3;border:#777777 solid 3px;line-height:1.8;}
+.func_class{color:#6D3386;}
+.statement{color:#08961F;}
+div#hideacknow{display:none;}
+a.prevbutton {border: #555555 solid 1px;text-decoration:none;padding:2px;background-color:#EAE9D7;color:#666666;font-family: arial, sans-serif;font-weight:bold;}
+a:hover.prevbutton {background-color:#EDEAA2;}
+a.zoombutton {border: #555555 solid 1px;text-decoration:none;padding:2px;background-color:#DED9E2;color:#666666;font-family:arial,sans-serif;font-weight:bold;}
+a:hover.zoombutton {background-color:#CDBAD9;}
+a.asciibutton {cursor:pointer;border: #555555 solid 1px;text-decoration:none;padding:2px;background-color:#E3CDD3;color:#666666;font-family:arial,sans-serif;font-weight:bold;}
+a:hover.asciibutton {background-color:#F0C7D0;}
+a.logbutton {cursor:pointer;border: #555555 solid 1px;text-decoration:none;padding:2px;background-color:#D0E3CF;color:#666666;font-family:arial,sans-serif;font-weight:bold;}
+a:hover.logbutton {background-color:#B9E6B6;}
+a.eventbutton {cursor:pointer;border: #555555 solid 1px;text-decoration:none;padding:2px;background-color:#CDE4E5;color:#666666;font-family:arial,sans-serif;font-weight:bold;}
+a:hover.eventbutton {background-color:#B1E6E8;}
+a.backbutton {cursor:pointer;border: #555555 solid 1px;text-decoration:none;padding:2px;background-color:#BFBFBF;color:#111111;font-family:arial,sans-serif;font-weight:bold;}
+a:hover.backbutton {background-color:#EFEFEF;}
+a.navig_meta {cursor:pointer;border: #555555 solid 1px;text-decoration:none;padding:0px;background-color:#EAE9D7;color:#666666;font-family:arial,sans-serif;}
+a:hover.navig_meta {background-color:#EDEAA2;}
+font.disablebutton {border: #999999 solid 1px;text-decoration:none;padding:2px;background-color:#EEEEEE;color:#999999;font-family:arial,sans-serif;font-weight:bold;}
+a.gletab {cursor:pointer;text-decoration:underline;color:#222222;font-family:arial,sans-serif;text-align:left;vertical-align:middle}
+.message {background-color:#000;font-family:arial,verdana; font-size:130%; font-weight:bold; color:#FFF;}
+</style>
+<script language="javascript" type="text/javascript">
+
+<!-- 1 click -> hide div, next click show div etc. -->
+function displaydiv(divid){
+	var elementdiv = document.getElementById(divid);
+	var divstyle = elementdiv.style.display;
+	if(divstyle.toLowerCase()=="block"){
+		elementdiv.style.display = 'none';
+	} else {
+		elementdiv.style.display = 'block';
+		elementdiv.style.height = 'auto';
+	}
+}
+<!-- 1 click -> hide div -->
+function displaymetadiv(divid){
+	var elementdiv = document.getElementById(divid);
+	var divstyle = elementdiv.style.display;
+	if(divstyle.toLowerCase()=="none"){
+		elementdiv.style.display = 'block';
+		elementdiv.style.height = 'auto';
+	}
+}
+
+<!--from spacefrog-->
+document.getElementsByReg=function(reg,attr){
+var tabReg=new Array();
+var tabElts=document.body.getElementsByTagName('*');
+var TEL=tabElts.length;
+if(! (reg instanceof RegExp)){return tabReg;}
+i=0;
+while(tabElts[i]){
+		if(tabElts[i][attr]){
+	
+	         if(reg.test(tabElts[i][attr])){tabReg.push(tabElts[i]);}
+	         }
+	i++;
+	}
+return tabReg;
+}
+
+<!-- hide all meta div (metadiv1, metadiv2 etc.)-->
+function hideallmetadivn(){
+	var elementdiv = document.getElementsByReg(/metadiv[1-9]+/,'id');
+	var TEL=elementdiv.length;
+	i=0;
+	while(i<TEL){
+		var divstyle = elementdiv[i].style.display;
+		if(divstyle.toLowerCase()=="block"){
+			elementdiv[i].style.display = 'none';
+		}
+	i++;
+	}
+}
+
+</script>
+
+<body><font class="general"><div class="container"><table class="menu"><tr><th colspan="14" class="menu"><img style="vertical-align:bottom;" src=IMG/top_top.jpg></img></th></tr><tr><td class="menu" style="border-left: 1px #222222 solid"><img style="vertical-align:bottom;" SRC="IMG/nmdb-est-logo-7mini.png" width="78" border="0"></img></td><td class="menu"><a class="backbutton" href="back_and_reset.php">&nbsp;back&reset&nbsp;</a></td><td class="menu"><a class="backbutton" onClick='history.back()'>&nbsp;back&nbsp;</a></td><td class="menu"></td><td class="menu"></td><td class="menu"></td><td class="menu"></td><td class="menu"><a class="logbutton" onClick="displaydiv('logdiv');">&nbsp;log&nbsp;</a></td><td class="menu"><a class="prevbutton" href='draw_graph.php?navigate=prevstep'>prev&nbsp;step</a></td><td class="menu"><a class="zoombutton" href='draw_graph.php?navigate=zoominl'>zoom&nbsp;left</a></td><td class="menu"><a class="zoombutton" href='draw_graph.php?navigate=zoominc'>zoom&nbsp;center</a></td><td class="menu"><a class="zoombutton" href='draw_graph.php?navigate=zoominr'>zoom&nbsp;right</a></td><td class="menu"><a class="zoombutton" href='draw_graph.php?navigate=zoomout'>zoomout</a></td><td class="menu" style="border-right: 1px #222222 solid"><a class="prevbutton" href='draw_graph.php?navigate=nextstep'>next&nbsp;step</a></td></tr><tr><th colspan="14" class="menu"><img style="vertical-align:bottom;" src=IMG/top_down.jpg></img></th></tr></table><div class="disclaimer"><span class="disclaimer" style="float:left;"><a class="disclaimer" onClick="displaydiv('hidequery');" style="cursor:pointer;outline:0;"><b>the MySQL query</b></a></span><span style="float:left;width:8px;">&nbsp;</span><span class="disclaimer" style="float:left;"><a class="disclaimer" onClick="displaydiv('hidelink');" style="cursor:pointer;outline:0;"><b>http link</b></a></span><span class="disclaimer" style="float:right;"><a class="disclaimer" onClick="displaydiv('hideacknow');" style="cursor:pointer;outline:0;"><b>acknowledgements & disclaimer</b></a></span></div><div name ="logdiv" id="logdiv"><table><tr><td><font class="general">&nbsp;NO LOG</font></td></tr></table></div><div name="hidequery" id="hidequery"><div name ="logquery" id="logquery"><font style='color:#653AE3'>The following query for<b> OULU</b> returned 24 rows</font><br><font class="statement">SELECT</font> <font class="func_class">DATE_ADD</font>('1970-01-01 00:00:00',<font class="statement">INTERVAL</font> <font class="func_class">FLOOR</font>(<font class="func_class">TIME</font>STAMPDIFF(<font class="statement">SECOND</font>, '1970-01-01 00:00:00', start_date_time) / (60 * 60)) * (60 * 60) <font class="statement">SECOND</font> ) <font class="statement">AS</font> start_date_time,<font class="func_class">AVG</font>(measured_corr_for_efficiency) <font class="statement">AS</font> corr_for_efficiency <font class="statement">FROM</font> OULU_ori <font class="statement">WHERE</font> start_date_time >= '2024-05-11 00:00:00' <font class="statement">AND</font> start_date_time < '2024-05-12 00:00:00' <font class="statement">GROUP</font> <font class="statement">BY</font> <font class="func_class">FLOOR</font>(<font class="func_class">TIME</font>STAMPDIFF(<font class="statement">SECOND</font>, '1970-01-01 00:00:00', start_date_time) / (60 * 60)) <font class="statement">ORDER</font> <font class="statement">BY</font> start_date_time <font class="statement">ASC</font></div></div><div name="hidelink" id="hidelink"><div name ="linkdiv" id="linkdiv"><font color="blue">https://www.nmdb.eu/nest/draw_graph.php?formchk=1&stations[]=OULU&tabchoice=revori&dtype=corr_for_efficiency&tresolution=60&force=1&yunits=0&date_choice=bydate&start_day=11&start_month=05&start_year=2024&start_hour=0&start_min=0&end_day=12&end_month=05&end_year=2024&end_hour=0&end_min=0&output=ascii</font></div></div><div name="hideacknow" id="hideacknow"><!DOCTYPE HTML PUBLIC "-//W3C//DTD HTML 4.01//EN"
+   "http://www.w3.org/TR/html4/strict.dtd">
+<html>
+<head>
+<META http-equiv="Content-Style-Type" content="text/css">
+
+<style type="text/css">
+
+font.general {font-family:arial,verdana; font-size:85%;}
+input {font-family:arial,verdana; font-size:85%;}
+h1 {font-family:arial,verdana; font-size:100%; color:#444444;}
+div.ways {
+width: 885px;
+padding: 5px;
+margin-left:0px;
+border: solid;
+border-width: 3px;
+border-color: #777777;
+background-color:#FAFAFA;
+text-align:justify;
+ }
+
+</style>
+
+</head>
+<body>
+<font class="general">
+<br>
+<div class="ways">
+<h1>Proprietary rights and acknowledgements:</h1>
+
+NMDB distributes official data provided by the PIs of the neutron monitor stations. Data of different origin may not have been validated or authorised by the respective PI, and any deviation with respect to the authorised data is not his/her responsibility.  <br><br>
+
+Data retrieved via NMDB are the property of the individual data providers. These data are free for non commercial use within the restrictions imposed by the providers. If you use such data for your research or applications, please acknowledge the origin by a sentence like "<i>We acknowledge the NMDB database (www.nmdb.eu), founded under the European Union's FP7 programme (contract no. 213007) for providing data, and the PIs of individual neutron monitors at: 
+Oulu (Sodankyla Geophysical Observatory of the University of Oulu, Finland)"</i></div><br>
+
+<div class="ways">
+<h1>Acknowledgement of other data sources where relevant</h1>
+
+Smoothed Sunspot Numbers and Monthly Sunspot Numbers are provided by the Solar Influences Data Analysis Center (<a href="https://sidc.oma.be">SIDC</a>), Royal Observatory of Belgium.<br><br>
+Kp 3-hourly index is provided by the Deutsches GeoForschungsZentrum Postdam (<a href="https://www.gfz-potsdam.de">GFZ</a>) in cooperation with the International Association of Geomagnetism and Aeronomy (<a href="https://www.iugg.org/IAGA/">IAGA</a>) and the International Service of Geomagnetic Indices (<a href="http://isgi.unistra.fr/">ISGI</a>). <a href="https://doi.org/10.5880/Kp.0001">DOI of the Kp dataset</a><br><br>
+GOES proton flux data is provided by the United States NOAA/National Geophysical Data Center (<a href="https://www.ngdc.noaa.gov">NGDC</a>)<br>
+The list of Forbush decreases is provided by Izmiran group. see also <a href='https://tools.izmiran.ru/w/feid'>FEID</a> web tools.
+</div><br>
+<div class="ways">
+<h1>"original" and "revised" data in NMDB:</h1>
+
+Neutron monitor count rates are available through NMDB in various versions. Data called  "original" are the count rates of a given monitor as provided by this monitor's registration system. Depending on the neutron monitor station these data <i>may</i> have been modified by real-time quality checking procedures, which correct obvious short-lived instrumental effects such as spikes or data gaps produced by hardware and software disturbances, as well as erroneous atmospheric pressure measurements. These corrections are made under the responsibility of the data provider who also archives the raw data. "Revised" data contain further corrections made during subsequent analyses. <br>More information on the NMDB format can be found <a
+href="https://www.nmdb.eu/nest/help.php#helptable">here</a>.
+</div>
+
+</font>
+<br>
+</body>
+</html>
+</div></font><pre><code>#_____________ QUERY RESULTS SUMMARY ___________________________________
+#        STATION: OULU
+#     START TIME: 2024-05-11 00:00:00 UTC
+#       END TIME: 2024-05-11 23:00:00 UTC
+#     NMDB TABLE: revised original
+#    REV EQ. ORI: Yes, revised data are identical to the original data for this period
+#      DATA TYPE: corr_for_efficiency(RCORR_E)
+#      AVERAGING: Yes / 1 hour
+#   ORIGINAL RES: 1 min
+#_______________________________________________________________________
+#
+# Timestamps always correspond to the beginning of the time interval 
+#_______________________________________________________________________
+#
+# ____________________________________________________________________________________________________
+#|                                                                                                    |
+#| Data retrieved via NMDB are the property of the individual data providers. These data are free for |
+#| non commercial use to within the restriction imposed by the providers. If you use such data for    |
+#| your research or applications, please acknowledge the origin by a sentence like 'We acknowledge    |
+#| the NMDB database (www.nmdb.eu) founded under the European Union's FP7 programme (contract no. 213 |
+#| 007), and the PIs of individual neutron monitors at: Oulu (Sodankyla Geophysical Observatory of th |
+#| e University of Oulu, Finland)                                                                     |
+#|____________________________________________________________________________________________________|
+#
+  start_date_time   RCORR_E
+2024-05-11 00:00:00; 88.434
+2024-05-11 01:00:00; 88.910
+2024-05-11 02:00:00; 91.288
+2024-05-11 03:00:00; 92.540
+2024-05-11 04:00:00; 92.020
+2024-05-11 05:00:00; 92.214
+2024-05-11 06:00:00; 91.549
+2024-05-11 07:00:00; 91.376
+2024-05-11 08:00:00; 90.980
+2024-05-11 09:00:00; 90.552
+2024-05-11 10:00:00; 90.663
+2024-05-11 11:00:00; 90.419
+2024-05-11 12:00:00; 89.630
+2024-05-11 13:00:00; 89.199
+2024-05-11 14:00:00; 89.464
+2024-05-11 15:00:00; 89.488
+2024-05-11 16:00:00; 89.957
+2024-05-11 17:00:00; 90.137
+2024-05-11 18:00:00; 89.703
+2024-05-11 19:00:00; 89.116
+2024-05-11 20:00:00; 89.723
+2024-05-11 21:00:00; 90.019
+2024-05-11 22:00:00; 89.831
+2024-05-11 23:00:00; 89.365
+</code></pre><br>Total Running Time:0.018 sec (0.007 sec for mysql query)<br></font><br><br></div></body></html>
+
+
