@@ -1199,9 +1199,10 @@ function setOnlyChannels(sample, medians, names) {
   for (const name of names) sample[name] = medians[name] + 1e-3;
 }
 // Evento sintetico con espectro BLANDO (E^-3) sobre la linea base del fixture
-// tranquilo. GLE73 real no sirve para los casos que publican cifra: su ajuste de
-// ley de potencia sale casi plano (~E^-0.7) y su cola >=10 GeV supera el 10%,
-// asi que el ensemble falla cerrado (se prueba aparte, mas abajo).
+// tranquilo. Se usa para los casos que fijan cifras de referencia porque su
+// espectro es conocido. GLE73 real tambien publica cifra desde que existe la
+// rodilla de extrapolacion (antes su cola >=10 GeV pasaba del 10% y el ensemble
+// fallaba cerrado); se prueba aparte, mas abajo.
 function softEventSeries() {
   const d = fixture("g18_2024-05-08.json"), med = {};
   for (let c = 0; c < CH_NAMES.length; c++) {
@@ -1261,20 +1262,25 @@ ok("GLE73 real da cifra con la rodilla (antes moria por cola)", (function () {
   const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5));
   console.log("  GLE73 real: " + (r.range ? r.range.lowUsv.toFixed(4) + " - " +
     r.range.highUsv.toFixed(4) + " uSv" : "sin cifra (" + r.reason + ")"));
-  // Cifra fijada el 2026-09-12 con la rodilla en E^-3: si el modelo se mueve,
-  // este test lo dice en vez de dejarlo pasar por "hay un rango".
+  // Cifra fijada el 2026-09-12 con la rodilla en E^-3 y el umbral por canal: si
+  // el modelo se mueve, este test lo dice en vez de pasar por "hay un rango".
   return r.ok === true && r.state === "detectado" && !!r.range &&
-         Math.abs(r.range.lowUsv / 2.3092 - 1) <= 0.05 &&
-         Math.abs(r.range.highUsv / 6.9277 - 1) <= 0.05;
+         Math.abs(r.range.lowUsv / 2.3953 - 1) <= 0.05 &&
+         Math.abs(r.range.highUsv / 7.1860 - 1) <= 0.05;
 })());
 ok("el rango se forma DESPUES de integrar cada miembro (no punto a punto)", (function () {
   const s = t9Series(), k = t9OnsetIndex(s);
   if (k < 0) return false;
-  // 24 pasos x 1/12 h = 2 h: el miembro 0 integra 2 uSv y el miembro 1, 6 uSv.
+  // 24 tramos de 1/12 h. Los pasos cuyo exceso no supera el umbral por canal son
+  // cero medido, asi que la dosis esperada se deriva de r.steps en vez de
+  // suponer que los 24 miden: lo que se prueba aqui es que el rango se forma al
+  // final, con la integral de cada miembro, no punto a punto.
   const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5),
                      alternatingOperator(1, 3));
-  return r.ok && r.steps === 24 && r.range &&
-         Math.abs(r.range.lowUsv - 2) < 1e-9 && Math.abs(r.range.highUsv - 6) < 1e-9 &&
+  const dtH = 2 / 24;
+  return r.ok && r.steps > 0 && r.steps < 24 && r.range &&
+         Math.abs(r.range.lowUsv - 1 * r.steps * dtH) < 1e-9 &&
+         Math.abs(r.range.highUsv - 3 * r.steps * dtH) < 1e-9 &&
          Math.abs(r.range.factor - 3) < 1e-9 &&
          r.members[0].doseUsv === r.range.lowUsv && r.members[1].doseUsv === r.range.highUsv;
 })());
@@ -1284,7 +1290,7 @@ ok("el rango no se estrecha por debajo de factor 3 con miembros iguales", (funct
   const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5),
                      alternatingOperator(2, 2));
   return r.ok && r.range && r.range.factor >= 2.999999 &&
-         Math.abs(routeCenter(r) - 4) < 1e-9;
+         Math.abs(routeCenter(r) - 2 * r.steps * (2 / 24)) < 1e-9;
 })());
 ok("sin senal -> estado sin_senal, dosis cero y sin cifra", (function () {
   const s = quietSeries(144, 24);
@@ -1376,13 +1382,35 @@ ok("cambio de satelite despues del onset -> pendiente (detect retorna antes)", (
   const r = runRoute(s, routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
   return r.ok === false && r.state === "pendiente" && r.reason === "cambio_satelite";
 })());
-ok("exceso en menos de 4 bins -> pendiente, nunca cero", (function () {
+ok("menos de 4 canales sobre su umbral -> cero medido, no pendiente", (function () {
+  // Tres canales asomando no restringen un espectro. Antes se ajustaba de todas
+  // formas (pendiente inventada que dominaba la integral) o se cerraba la ruta
+  // entera; ahora esos pasos valen cero, como los de la banda P8+ en linea base.
   const s = t9Series(), k = t9OnsetIndex(s), g = t9OnsetGlobal(s);
   if (k < 0) return false;
   const medians = SepModel.detect(s).baseline.medians;
+  const libre = runRoute(s, routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
   for (let i = g + 8; i < g + 24; i++) setOnlyChannels(s.samples[i], medians, ["P8A", "P8B", "P8C"]);
   const r = runRoute(s, routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
-  return r.ok === false && r.state === "pendiente" && r.reason === "modelo_no_resoluble";
+  return r.ok === true && r.state === "detectado" && r.reason === undefined &&
+         r.range !== null && r.steps > 0 && libre.ok && r.steps < libre.steps;
+})());
+ok("el ruido por canal no cuenta como exceso medido", (function () {
+  // Un canal una fraccion de sigma sobre su mediana es ruido. Con el umbral
+  // mediana+3sigma esos pasos no aportan bins; sin el, contaban los 13.
+  const s = t9Series(), k = t9OnsetIndex(s), g = t9OnsetGlobal(s);
+  if (k < 0) return false;
+  const stats = SepModel.detect(s).baseline.channels;
+  for (let i = g + 8; i < g + 24; i++) {
+    for (const name of CH_NAMES) {
+      const st = stats[name];
+      // justo por debajo del umbral: exceso positivo, pero ruido
+      s.samples[i][name] = st.sigma > 0 ? st.median + 2.9 * st.sigma : st.median;
+    }
+  }
+  const r = runRoute(s, routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
+  const libre = runRoute(t9Series(), routeFromOnset(s, k, 2, 48, 1, 10.5), alternatingOperator(1, 1));
+  return r.ok === true && libre.ok === true && r.steps < libre.steps;
 })());
 ok("cola integrada >=10% en un miembro -> sin convergencia", (function () {
   const s = t9Series(), k = t9OnsetIndex(s);

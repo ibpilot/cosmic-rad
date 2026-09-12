@@ -775,11 +775,27 @@
     return baseline;
   }
 
+  // Estadistica robusta por canal (mediana, sigma y umbral mediana+3sigma) del
+  // baseline de detect(). Un mapa plano de medianas no la trae: entonces no hay
+  // con que medir el ruido y el suelo por canal se queda en la mediana, que es
+  // la conducta de siempre. El camino real (route sobre detect) SI la trae.
+  function resolveChannelStats(baseline) {
+    if (!baseline || typeof baseline !== "object") return null;
+    return baseline.channels && typeof baseline.channels === "object" ? baseline.channels : null;
+  }
+
   // Construye los bins del ajuste: recorta el exceso negativo a cero y convierte
   // por-keV a por-GeV (1 GeV = 1e6 keV). Muestra y baseline deben ser numeros
   // finitos y NO negativos en TODOS los canales: una densidad negativa es un
   // dato corrupto y cierra, en vez de restarse y producir un exceso falso.
-  function buildBins(channels, sample, baselineValues) {
+  //
+  // Un canal solo aporta senal si supera su umbral mediana+3sigma, el mismo que
+  // usa el resto del modelo. Sin esta cota bastaba asomar una fraccion de sigma
+  // sobre la mediana para contar como bin medido: en el primer paso tras el
+  // onset los 13 canales lo hacian por ruido, el ajuste salia con una pendiente
+  // arbitraria (gamma~0.9, 29 uSv/h y 65% de cola en el 2026-09-05) y ese paso
+  // dominaba la integral de la ruta entera. El ruido no es dosis.
+  function buildBins(channels, sample, baselineValues, channelStats) {
     var bins = [];
     for (var i = 0; i < channels.list.length; i++) {
       var channel = channels.list[i];
@@ -791,8 +807,9 @@
       var loGeV = channel.lo_keV / KEV_PER_GEV;
       var hiGeV = channel.hi_keV / KEV_PER_GEV;
       if (!(loGeV > 0) || !(hiGeV > loGeV)) return failed(ERROR_CODES.CANALES_INVALIDOS);
-      var excessPerKeV = measured - base;
-      if (excessPerKeV < 0) excessPerKeV = 0;
+      var stats = channelStats ? channelStats[channel.name] : null;
+      var floor = stats && isFiniteNumber(stats.threshold) ? stats.threshold : base;
+      var excessPerKeV = measured > floor ? measured - base : 0;
       bins.push({ loGeV: loGeV, hiGeV: hiGeV, measuredPerGeV: excessPerKeV * KEV_PER_GEV });
     }
     return { ok: true, bins: bins };
@@ -855,7 +872,8 @@
       return failed(ERROR_CODES.ENTRADA_INVALIDA);
     }
 
-    var built = buildBins(channels, input.sample, resolveBaselineValues(input.baseline));
+    var built = buildBins(channels, input.sample, resolveBaselineValues(input.baseline),
+                          resolveChannelStats(input.baseline));
     if (!built.ok) return built;
     var usable = usableBins(built.bins);
     if (usable.length < MIN_USABLE_BINS) return failed(ERROR_CODES.AJUSTE_INSUFICIENTE);
@@ -965,6 +983,7 @@
     var channels = normalizeChannels(input.channels);
     if (!channels) return routePending(REASONS.CANALES_INVALIDOS);
     var baselineValues = resolveBaselineValues(detection.baseline);
+    var channelStats = resolveChannelStats(detection.baseline);
     var ordered = sortedByTime(input.samples);
     var satellite = detection.baseline.satellites[0];
 
@@ -988,7 +1007,7 @@
       }
       if (sample.sat !== satellite) return routePending(REASONS.CAMBIO_SATELITE);
 
-      var built = buildBins(channels, sample, baselineValues);
+      var built = buildBins(channels, sample, baselineValues, channelStats);
       if (!built.ok) return routePending(REASONS.OBSERVACION_INCOMPLETA);
 
       // F1.2: el ruido de la linea base no es dosis. La banda dura P8+ debe
@@ -1002,10 +1021,14 @@
       var cached = fitCache.get(sample);
       if (cached === undefined) {
         var usable = usableBins(built.bins);
-        if (!usable.length) {
-          cached = { zero: true };   // 13 canales presentes y sin exceso: cero medido
-        } else if (usable.length < MIN_USABLE_BINS) {
-          cached = { reason: REASONS.MODELO_NO_RESOLUBLE };
+        // Menos de MIN_USABLE_BINS canales sobre su umbral es cero medido, no un
+        // fallo: es el mismo criterio que la banda P8+ de F1.2 unas lineas
+        // arriba. Un paso con dos canales asomando no restringe un espectro, y
+        // ajustarlo de todas formas era lo que metia una pendiente inventada en
+        // la integral. Si NINGUN paso llega, la ruta cierra en "detectado sin
+        // contribucion estimable", que la UI ya explica.
+        if (usable.length < MIN_USABLE_BINS) {
+          cached = { zero: true };
         } else {
           var fitted = [fitPowerLaw(usable), fitDoublePowerLaw(usable)];
           cached = (!fitted[0] || !fitted[1])
