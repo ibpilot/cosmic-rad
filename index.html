@@ -2211,8 +2211,10 @@ var OCC_STATES = ["programado", "esperando_datos", "incompleto", "estimacion_dis
 var OCC_MAX = 100;
 
 // ── T11: archivo solar publico (ocurrencias) ─────────────────────────────────
-// Primer dia del archivo GOES publico (cosmic-rad-data). Antes no hay datos.
-var SOLAR_ARCHIVE_START_MS = Date.UTC(2026, 7, 30);
+// Primer dia del archivo publico. Desde la fase 6 son los datos historicos
+// NCEI (ncei/, ventana fija 2025-09-11 -> 2026-09-10); los dias posteriores
+// los cubre el colector SWPC en solar/.
+var SOLAR_ARCHIVE_START_MS = Date.UTC(2025, 8, 11);
 var SOLAR_ARCHIVE_BASE = "https://raw.githubusercontent.com/ibpilot/cosmic-rad-data/main/";
 // Version del modelo con que se incorpora una cifra; si cambia, la ocurrencia pasa a modelo_nuevo.
 var SEP_MODEL_VERSION = "t9-2026-09-11";
@@ -2692,44 +2694,87 @@ function occEvaluate(f, occ, archive, nowMs, routeFn) {
   if (landMs > now) return { state: "programado", result: null };
   // 6. Archivo no disponible (red).
   if (archive === null || archive === undefined) return { state: "noaa_no_disponible", result: null };
-  // 7. Cobertura de los dias necesarios.
+  // 7. Fuente para la ventana entera. Nunca se mezclan SWPC y NCEI: el modelo
+  // rechazaria el cambio de satelite.
   var days = solarDaysFor(depMs - BASELINE_MS, landMs);
   var manifest = archive.manifest || {};
-  var cov = manifest.coverage && Array.isArray(manifest.coverage.days)
-    ? manifest.coverage.days : [];
-  var covDiff = manifest.differential && manifest.differential.coverage &&
-    Array.isArray(manifest.differential.coverage.days)
-    ? manifest.differential.coverage.days : [];
+  var source = archive.source === undefined ? "swpc" : archive.source;
+  var dayMap = archive.days && typeof archive.days === "object" ? archive.days : {};
   var inc = Array.isArray(manifest.incomplete_days) ? manifest.incomplete_days : [];
   var incDiff = manifest.differential && Array.isArray(manifest.differential.incomplete_days)
     ? manifest.differential.incomplete_days : [];
-  var dayMap = archive.days && typeof archive.days === "object" ? archive.days : {};
-  var i, k;
-  for (i = 0; i < days.length; i++) {
-    var day = days[i];
-    if (cov.indexOf(day) !== -1 && covDiff.indexOf(day) !== -1) {
-      if (dayMap[day] == null) return { state: "esperando_datos", result: null };
-      continue;
-    }
-    var permanent = false;
-    for (k = 0; k < inc.length; k++) {
-      if (inc[k] && inc[k].day === day && inc[k].permanent === true) permanent = true;
-    }
-    for (k = 0; k < incDiff.length; k++) {
-      if (incDiff[k] && incDiff[k].day === day && incDiff[k].permanent === true) permanent = true;
+  var i, k, permanent = false;
+  if (source === null) {
+    // Ninguna fuente cubre la ventana: permanente => incompleto, si no espera.
+    var nceiDays = archive.nceiManifest && archive.nceiManifest.days
+      ? archive.nceiManifest.days : {};
+    for (i = 0; i < days.length; i++) {
+      var swpcPermanent = false;
+      for (k = 0; k < inc.length; k++) {
+        if (inc[k] && inc[k].day === days[i] && inc[k].permanent === true) swpcPermanent = true;
+      }
+      for (k = 0; k < incDiff.length; k++) {
+        if (incDiff[k] && incDiff[k].day === days[i] && incDiff[k].permanent === true) swpcPermanent = true;
+      }
+      var ne = nceiDays[days[i]];
+      var nceiPermanent = !!(ne && ne.status === "partial");
+      if (swpcPermanent && nceiPermanent) permanent = true;
     }
     return permanent
       ? { state: "incompleto", result: null }
       : { state: "esperando_datos", result: null };
   }
-  // 8. Modelo.
-  var diffJsons = [], intJsons = [];
-  for (i = 0; i < days.length; i++) {
-    var entry = dayMap[days[i]];
-    diffJsons.push(entry ? entry.diff : null);
-    intJsons.push(entry ? entry.int : null);
+  if (source === "swpc") {
+    // SWPC declara su cobertura en el manifiesto (integral Y diferencial).
+    var cov = manifest.coverage && Array.isArray(manifest.coverage.days)
+      ? manifest.coverage.days : [];
+    var covDiff = manifest.differential && manifest.differential.coverage &&
+      Array.isArray(manifest.differential.coverage.days)
+      ? manifest.differential.coverage.days : [];
+    for (i = 0; i < days.length; i++) {
+      var day = days[i];
+      if (cov.indexOf(day) !== -1 && covDiff.indexOf(day) !== -1) {
+        if (dayMap[day] == null) return { state: "esperando_datos", result: null };
+        continue;
+      }
+      permanent = false;
+      for (k = 0; k < inc.length; k++) {
+        if (inc[k] && inc[k].day === day && inc[k].permanent === true) permanent = true;
+      }
+      for (k = 0; k < incDiff.length; k++) {
+        if (incDiff[k] && incDiff[k].day === day && incDiff[k].permanent === true) permanent = true;
+      }
+      return permanent
+        ? { state: "incompleto", result: null }
+        : { state: "esperando_datos", result: null };
+    }
+  } else {
+    // NCEI: un fichero por dia de la ventana, ya del satelite elegido.
+    for (i = 0; i < days.length; i++) {
+      if (dayMap[days[i]] == null) return { state: "esperando_datos", result: null };
+    }
   }
-  var adapted = solarDayAdapt(diffJsons, intJsons);
+  // 8. Modelo.
+  var adapted;
+  if (source !== "swpc") {
+    var channels = null, samples = [];
+    for (i = 0; i < days.length; i++) {
+      var one = nceiDayAdapt(dayMap[days[i]]);
+      if (one === null) return { state: "incompleto", result: null };
+      if (channels === null) channels = one.channels;
+      for (k = 0; k < one.samples.length; k++) samples.push(one.samples[k]);
+    }
+    samples.sort(function (a, b) { return a.tMs - b.tMs; });
+    adapted = { channels: channels || [], samples: samples };
+  } else {
+    var diffJsons = [], intJsons = [];
+    for (i = 0; i < days.length; i++) {
+      var entry = dayMap[days[i]];
+      diffJsons.push(entry ? entry.diff : null);
+      intJsons.push(entry ? entry.int : null);
+    }
+    adapted = solarDayAdapt(diffJsons, intJsons);
+  }
   var r;
   try {
     r = route({ channels: adapted.channels, samples: adapted.samples,
@@ -2821,7 +2866,12 @@ function fetchNceiDay(day, sat, manifest) {
   var p = fetch(SOLAR_ARCHIVE_BASE + path).then(function (res) {
     if (!res || res.status === 404) return null;
     if (!res.ok) throw new Error("ncei HTTP " + res.status);
-    return res.json();
+    // Un cuerpo descargado pero ilegible es un fichero invalido, no un fallo
+    // de red. Se deja llegar al adaptador para que cierre en `incompleto`.
+    return res.json().catch(function (err) {
+      if (err && err.name === "SyntaxError") return {};
+      throw err;
+    });
   }).catch(function (err) {
     _nceiDayCache.delete(key);
     throw err;
@@ -2835,12 +2885,28 @@ function loadArchiveFor(points, depMs) {
   }
   var days = solarDaysFor(depMs - BASELINE_MS, occLandMs(points));
   return fetchSolarManifest().then(function (manifest) {
-    return Promise.all(days.map(function (day) { return fetchSolarDay(day); }))
-      .then(function (list) {
+    // El manifiesto NCEI solo se descarga si SWPC no cubre la ventana entera.
+    if (solarPickSource(days, manifest, null) === "swpc") {
+      return Promise.all(days.map(function (day) { return fetchSolarDay(day); }))
+        .then(function (list) {
+          var dayMap = {};
+          for (var i = 0; i < days.length; i++) dayMap[days[i]] = list[i];
+          return { manifest: manifest, nceiManifest: null, source: "swpc", days: dayMap };
+        });
+    }
+    return fetchNceiManifest().then(function (nceiManifest) {
+      var source = solarPickSource(days, manifest, nceiManifest);
+      if (source === null || source === "swpc") {
+        return { manifest: manifest, nceiManifest: nceiManifest, source: null, days: {} };
+      }
+      return Promise.all(days.map(function (day) {
+        return fetchNceiDay(day, source.sat, nceiManifest);
+      })).then(function (list) {
         var dayMap = {};
         for (var i = 0; i < days.length; i++) dayMap[days[i]] = list[i];
-        return { manifest: manifest, days: dayMap };
+        return { manifest: manifest, nceiManifest: nceiManifest, source: source, days: dayMap };
       });
+    });
   }).catch(function () { return null; });
 }
 
@@ -4634,7 +4700,7 @@ var LANG = {
     occState_incorporada: "incorporada",
     occState_noaa_no_disponible: "archivo GOES no disponible",
     occState_sin_senal: "sin señal solar",
-    occState_fuera_de_rango: "sin archivo GOES (desde el 30-08-2026)",
+    occState_fuera_de_rango: "sin archivo GOES (desde el 11-09-2025)",
     occState_modelo_nuevo: "modelo actualizado",
     occState_esperando_fecha: "sin fecha",
     occState_sin_senal_evento: "evento solar activo sin contribución estimable en esta ruta",
@@ -4928,7 +4994,7 @@ var LANG = {
     occState_incorporada: "incorporated",
     occState_noaa_no_disponible: "GOES archive unavailable",
     occState_sin_senal: "no solar signal",
-    occState_fuera_de_rango: "no GOES archive (from 2026-08-30)",
+    occState_fuera_de_rango: "no GOES archive (from 2025-09-11)",
     occState_modelo_nuevo: "model updated",
     occState_esperando_fecha: "no date",
     occState_sin_senal_evento: "active solar event with no estimable contribution on this route",

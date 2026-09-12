@@ -781,8 +781,8 @@ console.log("\nT11 ocurrencias UI");
   const spy = { calls: 0, fn: function () { spy.calls++; return { ok: true, state: "sin_senal" }; } };
 
   // U5 — regla 3: la baseline entera debe caer dentro del archivo.
-  const r5 = ctx.occEvaluate(FLIGHT, occ("2026-08-30", "00:30"), null, NOW_AFTER, spy.fn);
-  ok("U5 occ del 08-30 00:30 → fuera_de_rango", r5.state === "fuera_de_rango", r5.state);
+  const r5 = ctx.occEvaluate(FLIGHT, occ("2025-09-11", "00:30"), null, NOW_AFTER, spy.fn);
+  ok("U5 occ del 11-09-2025 00:30 → fuera_de_rango", r5.state === "fuera_de_rango", r5.state);
   ok("U5 routeFn no se llama", spy.calls === 0, spy.calls);
 
   // U6 — regla 5: vuelo aun no aterrizado.
@@ -959,8 +959,8 @@ console.log("\nT11 ocurrencias UI");
   // T7 — occNeedsArchive: solo se pide el archivo cuando hace falta.
   {
     const landed = occ("2026-09-09", "06:00");
-    ok("T7 antes del archivo → false",
-       ctx.occNeedsArchive(flightA, occ("2026-08-01", "06:00"), NOW_AFTER) === false);
+    ok("T7 antes del inicio del archivo → false",
+       ctx.occNeedsArchive(flightA, occ("2025-08-01", "06:00"), NOW_AFTER) === false);
     ok("T7 vuelo no aterrizado → false",
        ctx.occNeedsArchive(flightA, occ("2026-09-09", "06:00"),
          ctx.depMsOf(occ("2026-09-09", "06:00"))) === false);
@@ -1010,10 +1010,10 @@ console.log("\nSelectores fecha/hora — borrador local + confirmación");
   // D6 — el texto del estado cita la fecha de inicio y no dice "revisado".
   const es6 = ctx.LANG.es.occState_fuera_de_rango;
   const en6 = ctx.LANG.en.occState_fuera_de_rango;
-  ok("D6 ES menciona 2026 y no 'revis'",
-     es6.indexOf("2026") !== -1 && es6.toLowerCase().indexOf("revis") === -1, es6);
-  ok("D6 EN menciona 2026 y no 'review'",
-     en6.indexOf("2026") !== -1 && en6.toLowerCase().indexOf("review") === -1, en6);
+  ok("D6 ES menciona 2025 y no 'revis'",
+     es6.indexOf("2025") !== -1 && es6.toLowerCase().indexOf("revis") === -1, es6);
+  ok("D6 EN menciona 2025 y no 'review'",
+     en6.indexOf("2025") !== -1 && en6.toLowerCase().indexOf("review") === -1, en6);
 }
 
 // T8 — un fallo HTTP no envenena la caché del manifest (F1); requiere async.
@@ -1108,14 +1108,26 @@ async function testFetchNcei() {
     calls = 0;
     ctx.fetch = function () {
       calls++;
+      return Promise.resolve({ ok: true, json: () => Promise.reject(new SyntaxError("json roto")) });
+    };
+    const jsonIlegible = await ctx.fetchNceiDay("2026-09-08", "18", MAN);
+    ok("F6 JSON invalido del dia llega como fichero ilegible",
+       jsonIlegible !== null && typeof jsonIlegible === "object", String(jsonIlegible));
+    const jsonIlegible2 = await ctx.fetchNceiDay("2026-09-08", "18", MAN);
+    ok("F6 fichero ilegible queda cacheado", calls === 1 && jsonIlegible2 === jsonIlegible, calls);
+
+    ctx._nceiDayCache.clear();
+    calls = 0;
+    ctx.fetch = function () {
+      calls++;
       return Promise.resolve({ ok: true, json: () => calls === 1
-        ? Promise.reject(new Error("json roto")) : Promise.resolve({ sat: "g18" }) });
+        ? Promise.reject(new TypeError("stream abortado")) : Promise.resolve({ sat: "g18" }) });
     };
     err = null;
     try { await ctx.fetchNceiDay("2026-09-08", "18", MAN); } catch (e) { err = e; }
-    ok("F6 JSON invalido del dia rechaza", err !== null);
-    const trasJson = await ctx.fetchNceiDay("2026-09-08", "18", MAN);
-    ok("F6 dia reintenta tras JSON invalido", calls === 2 && trasJson.sat === "g18", calls);
+    ok("F6 fallo de lectura del body rechaza", err && err.name === "TypeError", err && err.name);
+    const trasBody = await ctx.fetchNceiDay("2026-09-08", "18", MAN);
+    ok("F6 dia reintenta tras fallo de lectura", calls === 2 && trasBody.sat === "g18", calls);
 
     // Satelite sin candidato: null sin tocar la red.
     ctx._nceiDayCache.clear();
@@ -1540,9 +1552,224 @@ console.log("\nF6-3 solarPickSource");
   ok("F6 entradas deformes -> null sin lanzar", deformesOk);
 }
 
+console.log("\nF6-5 ventana y cableado");
+{
+  const FIXN = path.join(REPO, "tools", "fixtures", "ncei");
+  const readN = (n) => JSON.parse(fs.readFileSync(path.join(FIXN, n), "utf8"));
+  const FLIGHT5 = { orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
+  const occ5 = (date, time) => ({
+    id: 1, depDate: date, depTime: time, timeKind: "programada",
+    state: "programado", noaaCapture: null, modelVersion: null, result: null
+  });
+
+  ok("F6 la ventana empieza el 2025-09-11",
+     ctx.SOLAR_ARCHIVE_START_MS === Date.UTC(2025, 8, 11), ctx.SOLAR_ARCHIVE_START_MS);
+
+  // Un vuelo de hace seis meses ya NO es fuera_de_rango.
+  const r1 = ctx.occEvaluate(FLIGHT5, occ5("2026-03-24", "12:00"), null,
+                             Date.UTC(2026, 8, 12), () => ({ ok: true, state: "sin_senal" }));
+  ok("F6 vuelo de 2026-03-24 ya no es fuera_de_rango", r1.state !== "fuera_de_rango", r1.state);
+
+  // Anterior al archivo: sigue siendo fuera_de_rango.
+  const r2 = ctx.occEvaluate(FLIGHT5, occ5("2025-09-11", "06:00"), null,
+                             Date.UTC(2026, 8, 12), () => ({ ok: true, state: "sin_senal" }));
+  ok("F6 baseline anterior al archivo sigue fuera_de_rango", r2.state === "fuera_de_rango", r2.state);
+  const r2b = ctx.occEvaluate(FLIGHT5, occ5("2025-09-11", "12:00"), null,
+                              Date.UTC(2026, 8, 12), () => ({ ok: true, state: "sin_senal" }));
+  ok("F6 baseline exactamente al inicio del archivo entra en rango",
+     r2b.state !== "fuera_de_rango", r2b.state);
+
+  // occEvaluate con archivo NCEI: usa nceiDayAdapt y el modelo recibe UN solo satelite.
+  const arch = {
+    source: { src: "ncei", sat: "18" },
+    manifest: {}, nceiManifest: {},
+    days: { "2026-09-08": readN("2026-09-08-g18.json"),
+            "2026-09-09": readN("2026-09-09-g18.json") }
+  };
+  let visto = null;
+  const espia = function (input) { visto = input; return { ok: true, state: "sin_senal" }; };
+  const r3 = ctx.occEvaluate(FLIGHT5, occ5("2026-09-09", "06:00"), arch,
+                             Date.UTC(2026, 8, 10), espia);
+  ok("F6 el modelo recibe entrada", visto !== null, r3.state);
+  ok("F6 576 muestras de los dos dias NCEI", visto && visto.samples.length === 576,
+     visto && visto.samples.length);
+  ok("F6 13 canales", visto && visto.channels.length === 13);
+  const sats = visto ? Object.keys(visto.samples.reduce((a, s) => { a[s.sat] = 1; return a; }, {})) : [];
+  ok("F6 REGRESION ANTI-MEZCLA: un solo satelite en la ventana",
+     sats.length === 1 && sats[0] === "18", sats.join(","));
+  ok("F6 muestras ordenadas y contiguas a 300 s",
+     visto && visto.samples.every((s, i) => i === 0 || s.tMs === visto.samples[i - 1].tMs + 300000));
+
+  // X: el contrato del modelo es orden por tMs, no el orden de insercion del
+  // mapa de ventana. Con los ficheros cruzados a proposito, el cableado debe
+  // ordenar igual: es lo unico que separa `samples.sort` de su ausencia.
+  const archCruzado = {
+    source: { src: "ncei", sat: "18" },
+    manifest: {}, nceiManifest: {},
+    days: { "2026-09-08": readN("2026-09-09-g18.json"),
+            "2026-09-09": readN("2026-09-08-g18.json") }
+  };
+  let vistoCruzado = null;
+  ctx.occEvaluate(FLIGHT5, occ5("2026-09-09", "06:00"), archCruzado, Date.UTC(2026, 8, 10),
+                  function (input) { vistoCruzado = input; return { ok: true, state: "sin_senal" }; });
+  ok("F6 ordena por tMs aunque el mapa de ventana venga cruzado",
+     vistoCruzado && vistoCruzado.samples.length === 576 &&
+     vistoCruzado.samples.every((s, i) => i === 0 || s.tMs === vistoCruzado.samples[i - 1].tMs + 300000),
+     vistoCruzado && vistoCruzado.samples.length);
+
+  // W: sin fuente para la ventana. Con marca de permanencia -> incompleto;
+  // sin ella -> esperando_datos (el archivo publicado puede crecer).
+  const archNada = { source: null, manifest: {}, nceiManifest: {}, days: {} };
+  const r4 = ctx.occEvaluate(FLIGHT5, occ5("2026-08-18", "06:00"), archNada,
+                             Date.UTC(2026, 8, 12), espia);
+  ok("F6 dia sin dato ni marca de permanencia -> esperando_datos",
+     r4.state === "esperando_datos", r4.state);
+
+  const archPerm = { source: null, days: {},
+    manifest: { incomplete_days: [{ day: "2026-08-18", permanent: true }] },
+    nceiManifest: {} };
+  const r4p = ctx.occEvaluate(FLIGHT5, occ5("2026-08-18", "06:00"), archPerm,
+                              Date.UTC(2026, 8, 12), espia);
+  ok("F6 solo SWPC permanente -> esperando_datos", r4p.state === "esperando_datos", r4p.state);
+
+  const archPartial = { source: null, manifest: {}, days: {},
+    nceiManifest: { days: { "2026-08-18": { status: "partial", candidates: [] } } } };
+  const r4pp = ctx.occEvaluate(FLIGHT5, occ5("2026-08-18", "06:00"), archPartial,
+                               Date.UTC(2026, 8, 12), espia);
+  ok("F6 solo NCEI permanente -> esperando_datos", r4pp.state === "esperando_datos", r4pp.state);
+
+  const archAmbasPerm = { source: null, days: {},
+    manifest: { incomplete_days: [{ day: "2026-08-18", permanent: true }] },
+    nceiManifest: { days: { "2026-08-18": { status: "partial", candidates: [] } } } };
+  const r4ambas = ctx.occEvaluate(FLIGHT5, occ5("2026-08-18", "06:00"), archAmbasPerm,
+                                  Date.UTC(2026, 8, 12), espia);
+  ok("F6 ambas fuentes permanentes el mismo dia -> incompleto",
+     r4ambas.state === "incompleto", r4ambas.state);
+
+  // i18n: las dos cadenas citan el inicio nuevo del archivo, no el viejo.
+  ["es", "en"].forEach((L) => {
+    const t = (ctx.LANG[L] && ctx.LANG[L].occState_fuera_de_rango) || "";
+    ok("F6 " + L + " occState_fuera_de_rango sin la fecha vieja", t.indexOf("2026") === -1, t);
+    ok("F6 " + L + " occState_fuera_de_rango con 2025", t.indexOf("2025") !== -1, t);
+  });
+}
+
+// F6-5c — V: una ventana cubierta por SWPC no debe pagar el manifiesto NCEI.
+async function testLoadArchiveForSwpcNoPideNcei() {
+  console.log("\nF6-5c loadArchiveFor: SWPC cubre, NCEI no se descarga");
+  const realFetch = ctx.fetch;
+  const urls = [];
+  try {
+    ctx._solarManifestPromise = null;
+    ctx._nceiManifestPromise = null;
+    ctx._solarDayCache.clear();
+    ctx._nceiDayCache.clear();
+    const MAN = { coverage: { days: ["2026-09-08", "2026-09-09"] },
+                  differential: { coverage: { days: ["2026-09-08", "2026-09-09"] } } };
+    ctx.fetch = function (u) {
+      urls.push(u);
+      if (u.indexOf("ncei") !== -1) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ days: {} }) });
+      }
+      if (u.indexOf("manifest.json") !== -1) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(MAN) });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ samples: [] }) });
+    };
+    const depMs = Date.UTC(2026, 8, 9, 6, 0);
+    const points = [{ lat: 40, lon: -3, tMs: depMs },
+                    { lat: 40, lon: -74, tMs: depMs + 8 * 3600000 }];
+    const arch = await ctx.loadArchiveFor(points, depMs);
+    ok("F6 SWPC cubre la ventana -> source 'swpc'",
+       arch && arch.source === "swpc", arch && arch.source);
+    ok("F6 no descarga ncei/manifest.json si SWPC cubre",
+       urls.every((u) => u.indexOf("ncei/manifest.json") === -1), urls.join(","));
+  } finally {
+    ctx.fetch = realFetch;
+    ctx._solarManifestPromise = null;
+    ctx._nceiManifestPromise = null;
+    ctx._solarDayCache.clear();
+    ctx._nceiDayCache.clear();
+  }
+}
+
+// F6-5d — fallback completo: manifiestos -> días NCEI -> occEvaluate.
+async function testLoadArchiveForNceiEndToEnd() {
+  console.log("\nF6-5d fallback NCEI extremo a extremo");
+  const realFetch = ctx.fetch;
+  const FIXN = path.join(REPO, "tools", "fixtures", "ncei");
+  const base = JSON.parse(fs.readFileSync(path.join(FIXN, "2026-09-08-g18.json"), "utf8"));
+  const fileFor = (day) => {
+    const f = JSON.parse(JSON.stringify(base));
+    f.day = day;
+    f.start_time = day + "T00:00:00Z";
+    return f;
+  };
+  const swpc = { coverage: { days: [] }, differential: { coverage: { days: [] } } };
+  const ncei = { days: {
+    "2026-09-04": { status: "complete", candidates: [
+      { sat: "g18", valid_diff_slots: 288, recommended: true, path: "ncei/A.json" }] },
+    "2026-09-05": { status: "complete", candidates: [
+      { sat: "g18", valid_diff_slots: 288, recommended: true, path: "ncei/B.json" }] }
+  } };
+  try {
+    ctx._solarManifestPromise = null;
+    ctx._nceiManifestPromise = null;
+    ctx._solarDayCache.clear();
+    ctx._nceiDayCache.clear();
+    ctx.fetch = function (u) {
+      if (u.indexOf("ncei/manifest.json") !== -1) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(ncei) });
+      }
+      if (u.endsWith("/manifest.json")) {
+        return Promise.resolve({ ok: true, json: () => Promise.resolve(swpc) });
+      }
+      const day = u.indexOf("ncei/A.json") !== -1 ? "2026-09-04" : "2026-09-05";
+      return Promise.resolve({ ok: true, json: () => Promise.resolve(fileFor(day)) });
+    };
+    const depMs = Date.UTC(2026, 8, 5, 6, 0);
+    const points = [{ lat: 40, lon: -3, tMs: depMs },
+                    { lat: 40, lon: -74, tMs: depMs + 8 * 3600000 }];
+    const arch = await ctx.loadArchiveFor(points, depMs);
+    ok("F6 E2E hueco SWPC elige NCEI g18",
+       arch && arch.source && arch.source.src === "ncei" && arch.source.sat === "18",
+       arch && JSON.stringify(arch.source));
+    ok("F6 E2E descarga los dos dias NCEI",
+       arch && arch.days["2026-09-04"] && arch.days["2026-09-05"]);
+
+    let visto = null;
+    const flight = { orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
+    const occurrence = { id: 1, depDate: "2026-09-05", depTime: "06:00", timeKind: "programada",
+      state: "programado", noaaCapture: null, modelVersion: null, result: null };
+    const out = ctx.occEvaluate(flight, occurrence, arch, Date.UTC(2026, 8, 6), function (input) {
+      visto = input;
+      return { ok: true, state: "sin_senal" };
+    });
+    ok("F6 E2E el hueco SWPC llega al modelo por NCEI",
+       out.state === "sin_senal" && visto && visto.samples.length === 576, out.state);
+    ok("F6 E2E mantiene un solo satelite",
+       visto && visto.samples.every((s) => s.sat === "18"));
+
+    const roto = { manifest: arch.manifest, nceiManifest: arch.nceiManifest,
+      source: arch.source, days: Object.assign({}, arch.days, { "2026-09-05": {} }) };
+    const ilegible = ctx.occEvaluate(flight, occurrence, roto, Date.UTC(2026, 8, 6), function () {
+      return { ok: true, state: "sin_senal" };
+    });
+    ok("F6 fichero NCEI ilegible -> incompleto", ilegible.state === "incompleto", ilegible.state);
+  } finally {
+    ctx.fetch = realFetch;
+    ctx._solarManifestPromise = null;
+    ctx._nceiManifestPromise = null;
+    ctx._solarDayCache.clear();
+    ctx._nceiDayCache.clear();
+  }
+}
+
 testRouteImportKeepsCuratedIcaoAliases()
   .then(testFetchSolarManifestRetriesAfterHttpError)
   .then(testFetchNcei)
+  .then(testLoadArchiveForSwpcNoPideNcei)
+  .then(testLoadArchiveForNceiEndToEnd)
   .then(function () {
   console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");
   process.exit(fail === 0 ? 0 : 1);
