@@ -422,9 +422,16 @@ ok("sigma = 1.4826 * MAD y umbral = mediana + 3 sigma", (function () {
          Math.abs(r.baseline.sigma.p8plus - 1.4826 * mad) < 1e-15 &&
          Math.abs(r.thresholds.p8plus - (center + 3 * 1.4826 * mad)) < 1e-15;
 })());
-ok("P9+P10 tiene MAD nulo en dia tranquilo y P8+ no", (function () {
+// Con los fixtures sin cuantizar, P9+P10 SI tiene dispersion real. El cero de
+// antes lo producia el redondeo a 6 decimales de to_json.py, no el instrumento.
+// Se fijan los dos valores para que una regresion de precision vuelva a fallar.
+ok("P9+P10 y P8+ tienen dispersion real en dia tranquilo", (function () {
   const r = SepModel.detect(stitch("g16_2021-10-27.json", "g16_2021-10-28.json"));
-  return r.baseline.sigma.p9p10 === 0 && r.baseline.sigma.p8plus > 0;
+  return r.baseline.sigma.p9p10 > 0 &&
+         r.baseline.sigma.p8plus > 0 &&
+         Math.abs(r.baseline.sigma.p9p10 - 0.014325031239119991) < 1e-12 &&
+         Math.abs(r.baseline.sigma.p8plus - 0.017500464838331984) < 1e-12 &&
+         r.baseline.sigma.p8plus > r.baseline.sigma.p9p10;
 })());
 
 console.log("T7 deteccion SEP — cobertura estricta");
@@ -770,10 +777,12 @@ const EVENT_PAIRS = [["g16_2021-10-27.json", "g16_2021-10-28.json"],
                      ["g18_2024-05-08.json", "g18_2024-10-09.json"]];
 const CONTROL_PAIRS = QUIET.concat([["g18_2024-05-08.json", "g18_2024-09-01.json"],
                                     ["g18_2024-05-08.json", "g18_2024-12-08.json"]]);
-ok("justificacion: P9+P10 tiene MAD nula en TODOS los baselines tranquilos", (function () {
+// Antes se afirmaba MAD nula en los seis baselines: era la cuantizacion. Ahora
+// los seis tienen dispersion estrictamente positiva y siguen dando "sin_senal".
+ok("los seis baselines tranquilos dan sin_senal con dispersion P9+P10 > 0", (function () {
   return QUIET.every(function (pair) {
     const r = SepModel.detect(stitch(pair[0], pair[1]));
-    return r.state === "sin_senal" && r.baseline.sigma.p9p10 === 0;
+    return r.state === "sin_senal" && r.baseline.sigma.p9p10 > 0;
   });
 })());
 ok("justificacion: P8+ ponderado separa eventos (racha >= 91) de controles (racha <= 4)", (function () {
@@ -789,10 +798,16 @@ ok("justificacion: P8+ ponderado separa eventos (racha >= 91) de controles (rach
   });
   return eventsOk && controlsOk;
 })());
-ok("justificacion: con P9+P10 como confirmacion un dia tranquilo daria racha >= 3", (function () {
+// La justificacion original de Q111 ("P9+P10 confirmaria cualquier fluctuacion")
+// descansaba en datos cuantizados: con MAD cero, el umbral 3 sigma degeneraba a
+// la mediana. Con datos reales un dia tranquilo da racha 0, o sea que P9+P10 ya
+// NO produce confirmacion falsa. Se conserva P8+ como confirmacion por ser banda
+// ancha (~83-404 MeV) y por la separacion evento/control del test de arriba,
+// no por una degeneracion de P9+P10.
+ok("con datos sin cuantizar, P9+P10 no confirma un dia tranquilo", (function () {
   const channels = channelMeta("g16_2021-10-27.json");
   const stats = bandStats("g16_2021-10-27.json", P910, channels);
-  return bandRun("g16_2021-10-27.json", P910, stats.threshold, channels) >= 3;
+  return bandRun("g16_2021-10-27.json", P910, stats.threshold, channels) === 0;
 })());
 
 // === T8: ensemble espectral (fuente canonica) ==============================

@@ -54,7 +54,7 @@ como fixtures.
 
 ## Procedencia
 
-URL base: `https://data.ngdc.noaa.gov/platforms/solar-space-observing-satellites/goes/{g16|g18}/l2/data/sgps-l2-avg5m/{YYYY}/{MM}/{fichero}`
+URL base: `https://data.ngdc.noaa.gov/platforms/solar-space-observing-satellites/goes/{goes16|goes18}/l2/data/sgps-l2-avg5m/{YYYY}/{MM}/{fichero}`
 Descarga: 2026-09-05.
 
 | fichero | descripción | satélite | .nc original | sha256 del .nc |

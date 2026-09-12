@@ -111,10 +111,11 @@
   var CHANNEL_NAMES = ["P1", "P2A", "P2B", "P3", "P4", "P5", "P6", "P7",
                        "P8A", "P8B", "P8C", "P9", "P10"];
   // Confirmacion ancha (~83-404 MeV), analogo diferencial de ">=100 MeV". Se
-  // eligio sobre P9+P10 con los fixtures: en los seis baselines tranquilos la
-  // MAD de P9+P10 es EXACTAMENTE CERO (P9/P10 quedan cuantizados), su umbral
-  // 3 sigma degenera a la mediana y confirmaria cualquier fluctuacion. P8+
-  // conserva dispersion y separa los eventos reales de los controles.
+  // elige sobre P9+P10 por ancho de banda y por separacion medida entre eventos
+  // y controles (racha >= 91 frente a <= 4 en los fixtures), NO por dispersion
+  // degenerada: la "MAD cero" que motivo esta eleccion en 2026-09 era un
+  // artefacto del redondeo a 6 decimales de to_json.py, corregido a 7 cifras
+  // significativas el 2026-09-12. Con datos reales P9+P10 tiene MAD > 0.
   var CONFIRMATION_CHANNELS = ["P8A", "P8B", "P8C", "P9", "P10"];
   // Disparador duro diferencial (~160-404 MeV), analogo del integral >=500.
   var TRIGGER_CHANNELS = ["P9", "P10"];

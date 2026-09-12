@@ -55,10 +55,21 @@ def convert(src, dst):
         yaw = f[yf_name][:]
         int_nvalid = f['IntValidL1bSamplesInAvg'][:, s].copy()
 
-    # Redondear: float32 trae ~7 digitos; 6 decimales bastan y el JSON queda
-    # mucho mas compacto (los flujos van de ~1e-6 a ~1e3 pfu/keV).
-    diff = np.round(fl.astype(np.float64), 6)
-    integ_r = np.round(integ.astype(np.float64), 6)
+    # 7 cifras SIGNIFICATIVAS, no decimales fijos. Un redondeo a 6 decimales
+    # aplasta a 0.0 los canales duros (P9/P10 viven en 1e-7..1e-8) y con ellos
+    # el disparador del detector. float32 resuelve ~7.2 cifras: mas digitos
+    # serian precision inventada.
+    def sig7(a):
+        out = np.empty_like(a, dtype=np.float64)
+        flat_in = a.astype(np.float64).ravel()
+        flat_out = out.ravel()
+        for i in range(flat_in.size):
+            v = flat_in[i]
+            flat_out[i] = v if not np.isfinite(v) else float("%.7g" % v)
+        return flat_out.reshape(a.shape)
+
+    diff = sig7(fl)
+    integ_r = sig7(integ)
 
     # _FillValue (-1e31) -> null
     def clean(a):
