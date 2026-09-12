@@ -972,8 +972,26 @@
       return routePending(REASONS.SIN_DATOS);
     }
 
+    // La deteccion no mira mas alla del aterrizaje. Un onset posterior no aporta
+    // dosis —route ya descarta los tramos anteriores al onset, y los posteriores
+    // al aterrizaje no existen— pero un cambio de satelite o un hueco DESPUES de
+    // aterrizar cerraban la evaluacion entera. El 2026-09-03 el primario paso a
+    // g19 de 16:25 a 17:25Z y tumbaba TODOS los vuelos del dia en
+    // CAMBIO_SATELITE, incluido uno que habia aterrizado a las 14:51.
+    // El margen deja confirmar un onset que empiece justo antes de aterrizar.
+    // Las muestras deformes se conservan para que detect las siga rechazando:
+    // recortar no es sanear.
+    var observationEndMs = points[points.length - 1].tMs +
+      (MIN_CONSECUTIVE_SAMPLES - 1) * SAMPLING_INTERVAL_MS;
+    var windowSamples = [];
+    for (var si = 0; si < input.samples.length; si++) {
+      var candidate = input.samples[si];
+      if (!candidate || !isFiniteNumber(candidate.tMs) || candidate.tMs <= observationEndMs) {
+        windowSamples.push(candidate);
+      }
+    }
     var detection = detect({ startMs: input.startMs, channels: input.channels,
-                             samples: input.samples });
+                             samples: windowSamples });
     if (detection.state === "pendiente") return routePending(detection.reason);
     if (detection.state === "sin_senal") {
       return { ok: true, state: "sin_senal", onsetMs: null, range: null,

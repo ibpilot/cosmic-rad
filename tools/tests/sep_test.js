@@ -1476,6 +1476,60 @@ console.log("T9 ruta SEP — instrumentacion (informe T14)");
        " uSv" : "sin cifra (" + probe.reason + ")");
 })();
 
+console.log("T13 la observacion acaba en el aterrizaje");
+{
+  // Ventana: sale en startMs, aterriza 1 h despues = indice 156. El margen de
+  // confirmacion son 2 slots, asi que la observacion acaba en el indice 158.
+  const LAND_IDX = 156, END_IDX = 158;
+  const ruta = (s) => routePoints(s.startMs, s.startMs + HOUR_MS, 12, 1, 10.5);
+
+  ok("cambio de satelite DESPUES del aterrizaje no cierra la ruta", (function () {
+    const s = quietSeries(144, 24);
+    s.samples[END_IDX + 1].sat = "g16";   // el primero fuera de la ventana
+    const r = runRoute(s, ruta(s));
+    return r.ok === true && r.state === "sin_senal" && r.reason === undefined;
+  })());
+  ok("cambio de satelite DENTRO de la ventana sigue cerrando", (function () {
+    const s = quietSeries(144, 24);
+    s.samples[LAND_IDX - 6].sat = "g16";
+    const r = runRoute(s, ruta(s));
+    return r.ok === false && r.reason === "cambio_satelite";
+  })());
+  ok("hueco DESPUES del aterrizaje no cierra la ruta", (function () {
+    const s = quietSeries(144, 24);
+    s.samples.splice(END_IDX + 1, 1);
+    const r = runRoute(s, ruta(s));
+    return r.ok === true && r.state === "sin_senal" && r.reason === undefined;
+  })());
+  ok("el margen permite confirmar un onset justo antes de aterrizar", (function () {
+    // Los 3 slots que confirman el onset son exactamente los del margen: sin el,
+    // los dos ultimos se recortan, no hay racha y el evento se pierde.
+    const s = quietSeries(144, 24);
+    injectExcess(s, [LAND_IDX, LAND_IDX + 1, END_IDX], EXCESS);
+    const r = runRoute(s, ruta(s));
+    return r.ok === true && r.state === "detectado" && r.range === null;
+  })());
+  ok("satelite vacio dentro de la ventana sigue cerrando", (function () {
+    const s = quietSeries(144, 24);
+    s.samples[LAND_IDX - 6].sat = "";
+    const r = runRoute(s, ruta(s));
+    return r.ok === false && r.reason === "satelite_ausente";
+  })());
+  ok("una muestra sin tMs valido sigue llegando a detect (recortar no es sanear)", (function () {
+    // El recorte compara tMs: una muestra con tMs roto no se puede situar en la
+    // ventana, y descartarla seria sanear datos corruptos en silencio. Se
+    // conserva para que detect la rechace, este antes o despues del aterrizaje.
+    const dentro = quietSeries(144, 24);
+    dentro.samples[LAND_IDX - 6].tMs = NaN;
+    const fuera = quietSeries(144, 24);
+    fuera.samples[END_IDX + 4] = null;
+    const rd = runRoute(dentro, ruta(dentro));
+    const rf = runRoute(fuera, ruta(fuera));
+    return rd.ok === false && rd.reason === "timestamp_invalido" &&
+           rf.ok === false && rf.reason === "timestamp_invalido";
+  })());
+}
+
 console.log("T11 archivo real");
 {
   const FIXA = path.join(REPO, "tools", "fixtures", "goes", "archive");
