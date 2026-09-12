@@ -766,6 +766,8 @@ console.log("\nT11 ocurrencias UI");
      adapted.channels[0].lo_keV === 1020 && adapted.channels[0].hi_keV === 1860,
      JSON.stringify(adapted.channels[0]));
   ok("U3 576 muestras ordenadas", adapted.samples.length === 576 && sortedOk, adapted.samples.length);
+  ok("U3 satelite SWPC normalizado a '18'",
+     adapted.samples.every((s) => s.sat === "18"), adapted.samples[0].sat);
   const int0 = i08.samples[0].flux[">=500 MeV"];
   ok("U3 int500 de la muestra 0 = integral del mismo t",
      adapted.samples[0].tMs === Date.parse("2026-09-08T00:00:00Z") && adapted.samples[0].int500 === int0,
@@ -1206,6 +1208,19 @@ console.log("\nT12 lote");
        (ctx.LANG.en.monthSepRange || "").indexOf("{low}") !== -1 &&
          (ctx.LANG.en.monthSepRange || "").indexOf("{high}") !== -1, ctx.LANG.en.monthSepRange);
   }
+}
+
+console.log("\nF6-1 satKey normaliza el satelite");
+{
+  ok("F6 numero 18 -> '18'", ctx.satKey(18) === "18", ctx.satKey(18));
+  ok("F6 numero 19 -> '19'", ctx.satKey(19) === "19", ctx.satKey(19));
+  ok("F6 string '18' -> '18'", ctx.satKey("18") === "18", ctx.satKey("18"));
+  ok("F6 'g18' -> '18'", ctx.satKey("g18") === "18", ctx.satKey("g18"));
+  ok("F6 'G19' -> '19'", ctx.satKey("G19") === "19", ctx.satKey("G19"));
+  const basura = [null, undefined, "", "foo", "g", "17", "g20", "99", 20, {}, [], NaN, true];
+  ok("F6 basura -> undefined",
+     basura.every((v) => ctx.satKey(v) === undefined),
+     basura.map((v) => JSON.stringify(v) + "=" + ctx.satKey(v)).join(","));
 }
 
 testRouteImportKeepsCuratedIcaoAliases()

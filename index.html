@@ -2222,6 +2222,20 @@ var BASELINE_MS = 12 * 3600 * 1000;
 var SOLAR_CHANNEL_ORDER = ["P1", "P2A", "P2B", "P3", "P4", "P5", "P6", "P7",
   "P8A", "P8B", "P8C", "P9", "P10"];
 
+// satKey(v): satelite en forma canonica "18"/"19". SWPC lo guarda numerico por
+// muestra (18) y NCEI como string por fichero ("g18"). Sin esta normalizacion,
+// mezclar fuentes dispara CAMBIO_SATELITE en el modelo. Cualquier cosa que no
+// sea un GOES reconocible devuelve undefined: el modelo lo rechaza como
+// SATELITE_AUSENTE, que es lo correcto, en vez de colar un string plausible.
+function satKey(v) {
+  var s;
+  if (typeof v === "number" && isFinite(v)) s = String(v);
+  else if (typeof v === "string") s = v;
+  else return undefined;
+  var m = /^[gG]?(18|19)$/.exec(s);
+  return m ? m[1] : undefined;
+}
+
 // occVisible(state): agrupa el estado interno en uno de los cuatro visibles.
 // Tabla explicita; un estado fuera de la tabla es un error de programacion.
 var OCC_VISIBLE = {
@@ -2287,8 +2301,8 @@ function solarDayAdapt(diffJsons, intJsons) {
     if (!isFinite(tMs)) continue;
     var smp = {
       tMs: tMs,
-      // El modelo exige `sat` de tipo string; el archivo lo guarda numerico.
-      sat: r.sat == null ? undefined : String(r.sat),
+      // El modelo exige `sat` string; SWPC lo guarda numerico y NCEI como "g18".
+      sat: satKey(r.sat),
       int500: Object.prototype.hasOwnProperty.call(int500ByT, r.t) ? int500ByT[r.t] : undefined
     };
     if (r.flux && typeof r.flux === "object") {
