@@ -507,7 +507,12 @@
     // despues, la primera vuelta del bucle ya la rechaza como hueco.
     var consecutive = 0;
     var processed = 0;
-    var expected = startMs;
+    // La rejilla GOES es de 5 min y `startMs` es la hora de salida del vuelo,
+    // que no tiene por qué caer en ella (15:38). Se ancla en la primera muestra
+    // post-start y se exige cadencia exacta desde ahí; si esa primera muestra
+    // llega un slot entero tarde o más, el hueco al inicio sigue siendo real.
+    var expected = grouped.timestamps[0];
+    if (expected - startMs >= SAMPLING_INTERVAL_MS) return pending(REASONS.HUECO_OBSERVACION);
     for (var i = 0; i < grouped.timestamps.length; i++) {
       if (grouped.timestamps[i] !== expected) return pending(REASONS.HUECO_OBSERVACION);
       var sample = resolveDuplicate(grouped.groups[String(expected)]);

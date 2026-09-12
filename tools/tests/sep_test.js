@@ -647,6 +647,20 @@ ok("GLE73 sin la primera hora post-start -> pendiente (nunca detectado)", (funct
   const r = SepModel.detect(s);
   return r.state === "pendiente" && r.reason === "hueco_observacion";
 })());
+console.log("T7 deteccion SEP — startMs fuera de la rejilla de 5 min");
+ok("salida a :38 (3 min tras el slot) no es hueco", (function () {
+  const s = quietSeries(144, 24);
+  s.startMs = s.startMs + 3 * 60 * 1000;   // vuelo que sale fuera de la rejilla
+  const r = SepModel.detect(s);
+  return r.state === "sin_senal" && r.reason === undefined;
+})());
+ok("startMs fuera de rejilla con hueco real al inicio -> pendiente", (function () {
+  const s = quietSeries(144, 24);
+  s.startMs = s.startMs + 3 * 60 * 1000;
+  s.samples.splice(145, 1);   // borra la primera muestra post-start
+  const r = SepModel.detect(s);
+  return r.state === "pendiente" && r.reason === "hueco_observacion";
+})());
 ok("duplicados identicos post-start se ignoran (mismo onset)", (function () {
   const s = quietSeries(144, 24);
   injectExcess(s, [144, 145, 146], EXCESS);
@@ -1409,6 +1423,17 @@ console.log("T11 archivo real");
                              startMs: startMs, points: points, operator: fakeOperator(1, 0.01) });
   ok("R1 dia tranquilo -> ok:true, sin_senal", r.ok === true && r.state === "sin_senal",
      JSON.stringify({ ok: r.ok, state: r.state, reason: r.reason, code: r.code }));
+  const offGrid = Date.UTC(2026, 8, 9, 6, 38);
+  const pointsOff = [];
+  for (let i = 0; i <= 12; i++) {
+    pointsOff.push({ tMs: offGrid + i * 15 * 60 * 1000, rcGV: 1.0, altitudeKm: 10.5 });
+  }
+  const rOff = SepModel.route({ channels: adapted.channels, samples: adapted.samples,
+                                startMs: offGrid, points: pointsOff,
+                                operator: fakeOperator(1, 0.01) });
+  ok("R2 salida a las 06:38 (fuera de rejilla) -> ok:true, sin_senal",
+     rOff.ok === true && rOff.state === "sin_senal",
+     JSON.stringify({ ok: rOff.ok, state: rOff.state, reason: rOff.reason }));
 }
 
 console.log("\n" + pass + " pass, " + fail + " fail");
