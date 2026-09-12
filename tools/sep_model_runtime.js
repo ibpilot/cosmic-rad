@@ -131,8 +131,11 @@
   // --- Optimizador: rangos, pasos, semillas, iteraciones y tolerancias -------
   var GOLDEN_RATIO_INVERSE = 0.6180339887498949;
   var EXPONENT_MIN = -8;              // pendiente log-log minima explorada
-  var EXPONENT_MAX = 4;               // pendiente log-log maxima explorada
-  var POWER_GAMMA_MIN = -2;           // rejilla gruesa de la ley de potencia
+  // 0 y no 4: un espectro SEP creciente con la energia no existe. Con el tope
+  // en +4 la doble ley ajusto f ~ E^+0.39 y 16700 uSv/h en el primer paso tras
+  // el onset del 2026-09-05, y esa cola inventada cerraba la ruta entera.
+  var EXPONENT_MAX = 0;               // pendiente log-log maxima explorada
+  var POWER_GAMMA_MIN = 0;            // rejilla gruesa de la ley de potencia
   var POWER_GAMMA_MAX = 8;
   var POWER_GAMMA_COARSE_STEP = 0.1;
   var POWER_GAMMA_REFINE_HALF_WIDTH = 0.1;
@@ -144,6 +147,18 @@
   var DOUBLE_LAW_REFINE_ALTERNATIONS = 4;
   var DOUBLE_LAW_REFINE_ITERATIONS = 20;
   var SSE_EARLY_STOP = 1e-12;         // SSE bajo el cual no se refina mas
+  // Pendiente minima impuesta por encima del ultimo canal medido. GOES acaba en
+  // P10 (~0.39 GeV) y el operador integra hasta 18.74 GeV: extrapolar alli la
+  // pendiente ajustada metia hasta el 65% de la dosis en una region sin una
+  // sola medida, y el gate de cola cerraba TODO evento real en
+  // sin_convergencia (GLE74 y el 2026-09-05 incluidos). Los espectros SEP
+  // reales se doblan por encima de unos cientos de MeV. El valor 3 es el minimo
+  // que resuelve el problema: no mueve NINGUNA cifra validada (el evento blando
+  // de referencia es E^-3, asi que la rodilla no le ata), y aun asi GLE74 y el
+  // 2026-09-05 convergen. Subirlo a 4 o 5 sesga la dosis a la BAJA (3.3x y 7x
+  // menos en el evento de referencia), que en dosimetria es el lado peligroso.
+  var EXTRAPOLATION_MIN_GAMMA = 3;
+  var KNEE_PROBE_RATIO = 0.99;        // sonda de la pendiente local bajo el tope
 
   function isFiniteNumber(value) {
     return typeof value === "number" && isFinite(value);
@@ -622,6 +637,31 @@
     return (a + b) / 2;
   }
 
+  // Sobre el ultimo canal medido no hay dato: se prolonga el ajuste con una
+  // pendiente de al menos EXTRAPOLATION_MIN_GAMMA. Nunca ABLANDA un ajuste que
+  // ya caiga mas rapido; solo endurece el que no lo hace. Un solo envoltorio
+  // para los dos miembros del ensemble: la ley simple es la que se desbocaba,
+  // pero la doble tambien extrapola por encima de su rodilla.
+  function kneeAboveMeasured(spectrum, bins) {
+    var topGeV = -Infinity;
+    for (var i = 0; i < bins.length; i++) {
+      if (bins[i].hiGeV > topGeV) topGeV = bins[i].hiGeV;
+    }
+    if (!isFiniteNumber(topGeV) || !(topGeV > 0)) return spectrum;
+    var anchor = spectrum(topGeV);
+    if (!isFiniteNumber(anchor) || !(anchor > 0)) return spectrum;
+    // Pendiente local justo por debajo del tope, para no ablandar nada.
+    var below = spectrum(topGeV * KNEE_PROBE_RATIO);
+    var localGamma = isFiniteNumber(below) && below > 0
+      ? Math.log(below / anchor) / Math.log(1 / KNEE_PROBE_RATIO) : 0;
+    var gamma = localGamma > EXTRAPOLATION_MIN_GAMMA ? localGamma : EXTRAPOLATION_MIN_GAMMA;
+    return function (energyGeV) {
+      if (!(energyGeV > 0)) return 0;
+      if (energyGeV <= topGeV) return spectrum(energyGeV);
+      return anchor * Math.pow(energyGeV / topGeV, -gamma);
+    };
+  }
+
   function powerLawSSE(bins, gamma) {
     return shapeResidual(bins, function (loGeV, hiGeV) { return powerShape(loGeV, hiGeV, gamma); });
   }
@@ -636,9 +676,11 @@
       if (!best || sse < best.sse) best = { gamma: gamma, sse: sse };
     }
     if (!best) return null;
+    // El refinado se acota a la rejilla: sin esto devolvia gamma por debajo de
+    // POWER_GAMMA_MIN (0.90 con el suelo en 1) y el suelo no servia de nada.
     var refined = minimize1D(function (x) { return powerLawSSE(bins, x); },
-                             best.gamma - POWER_GAMMA_REFINE_HALF_WIDTH,
-                             best.gamma + POWER_GAMMA_REFINE_HALF_WIDTH,
+                             Math.max(POWER_GAMMA_MIN, best.gamma - POWER_GAMMA_REFINE_HALF_WIDTH),
+                             Math.min(POWER_GAMMA_MAX, best.gamma + POWER_GAMMA_REFINE_HALF_WIDTH),
                              POWER_GAMMA_REFINE_ITERATIONS);
     var amplitude = amplitudeFrom(bins, function (loGeV, hiGeV) {
       return powerShape(loGeV, hiGeV, refined);
@@ -646,9 +688,9 @@
     if (amplitude === null || !isFiniteNumber(refined)) return null;
     return {
       model: "power-law", amplitude: amplitude, gamma: refined,
-      spectrumAtGeV: function (energyGeV) {
+      spectrumAtGeV: kneeAboveMeasured(function (energyGeV) {
         return energyGeV > 0 ? amplitude * Math.pow(energyGeV, -refined) : 0;
-      }
+      }, bins)
     };
   }
 
@@ -711,10 +753,10 @@
     return {
       model: "double-power-law", amplitude: amplitude, breakGeV: knee,
       gamma1: -lowExp, gamma2: -highExp,
-      spectrumAtGeV: function (energyGeV) {
+      spectrumAtGeV: kneeAboveMeasured(function (energyGeV) {
         if (!(energyGeV > 0)) return 0;
         return amplitude * Math.pow(energyGeV / knee, energyGeV < knee ? lowExp : highExp);
-      }
+      }, bins)
     };
   }
 

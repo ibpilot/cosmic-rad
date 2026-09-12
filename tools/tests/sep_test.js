@@ -897,7 +897,9 @@ ok("conversion keV/GeV y por-keV/por-GeV correctas (amplitud a 1 GeV)", (functio
   const r = runEnsemble(syntheticSample(SYNTH, BASE_Q), fakeOperator(1, 0.01));
   if (!r.ok) return false;
   const solution = r.solutions.filter((s) => s.model === "power-law")[0];
-  return Math.abs(solution.spectrumAtGeV(1) / SYNTH(1) - 1) < 0.10 &&
+  // 0.2 GeV esta dentro de los canales (P10 acaba en 0.39 GeV). A 1 GeV ya
+  // manda la rodilla de extrapolacion, que es otra cosa y se prueba aparte.
+  return Math.abs(solution.spectrumAtGeV(0.2) / SYNTH(0.2) - 1) < 0.10 &&
          Math.abs(solution.amplitude - 100) / 100 < 0.10;
 })());
 ok("ambas spectrumAtGeV son finitas y no negativas entre 50 MeV y 20 GeV", (function () {
@@ -1076,11 +1078,44 @@ ok("un error real del operador (altitud fuera de rango) es sin cifra", (function
                                 operator: ctx.SEP_DOSE, rcGV: 0, altitudeKm: 99 });
   return r.ok === false && r.code === "ALTITUDE_OUT_OF_RANGE" && r.range === undefined;
 })());
-ok("espectro artificialmente duro provoca sin cifra (no un numero)", (function () {
+ok("espectro plano: la rodilla lo doma y da cifra (antes moria por cola)", (function () {
   const sample = syntheticSample(function () { return 1; }, BASE_Q);
   const r = SepModel.ensemble({ channels: CHANNELS, sample: sample, baseline: BASE_Q,
                                 operator: ctx.SEP_DOSE, rcGV: 0, altitudeKm: 10.5 });
-  return r.ok === false && r.code === "SIN_CONVERGENCIA" && r.range === undefined && r.solutions === undefined;
+  return r.ok === true && !!r.range && r.range.lowUsvH > 0;
+})());
+ok("la rodilla cae al menos como E^-3 sobre el ultimo canal medido", (function () {
+  const sample = syntheticSample(function () { return 1; }, BASE_Q);
+  const r = SepModel.ensemble({ channels: CHANNELS, sample: sample, baseline: BASE_Q,
+                                operator: fakeOperator(1, 0.01), rcGV: 0, altitudeKm: 10.5 });
+  if (!r.ok) return false;
+  const top = Math.max.apply(null, CHANNELS.map((c) => c.hi_keV)) / KEV_PER_GEV;
+  return r.solutions.every(function (solution) {
+    const a = solution.spectrumAtGeV(top), b = solution.spectrumAtGeV(top * 10);
+    if (!(a > 0) || !(b > 0)) return false;
+    const gamma = Math.log(a / b) / Math.log(10);
+    return gamma >= 3 - 1e-9;
+  });
+})());
+ok("un espectro medido CRECIENTE no se ajusta con gamma negativa", (function () {
+  // Un espectro SEP que crece con la energia no existe. La rejilla arranca en
+  // gamma=0 Y el refinado esta acotado a ella: sin cualquiera de las dos cosas
+  // el ajuste devuelve gamma<0, se dispara al extrapolar y metia 16700 uSv/h.
+  const RISING = (E) => 100 * Math.pow(E, 1);
+  const r = runEnsemble(syntheticSample(RISING, BASE_Q), fakeOperator(1, 0.01));
+  if (!r.ok) return false;
+  const solution = r.solutions.filter((s) => s.model === "power-law")[0];
+  return !!solution && solution.gamma >= 0;
+})());
+ok("la rodilla NO ablanda un ajuste que ya cae mas rapido que E^-3", (function () {
+  const STEEP = (E) => 100 * Math.pow(E, -5);
+  const r = runEnsemble(syntheticSample(STEEP, BASE_Q), fakeOperator(1, 0.01));
+  if (!r.ok) return false;
+  const solution = r.solutions.filter((s) => s.model === "power-law")[0];
+  const top = Math.max.apply(null, CHANNELS.map((c) => c.hi_keV)) / KEV_PER_GEV;
+  const a = solution.spectrumAtGeV(top), b = solution.spectrumAtGeV(top * 10);
+  const gamma = Math.log(a / b) / Math.log(10);
+  return gamma > 4.5;
 })());
 ok("flujo por debajo de la linea base se satura a cero (nunca negativo)", (function () {
   const baseline = {}, sample = { int500: 1 };
@@ -1220,11 +1255,17 @@ ok("convergencia de ruta <5% al duplicar pasos", (function () {
   return coarse.ok && fine.ok && coarse.range && fine.range &&
          Math.abs(routeCenter(fine) / routeCenter(coarse) - 1) < 0.05;
 })());
-ok("GLE73 real (espectro duro) falla cerrado por cola, no da cifra", (function () {
+ok("GLE73 real da cifra con la rodilla (antes moria por cola)", (function () {
   const s = t9Series(), k = t9OnsetIndex(s);
   if (k < 0) return false;
   const r = runRoute(s, routeFromOnset(s, k, 2, 24, 1, 10.5));
-  return r.ok === false && r.state === "pendiente" && r.reason === "sin_convergencia";
+  console.log("  GLE73 real: " + (r.range ? r.range.lowUsv.toFixed(4) + " - " +
+    r.range.highUsv.toFixed(4) + " uSv" : "sin cifra (" + r.reason + ")"));
+  // Cifra fijada el 2026-09-12 con la rodilla en E^-3: si el modelo se mueve,
+  // este test lo dice en vez de dejarlo pasar por "hay un rango".
+  return r.ok === true && r.state === "detectado" && !!r.range &&
+         Math.abs(r.range.lowUsv / 2.3092 - 1) <= 0.05 &&
+         Math.abs(r.range.highUsv / 6.9277 - 1) <= 0.05;
 })());
 ok("el rango se forma DESPUES de integrar cada miembro (no punto a punto)", (function () {
   const s = t9Series(), k = t9OnsetIndex(s);
