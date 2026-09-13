@@ -2117,8 +2117,8 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
      panelSrc.length + "/" + infoSrc.length);
   ok("SC2 aria-expanded ligado a open", /"aria-expanded":\s*open/.test(panelSrc));
   ok("SC2 aria-controls apunta al id del panel",
-     panelSrc.indexOf('"aria-controls": SOLAR_CHECK_PANEL_ID') !== -1 &&
-     panelSrc.indexOf("id: SOLAR_CHECK_PANEL_ID") !== -1);
+     panelSrc.indexOf('"aria-controls": panelId') !== -1 &&
+     panelSrc.indexOf("id: panelId") !== -1);
   ok("SC2 zona de estado role=status + aria-live polite",
      /role:\s*"status"/.test(panelSrc) && /"aria-live":\s*"polite"/.test(panelSrc));
   ok("SC2 botones nativos type=button", (panelSrc.match(/type:\s*"button"/g) || []).length >= 3,
@@ -2232,22 +2232,24 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
   ok("SC8 el borrador inválido deshabilita el botón",
      /var valid = depDraftPatch\(draft\) !== null;/.test(panelSrc) && /disabled:\s*!valid/.test(panelSrc));
   ok("SC8 runCheck descarta el borrador inválido",
-     /var p = depDraftPatch\(draft\);\s*if \(p === null\) return;/.test(panelSrc));
+     /var p = depDraftPatch\(draft\);\s*if \(p === null\) \{/.test(panelSrc));
+  ok("SC8 sin fecha en el planificador lo dice en vez de callar",
+     /if \(p === null\) \{[\s\S]{0,220}if \(linked\) setCheck\(\{ status: "done", ev: \{ state: "esperando_fecha"/.test(panelSrc));
 
   // SC9 — el modal de información es accesible y explica los estados.
   ok("SC9 modal con dialog/aria-modal",
      /role:\s*"dialog"/.test(infoSrc) && /"aria-modal":\s*"true"/.test(infoSrc));
   ok("SC9 Escape cierra el modal", infoSrc.indexOf('e.key === "Escape"') !== -1);
   const estadosES = ["Sin fecha", "Programado", "Esperando datos", "Incompleto", "Sin señal",
-    "Estimación disponible", "Incorporada", "Modelo actualizado", "sin cifra acotable",
-    "Archivo GOES no disponible", "Fuera de archivo"];
-  ok("SC9 la sección de estados nombra los once estados (ES)",
+    "Estimación disponible", "Incorporada", "Modelo actualizado", "Sin cifra acotable",
+    "Sin contribución medible en esta ruta", "Archivo GOES no disponible", "Fuera de archivo"];
+  ok("SC9 la sección de estados nombra los doce estados (ES)",
      estadosES.every((s) => tES.solarInfoStatesBody.indexOf(s) !== -1),
      estadosES.filter((s) => tES.solarInfoStatesBody.indexOf(s) === -1).join(" | "));
   const estadosEN = ["No date", "Scheduled", "Waiting for data", "Incomplete", "No signal",
-    "Estimate available", "Incorporated", "Model updated", "no boundable figure",
-    "GOES archive unavailable", "Out of archive"];
-  ok("SC9 la sección de estados nombra los once estados (EN)",
+    "Estimate available", "Incorporated", "Model updated", "No boundable figure",
+    "No measurable contribution on this route", "GOES archive unavailable", "Out of archive"];
+  ok("SC9 la sección de estados nombra los doce estados (EN)",
      estadosEN.every((s) => tEN.solarInfoStatesBody.indexOf(s) !== -1),
      estadosEN.filter((s) => tEN.solarInfoStatesBody.indexOf(s) === -1).join(" | "));
   const cuerpoES = tES.solarInfoWhatBody + tES.solarInfoHowBody + tES.solarInfoSourcesBody + tES.solarInfoLimitsBody;
@@ -2275,6 +2277,67 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
   ok("SC12 el cierre es de identidad estable",
      /onClose: closeInfo/.test(panelSrc) && panelSrc.indexOf("useCallback") !== -1);
   ok("SC12 la lámina del diálogo tiene ref para el foco", /ref: sheetRef/.test(infoSrc));
+
+  // SC13 — el planificador tiene el mismo botón, uno por vuelo.
+  const rowSrc = html.slice(html.indexOf("function FlightRow"), html.indexOf("function FlightPair"));
+  var panelAt = rowSrc.indexOf("React.createElement(SolarCheckPanel");
+  var occListAt = rowSrc.indexOf("React.createElement(OccList");
+  ok("SC13 el panel está en la tarjeta de vuelo del planificador", panelAt !== -1);
+  // El panel va con los campos del vuelo (fecha/hora), por encima de las
+  // ocurrencias: debajo del ☀ no hay ninguna fecha que no sea suya.
+  ok("SC13 el panel va antes de la lista de ocurrencias",
+     panelAt !== -1 && occListAt !== -1 && panelAt < occListAt, panelAt + "/" + occListAt);
+  ok("SC13 usa la ruta, el FL y el GCR de ESE vuelo",
+     /SolarCheckPanel[\s\S]{0,300}uid:\s*id[\s\S]{0,200}orig:\s*orig[\s\S]{0,200}dest:\s*dest[\s\S]{0,200}flIdx:\s*flIdx[\s\S]{0,200}gcrUsv:\s*calc\.doseUsv/.test(rowSrc),
+     "panel sin la ruta del vuelo");
+  ok("SC13 solo con ruta válida y cálculo hecho",
+     /valid && calc \? \/\*#__PURE__\*\/React\.createElement\(SolarCheckPanel/.test(rowSrc));
+  ok("SC13 el id del panel es único por vuelo",
+     panelSrc.indexOf("var panelId = SOLAR_CHECK_PANEL_ID + (uid ==") !== -1 &&
+     panelSrc.indexOf('"aria-controls": panelId') !== -1 &&
+     panelSrc.indexOf("id: panelId") !== -1 &&
+     /SolarInfoModal[\s\S]{0,200}titleId:\s*infoTitleId/.test(panelSrc));
+  ok("SC13 el panel recibe el track del vuelo",
+     /SolarCheckPanel[\s\S]{0,400}track:\s*flight\.track/.test(rowSrc) &&
+     panelSrc.indexOf("if (Array.isArray(track)) flight.track = track;") !== -1);
+  ok("SC13 el modal usa el titleId que recibe",
+     infoSrc.indexOf("titleId = _refSolarInfo.titleId") !== -1 &&
+     infoSrc.indexOf('"aria-labelledby": infoTitleId') !== -1 &&
+     infoSrc.indexOf("id: infoTitleId") !== -1);
+
+  // SC14 — en el planificador la fecha/hora solo vive en el panel solar.
+  const occSrc = html.slice(html.indexOf("function OccList"), html.indexOf("function FlightRow"));
+  ok("SC14 la lista de ocurrencias no pinta campos de fecha/hora",
+     occSrc.length > 200 && occSrc.indexOf('type: "date"') === -1 &&
+     occSrc.indexOf('type: "time"') === -1, "Campos de fecha fuera del panel");
+  ok("SC14 una ocurrencia sin fecha no pinta fila",
+     occSrc.indexOf('if (state === "esperando_fecha") return null;') !== -1);
+  ok("SC14 la fecha/hora sigue disponible en el panel solar",
+     panelSrc.indexOf('type: "date"') !== -1 && panelSrc.indexOf('type: "time"') !== -1 &&
+     panelSrc.indexOf('className: "occ-input"') !== -1);
+
+  // SC15 — en el planificador la fecha/hora vive en la fila del vuelo y el
+  // panel ligado solo comprueba y pinta el estado debajo.
+  const trackBtnAt = rowSrc.indexOf("t.trackBtn");
+  const dateAt = rowSrc.indexOf('type: "date"');
+  const calcAt = rowSrc.indexOf("t.calcInfoTitle");
+  ok("SC15 la fecha/hora va entre 'Importar ruta' y 'Cálculo'",
+     trackBtnAt !== -1 && dateAt !== -1 && calcAt !== -1 && trackBtnAt < dateAt && dateAt < calcAt,
+     trackBtnAt + "/" + dateAt + "/" + calcAt);
+  ok("SC15 la fecha/hora de la fila es compacta (no empuja Cálculo de línea)",
+     rowSrc.indexOf('className: "gle-dep gle-dep-inline"') !== -1 &&
+     html.indexOf('.gle-dep-inline input[type="date"]') !== -1 &&
+     html.indexOf('@media (min-width:421px)') !== -1);
+  ok("SC15 la fecha/hora se guarda como salida del vuelo",
+     rowSrc.indexOf('_onChange(id, "depDate", e.target.value)') !== -1 &&
+     rowSrc.indexOf('_onChange(id, "depTime", e.target.value)') !== -1);
+  ok("SC15 el panel del planificador se ata a la salida del vuelo",
+     /SolarCheckPanel[\s\S]{0,500}depDate:\s*flight\.depDate/.test(rowSrc) &&
+     /depTime:\s*flight\.depTime/.test(rowSrc));
+  ok("SC15 el panel ligado no pinta campos, solo el estado",
+     panelSrc.indexOf("}, linked ? statusEl : (open && React.createElement(\"div\", {") !== -1 &&
+     panelSrc.indexOf("onClick: linked ? runCheck") !== -1);
+  ok("SC15 el bloque Salida suelto ya no existe", html.indexOf("showDep") === -1);
 }
 
 // SC11 — la consulta puntual con las dependencias inyectadas: fija cada rama

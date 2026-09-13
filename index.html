@@ -87,6 +87,12 @@ table { border-collapse:collapse; width:100%; }
   background:rgba(40,160,100,0.15); border:1px solid rgba(40,160,100,0.35);
   color:#40c080; font-size:11px; font-weight:700; }
 .occ-confirm:disabled { opacity:0.35; cursor:not-allowed; }
+/* Fecha/hora del vuelo en la fila de "Importar ruta" y "Cálculo": compacta, para
+   que quepan las tres. En movil mandan las reglas de la linea siguiente. */
+@media (min-width:421px) {
+  .gle-dep-inline input[type="date"] { min-width:0; width:140px; }
+  .gle-dep-inline input[type="time"] { min-width:0; width:104px; }
+}
 @media (max-width:420px) { .gle-dep input, .occ-input { min-width:0; width:100%; } }
 .gle-split { opacity:0.8; font-size:11px; color:#e0c080; }
 .gle-nofig { font-weight: 600; }
@@ -424,7 +430,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.28";
+var APP_VERSION = "1.29";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -4924,7 +4930,7 @@ var LANG = {
     occState_fuera_de_rango: "sin archivo GOES (desde el 11-09-2025)",
     occState_modelo_nuevo: "modelo actualizado",
     occState_esperando_fecha: "sin fecha",
-    occState_sin_senal_evento: "evento solar activo sin contribución estimable en esta ruta",
+    occState_sin_senal_evento: "evento solar detectado sin contribución medible en esta ruta",
     occState_ya_incorporada: "ya incorporada",
     occState_sin_evaluar: "sin evaluar",
     occState_hora_estimada: "hora estimada, incorpórala a mano",
@@ -4934,7 +4940,6 @@ var LANG = {
     occIncorporate: "Incorporar",
     occRecalc: "Recalcular",
     occRemove: "quitar",
-    occConfirm: "Confirmar",
     occChecking: "comprobando…",
     batchAdd: "Añadir todas",
     batchUndo: "Deshacer",
@@ -4966,7 +4971,7 @@ var LANG = {
     solarInfoLimitsTitle: "Precisión y límites",
     solarInfoLimitsBody: "El rango se presenta con un mínimo factor 3 entre extremos y su escala se apoya en un único evento calibrante: es orientativo y experimental, no dosimetría certificada. No damos porcentaje de confianza. Las fechas y horas son UTC obligatoriamente. El archivo empieza el 2025-09-11 y el histórico NCEI suele publicarse con unos 2 días de retraso. Muy importante: un fallo de red o un dato pendiente NO significan dosis cero; solo un cero medido se muestra como cero.",
     solarInfoStatesTitle: "Estados posibles",
-    solarInfoStatesBody: "Sin fecha: falta la fecha o la hora y no se calcula nada.\n\nProgramado / futuro: el vuelo aún no ha aterrizado; no hay observación que evaluar.\n\nEsperando datos: falta el archivo del día, pero puede llegar.\n\nIncompleto: el dato existe pero no permite medir (hueco, canal ausente, cambio de satélite).\n\nSin señal: el dato está completo y no se detecta contribución solar; es un cero medido.\n\nEstimación disponible: hay rango SEP con cifra y se muestra el rango y el total.\n\nIncorporada (solo planificador): la cifra se ha añadido al plan mensual; en Vuelo único esto no ocurre.\n\nModelo actualizado: la cifra se calculó con una versión anterior del modelo y conviene recalcularla.\n\nEvento sin cifra acotable: hay evento activo pero el modelo no puede acotar una cifra en esta ruta; no es cero.\n\nArchivo GOES no disponible: no se pudo leer el archivo (red); no es cero.\n\nFuera de archivo: la ventana cae antes del inicio del archivo (2025-09-11); no hay dato y no es cero.",
+    solarInfoStatesBody: "Sin fecha: falta la fecha o la hora y no se calcula nada.\n\nProgramado / futuro: el vuelo aún no ha aterrizado; no hay observación que evaluar.\n\nEsperando datos: falta el archivo del día, pero puede llegar.\n\nIncompleto: el dato existe pero no permite medir (hueco, canal ausente, cambio de satélite).\n\nSin señal: el dato está completo y no se detecta contribución solar; es un cero medido.\n\nEstimación disponible: hay rango SEP con cifra y se muestra el rango y el total.\n\nIncorporada (solo planificador): la cifra se ha añadido al plan mensual; en Vuelo único esto no ocurre.\n\nModelo actualizado: la cifra se calculó con una versión anterior del modelo y conviene recalcularla.\n\nSin cifra acotable: hay un evento solar, pero el modelo no consigue acotar un rango (el espectro no es resoluble o no converge). Es terminal: no se arregla con más datos, y no es cero.\n\nSin contribución medible en esta ruta: hay evento solar detectado, pero ningún tramo de esta ruta (altitud y corte geomagnético) supera el umbral medible; no es cero.\n\nArchivo GOES no disponible: no se pudo leer el archivo (red); no es cero.\n\nFuera de archivo: la ventana cae antes del inicio del archivo (2025-09-11); no hay dato y no es cero.",
     codeNotFound: "Código no encontrado",
     originLabel: "Origen",
     destLabel: "Destino",
@@ -5239,7 +5244,7 @@ var LANG = {
     occState_fuera_de_rango: "no GOES archive (from 2025-09-11)",
     occState_modelo_nuevo: "model updated",
     occState_esperando_fecha: "no date",
-    occState_sin_senal_evento: "active solar event with no estimable contribution on this route",
+    occState_sin_senal_evento: "solar event detected with no measurable contribution on this route",
     occState_ya_incorporada: "already incorporated",
     occState_sin_evaluar: "not evaluated",
     occState_hora_estimada: "estimated time, incorporate it manually",
@@ -5249,7 +5254,6 @@ var LANG = {
     occIncorporate: "Incorporate",
     occRecalc: "Recalculate",
     occRemove: "remove",
-    occConfirm: "Confirm",
     occChecking: "checking…",
     batchAdd: "Add all",
     batchUndo: "Undo",
@@ -5281,7 +5285,7 @@ var LANG = {
     solarInfoLimitsTitle: "Precision and limits",
     solarInfoLimitsBody: "The range is shown with a minimum factor of 3 between its ends and its scale rests on a single calibrating event: it is indicative and experimental, not certified dosimetry. We give no confidence percentage. Dates and times are UTC by requirement. The archive starts on 2025-09-11 and the NCEI history is usually published about 2 days late. Very important: a network failure or pending data does NOT mean zero dose; only a measured zero is shown as zero.",
     solarInfoStatesTitle: "Possible states",
-    solarInfoStatesBody: "No date: the date or time is missing and nothing is calculated.\n\nScheduled / future: the flight has not landed yet; there is no observation to evaluate.\n\nWaiting for data: that day's archive is missing but may arrive.\n\nIncomplete: the data exists but cannot be measured (gap, missing channel, satellite change).\n\nNo signal: the data is complete and no solar contribution is detected; this is a measured zero.\n\nEstimate available: there is an SEP range with a figure, and the range and total are shown.\n\nIncorporated (planner only): the figure has been added to the monthly plan; in Single flight this does not happen.\n\nModel updated: the figure was computed with an older model version and should be recalculated.\n\nEvent with no boundable figure: an event is active but the model cannot bound a figure on this route; it is not zero.\n\nGOES archive unavailable: the archive could not be read (network); it is not zero.\n\nOut of archive: the window falls before the archive start (2025-09-11); there is no data and it is not zero.",
+    solarInfoStatesBody: "No date: the date or time is missing and nothing is calculated.\n\nScheduled / future: the flight has not landed yet; there is no observation to evaluate.\n\nWaiting for data: that day's archive is missing but may arrive.\n\nIncomplete: the data exists but cannot be measured (gap, missing channel, satellite change).\n\nNo signal: the data is complete and no solar contribution is detected; this is a measured zero.\n\nEstimate available: there is an SEP range with a figure, and the range and total are shown.\n\nIncorporated (planner only): the figure has been added to the monthly plan; in Single flight this does not happen.\n\nModel updated: the figure was computed with an older model version and should be recalculated.\n\nNo boundable figure: a solar event exists, but the model cannot bound a range (the spectrum is not resolvable or does not converge). It is terminal: better data will not fix it, and it is not zero.\n\nNo measurable contribution on this route: a solar event was detected, but no step along this route (altitude and geomagnetic cutoff) clears the measurable threshold; it is not zero.\n\nGOES archive unavailable: the archive could not be read (network); it is not zero.\n\nOut of archive: the window falls before the archive start (2025-09-11); there is no data and it is not zero.",
     codeNotFound: "Code not found",
     originLabel: "Origin",
     destLabel: "Destination",
@@ -5977,16 +5981,6 @@ function OccList(_refOcc) {
     tempRef.current = makeOccurrence(flight.depDate, flight.depTime, "real");
   }
   var rows = single ? [tempRef.current] : occs;
-  var _useStateD = useState(function () {
-    var m = {};
-    rows.forEach(function (o) {
-      m[o.id] = { depDate: o.depDate || "", depTime: o.depTime || "" };
-    });
-    return m;
-  }),
-    _useStateD2 = _slicedToArray(_useStateD, 2),
-    drafts = _useStateD2[0],
-    setDrafts = _useStateD2[1];
   var active = single || open;
   // Evaluacion perezosa: solo al desplegar (o en la fila unica). El resultado
   // vive en estado local del componente; nunca se persiste.
@@ -6056,6 +6050,9 @@ function OccList(_refOcc) {
   function renderRow(occ) {
     var ev = evals[occ.id];
     var state = ev ? ev.state : occ.state;
+    // Sin fecha no hay nada que evaluar, y la fecha/hora se piden en el panel
+    // de comprobacion solar: aqui no se pinta ningun campo de fecha.
+    if (state === "esperando_fecha") return null;
     var vis = occVisible(state);
     var detail = ev
       ? (ev.eventActive ? t.occState_sin_senal_evento : t["occState_" + state])
@@ -6071,43 +6068,6 @@ function OccList(_refOcc) {
         key: "rm", style: btnSmall,
         onClick: function () { patch(occ, { state: "programado", result: null, modelVersion: null }); }
       }, t.occRemove));
-    } else if (state === "esperando_fecha") {
-      var draft = drafts[occ.id] || { depDate: occ.depDate || "", depTime: occ.depTime || "" };
-      actions.push(React.createElement("input", {
-        key: "d", type: "date", className: "occ-input", value: draft.depDate,
-        onChange: function (e) {
-          var v = e.target.value;
-          setDrafts(function (m) {
-            var n = _objectSpread({}, m);
-            n[occ.id] = _objectSpread(_objectSpread({}, draft), { depDate: v });
-            return n;
-          });
-        }
-      }));
-      actions.push(React.createElement("input", {
-        key: "t", type: "time", className: "occ-input", value: draft.depTime,
-        onChange: function (e) {
-          var v = e.target.value;
-          setDrafts(function (m) {
-            var n = _objectSpread({}, m);
-            n[occ.id] = _objectSpread(_objectSpread({}, draft), { depTime: v });
-            return n;
-          });
-        }
-      }));
-      actions.push(React.createElement("button", {
-        key: "ok", className: "occ-confirm", disabled: depDraftPatch(draft) === null,
-        onClick: function () {
-          var p = depDraftPatch(draft);
-          if (p === null) return;
-          patch(occ, _objectSpread(p, { state: "programado", result: null, timeKind: "real" }));
-          setDrafts(function (m) {
-            var n = _objectSpread({}, m);
-            delete n[occ.id];
-            return n;
-          });
-        }
-      }, t.occConfirm));
     } else if (vis === "disponible") {
       if (state === "modelo_nuevo") {
         actions.push(React.createElement("button", {
@@ -6176,7 +6136,6 @@ function FlightRow(_ref9) {
     onRemove = _ref9.onRemove,
     onAddReturn = _ref9.onAddReturn,
     onTrack = _ref9.onTrack,
-    showDep = _ref9.showDep,
     t = _ref9.t;
   var id = flight.id,
     orig = flight.orig,
@@ -6206,17 +6165,6 @@ function FlightRow(_ref9) {
     _useStateR2 = _slicedToArray(_useStateR, 2),
     showCalc = _useStateR2[0],
     setShowCalc = _useStateR2[1];
-  var depRef = useRef(null);
-  var _useStateDep = useState({ depDate: flight.depDate || "", depTime: flight.depTime || "" }),
-    _useStateDep2 = _slicedToArray(_useStateDep, 2),
-    depDraft = _useStateDep2[0],
-    setDepDraft = _useStateDep2[1];
-  if (depRef.current === null ||
-      depRef.current.depDate !== (flight.depDate || "") ||
-      depRef.current.depTime !== (flight.depTime || "")) {
-    depRef.current = { depDate: flight.depDate || "", depTime: flight.depTime || "" };
-    setDepDraft(depRef.current);
-  }
   return /*#__PURE__*/React.createElement("div", {
     style: {
       background: "rgba(255,255,255,0.04)",
@@ -6316,39 +6264,7 @@ function FlightRow(_ref9) {
         transition: "all 0.15s"
       }
     }, fl.label);
-  })), showDep && /*#__PURE__*/React.createElement("div", {
-    className: "gle-dep"
-  }, /*#__PURE__*/React.createElement("label", null, t.gleDate, /*#__PURE__*/React.createElement("input", {
-    type: "date",
-    className: "occ-input",
-    value: depDraft.depDate,
-    onChange: function onChange(e) {
-      var v = e.target.value;
-      return setDepDraft(function (d) {
-        return _objectSpread(_objectSpread({}, d), { depDate: v });
-      });
-    }
-  })), /*#__PURE__*/React.createElement("label", null, t.gleTime, /*#__PURE__*/React.createElement("input", {
-    type: "time",
-    className: "occ-input",
-    value: depDraft.depTime,
-    onChange: function onChange(e) {
-      var v = e.target.value;
-      return setDepDraft(function (d) {
-        return _objectSpread(_objectSpread({}, d), { depTime: v });
-      });
-    }
-  })), /*#__PURE__*/React.createElement("button", {
-    className: "occ-confirm",
-    disabled: depDraftPatch(depDraft) === null ||
-      (depDraft.depDate === (flight.depDate || "") && depDraft.depTime === (flight.depTime || "")),
-    onClick: function onClick() {
-      var p = depDraftPatch(depDraft);
-      if (p === null) return;
-      _onChange(id, "depDate", p.depDate);
-      _onChange(id, "depTime", p.depTime);
-    }
-  }, t.occConfirm)), /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 6,
@@ -6395,7 +6311,23 @@ function FlightRow(_ref9) {
       padding: "4px 10px",
       alignSelf: "flex-start"
     }
-  }, "\uD83D\uDCF0 ", t.trackBtn), /*#__PURE__*/React.createElement("button", {
+  }, "\uD83D\uDCF0 ", t.trackBtn), /*#__PURE__*/React.createElement("div", {
+    className: "gle-dep gle-dep-inline"
+  }, /*#__PURE__*/React.createElement("label", null, t.gleDate, /*#__PURE__*/React.createElement("input", {
+    type: "date",
+    className: "occ-input",
+    value: flight.depDate || "",
+    onChange: function onChange(e) {
+      return _onChange(id, "depDate", e.target.value);
+    }
+  })), /*#__PURE__*/React.createElement("label", null, t.gleTime, /*#__PURE__*/React.createElement("input", {
+    type: "time",
+    className: "occ-input",
+    value: flight.depTime || "",
+    onChange: function onChange(e) {
+      return _onChange(id, "depTime", e.target.value);
+    }
+  }))), /*#__PURE__*/React.createElement("button", {
     onClick: function onClick() {
       return setShowCalc(true);
     },
@@ -6418,7 +6350,17 @@ function FlightRow(_ref9) {
       _onChange(id, "steps", null);
     },
     style: btnSmall
-  }, "\uD83D\uDDD1\uFE0F") : null, valid && calc ? /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDDD1\uFE0F") : null, valid && calc ? /*#__PURE__*/React.createElement(SolarCheckPanel, {
+    uid: id,
+    orig: orig,
+    dest: dest,
+    flIdx: flIdx,
+    gcrUsv: calc.doseUsv - (calc.doseSepUsv > 0 ? calc.doseSepUsv : 0),
+    track: flight.track,
+    depDate: flight.depDate || "",
+    depTime: flight.depTime || "",
+    t: t
+  }) : null, valid && calc ? /*#__PURE__*/React.createElement("div", {
     style: {
       display: "flex",
       gap: 5,
@@ -6498,7 +6440,6 @@ function FlightPair(_ref10) {
     onSettled = _ref10.onSettled,
     initialCollapsed = _ref10.initialCollapsed,
     onCollapsedChange = _ref10.onCollapsedChange,
-    showDep = _ref10.showDep,
     t = _ref10.t;
   var _useStateP = useState(initialCollapsed != null ? initialCollapsed : !isNew),
     _useStateP2 = _slicedToArray(_useStateP, 2),
@@ -6671,8 +6612,7 @@ function FlightPair(_ref10) {
     onChange: onChange,
     onRemove: onRemove,
     onAddReturn: onAddReturn,
-    onTrack: onTrack,
-    showDep: showDep
+    onTrack: onTrack
   }), /*#__PURE__*/React.createElement(FlightRow, {
     key: vuelta.id,
     flight: vuelta,
@@ -6681,8 +6621,7 @@ function FlightPair(_ref10) {
     onChange: onChange,
     onRemove: onRemove,
     onAddReturn: onAddReturn,
-    onTrack: onTrack,
-    showDep: showDep
+    onTrack: onTrack
   }));
 }
 
@@ -7601,7 +7540,6 @@ function App() {
           onRemove: removeFlight,
           onAddReturn: addReturnFlight,
           onTrack: onTrack,
-          showDep: monthGles.length > 0,
           isNew: pid != null ? newPairIdsRef.current.has(pid) : (f.collapsed == null && mate.collapsed == null),
           initialCollapsed: f.collapsed != null ? f.collapsed : undefined,
           onCollapsedChange: function (v) {
@@ -7623,8 +7561,7 @@ function App() {
         onChange: updateFlight,
         onRemove: removeFlight,
         onAddReturn: addReturnFlight,
-        onTrack: onTrack,
-        showDep: monthGles.length > 0
+        onTrack: onTrack
       }));
     });
     return els;
@@ -9030,15 +8967,30 @@ function SolarCheckPanel(_refSolar) {
     dest = _refSolar.dest,
     flIdx = _refSolar.flIdx,
     gcrUsv = _refSolar.gcrUsv,
+    uid = _refSolar.uid,
+    track = _refSolar.track,
+    depDate = _refSolar.depDate,
+    depTime = _refSolar.depTime,
     t = _refSolar.t;
-  var _useStateS = useState(false),
+  // En el planificador hay un panel por vuelo: sin uid los ids del DOM se
+  // repetirian y aria-controls/aria-labelledby apuntarian al panel de otro.
+  var panelId = SOLAR_CHECK_PANEL_ID + (uid == null ? "" : "-" + uid);
+  var infoTitleId = "solar-info-title" + (uid == null ? "" : "-" + uid);
+  // Modo ligado (planificador): la fecha/hora es la salida del vuelo y la pone
+  // la fila del vuelo, asi que el panel no pinta campos y el boton comprueba
+  // directamente. En Vuelo unico no hay salida: el panel pide sus campos.
+  var linked = depDate !== undefined || depTime !== undefined;
+  var _useStateS = useState(!!linked),
     _useStateS2 = _slicedToArray(_useStateS, 2),
     open = _useStateS2[0],
     setOpen = _useStateS2[1];
   var _useStateD = useState({ depDate: "", depTime: "" }),
     _useStateD2 = _slicedToArray(_useStateD, 2),
-    draft = _useStateD2[0],
+    ownDraft = _useStateD2[0],
     setDraft = _useStateD2[1];
+  var draft = linked
+    ? { depDate: depDate == null ? "" : depDate, depTime: depTime == null ? "" : depTime }
+    : ownDraft;
   var _useStateC = useState(null),
     _useStateC2 = _slicedToArray(_useStateC, 2),
     check = _useStateC2[0],
@@ -9063,9 +9015,16 @@ function SolarCheckPanel(_refSolar) {
   var valid = depDraftPatch(draft) !== null;
   function runCheck() {
     var p = depDraftPatch(draft);
-    if (p === null) return;
+    if (p === null) {
+      // Sin fecha no hay ventana que comprobar; se dice, no se calla.
+      if (linked) setCheck({ status: "done", ev: { state: "esperando_fecha", result: null } });
+      return;
+    }
     var occ = makeOccurrence(p.depDate, p.depTime, "real");
     var flight = { orig: orig, dest: dest, legs: 1, flIdx: flIdx };
+    // Con track, la integracion SEP debe recorrer LA MISMA ruta que la dosis
+    // GCR del vuelo, no una ortodromica: seria mezclar dos rutas distintas.
+    if (Array.isArray(track)) flight.track = track;
     var tk = solarGateRef.current.begin();
     var now = Date.now();
     setCheck({ status: "loading" });
@@ -9100,15 +9059,19 @@ function SolarCheckPanel(_refSolar) {
     }
     statusNode = parts;
   }
+  var statusEl = React.createElement("div", {
+    role: "status", "aria-live": "polite",
+    style: { marginTop: 8, fontSize: 11.5, color: "#90b8cc", lineHeight: 1.6, minHeight: 18 }
+  }, statusNode);
   return React.createElement(React.Fragment, null, React.createElement("div", {
-    style: { marginTop: 4 }
+    style: { marginTop: 4, flexBasis: linked ? "100%" : undefined }
   }, React.createElement("div", {
     style: { display: "flex", gap: 8, alignItems: "stretch" }
   }, React.createElement("button", {
     type: "button",
     "aria-expanded": open,
-    "aria-controls": SOLAR_CHECK_PANEL_ID,
-    onClick: function () { setOpen(!open); },
+    "aria-controls": panelId,
+    onClick: linked ? runCheck : function () { setOpen(!open); },
     style: {
       flex: 1, padding: "11px 12px",
       background: "linear-gradient(135deg,rgba(224,160,48,0.2),rgba(224,120,48,0.16))",
@@ -9129,9 +9092,9 @@ function SolarCheckPanel(_refSolar) {
       color: "#8ab4cc", fontSize: 16, fontWeight: 700, cursor: "pointer"
     }
   }, "\u2139")), React.createElement("div", {
-    id: SOLAR_CHECK_PANEL_ID,
-    style: { marginTop: open ? 8 : 0 }
-  }, open && React.createElement("div", {
+    id: panelId,
+    style: { marginTop: linked || open ? 8 : 0 }
+  }, linked ? statusEl : (open && React.createElement("div", {
     style: {
       background: "rgba(255,255,255,0.03)",
       border: "1px solid rgba(255,255,255,0.08)",
@@ -9155,19 +9118,19 @@ function SolarCheckPanel(_refSolar) {
     }
   })), React.createElement("button", {
     type: "button", className: "occ-confirm", disabled: !valid, onClick: runCheck
-  }, t.solarCheckRun)), React.createElement("div", {
-    role: "status", "aria-live": "polite",
-    style: { marginTop: 8, fontSize: 11.5, color: "#90b8cc", lineHeight: 1.6, minHeight: 18 }
-  }, statusNode)))), showInfo && React.createElement(SolarInfoModal, {
+  }, t.solarCheckRun)), statusEl)))), showInfo && React.createElement(SolarInfoModal, {
     t: t,
-    onClose: closeInfo
+    onClose: closeInfo,
+    titleId: infoTitleId
   }));
 }
 
 // ── SolarInfoModal: bottom-sheet "Cómo calculamos la actividad solar" ──────────
 function SolarInfoModal(_refSolarInfo) {
   var t = _refSolarInfo.t,
-    onClose = _refSolarInfo.onClose;
+    onClose = _refSolarInfo.onClose,
+    titleId = _refSolarInfo.titleId;
+  var infoTitleId = titleId == null ? "solar-info-title" : titleId;
   var _useStateSI = useState(null),
     _useStateSI2 = _slicedToArray(_useStateSI, 2),
     open = _useStateSI2[0],
@@ -9234,7 +9197,7 @@ function SolarInfoModal(_refSolarInfo) {
     className: "modal-sheet",
     role: "dialog",
     "aria-modal": "true",
-    "aria-labelledby": "solar-info-title",
+    "aria-labelledby": infoTitleId,
     style: {
       width: "100%", maxWidth: 500,
       background: "linear-gradient(180deg,#0d1e2e,#091622)",
@@ -9252,7 +9215,7 @@ function SolarInfoModal(_refSolarInfo) {
       padding: "8px 18px 14px"
     }
   }, React.createElement("div", null, React.createElement("div", {
-    id: "solar-info-title",
+    id: infoTitleId,
     style: { fontSize: 16, fontWeight: 800, color: "#e8f4fc" }
   }, "\u2600\uFE0F ", t.solarInfoTitle), React.createElement("div", {
     style: { fontSize: 10, color: "#4a6a80", marginTop: 2 }
