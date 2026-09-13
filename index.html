@@ -87,14 +87,16 @@ table { border-collapse:collapse; width:100%; }
   background:rgba(40,160,100,0.15); border:1px solid rgba(40,160,100,0.35);
   color:#40c080; font-size:11px; font-weight:700; }
 .occ-confirm:disabled { opacity:0.35; cursor:not-allowed; }
-/* Fecha/hora de la fila de "Importar ruta" y "Cálculo": se estrechan solos
-   cuando falta sitio (hasta un minimo legible), para que los cuatro controles
-   quepan siempre en una linea. En movil mandan las reglas de la linea siguiente. */
+/* Fecha/hora de la fila de "Importar ruta" y "Cálculo": ancho suficiente para
+   el valor completo, sin encogerse. En movil mandan las reglas de la linea
+   siguiente. */
 @media (min-width:421px) {
-  .gle-dep-inline { flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; }
-  .gle-dep-inline > label.gle-field { min-width: 0; }
-  .gle-dep-inline > .gle-field-date { flex: 0 1 128px; min-width: 92px; }
-  .gle-dep-inline > .gle-field-time { flex: 0 1 100px; min-width: 74px; }
+  /* Ancho FIJO (sin encogerse): el valor tiene que verse entero ("20/07/2026").
+     Si el grupo fecha+hora+Calculo no cabe junto a "Importar ruta" o al badge
+     de ruta, baja ENTERO a la linea siguiente en vez de aplastar los campos. */
+  .gle-dep-inline { flex: 0 0 auto; flex-wrap: nowrap; }
+  .gle-dep-inline > .gle-field-date { flex: 0 0 122px; }
+  .gle-dep-inline > .gle-field-time { flex: 0 0 92px; }
   .gle-dep-inline input { width: 100%; min-width: 0; }
 }
 @media (max-width:420px) { .gle-dep input, .occ-input { min-width:0; width:100%; } }
@@ -454,7 +456,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.39";
+var APP_VERSION = "1.40";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -6360,10 +6362,8 @@ function FlightRow(_ref9) {
       display: "flex",
       gap: 6,
       alignItems: "center",
-      flexWrap: "nowrap",
-      flex: "1 1 auto",
-      minWidth: 0,
-      justifyContent: "space-between"
+      flexWrap: "wrap",
+      flex: "0 0 auto"
     }
   }, hasTrack ? /*#__PURE__*/React.createElement("span", {
     style: {
@@ -6397,7 +6397,27 @@ function FlightRow(_ref9) {
       border: "1px solid rgba(40,160,100,0.4)",
       color: "#40c080"
     }
-  }, "\uD83D\uDCF0 ", t.trackBtn), /*#__PURE__*/React.createElement("div", {
+  }, "\uD83D\uDCF0 ", t.trackBtn), hasTrack ? /*#__PURE__*/React.createElement("button", {
+    onClick: function onClick() {
+      _onChange(id, "track", null);
+      _onChange(id, "steps", null);
+    },
+    style: _objectSpread(_objectSpread({}, btnSmall), {}, {
+      minHeight: 32,
+      display: "flex",
+      alignItems: "center",
+      padding: "0 10px",
+      flexShrink: 0
+    })
+  }, "\uD83D\uDDD1\uFE0F") : null), /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      alignItems: "center",
+      flexWrap: "nowrap",
+      flex: "0 0 auto"
+    }
+  }, /*#__PURE__*/React.createElement("div", {
     className: "gle-dep gle-dep-inline"
   }, /*#__PURE__*/React.createElement("label", {
     className: "gle-field gle-field-date"
@@ -6434,19 +6454,7 @@ function FlightRow(_ref9) {
       border: "1px solid rgba(59,158,222,0.4)",
       color: "#3b9ede"
     }
-  }, t.calcInfoBtn), hasTrack ? /*#__PURE__*/React.createElement("button", {
-    onClick: function onClick() {
-      _onChange(id, "track", null);
-      _onChange(id, "steps", null);
-    },
-    style: _objectSpread(_objectSpread({}, btnSmall), {}, {
-      minHeight: 32,
-      display: "flex",
-      alignItems: "center",
-      padding: "0 10px",
-      flexShrink: 0
-    })
-  }, "\uD83D\uDDD1\uFE0F") : null), valid && calc ? /*#__PURE__*/React.createElement(SolarCheckPanel, {
+  }, t.calcInfoBtn)), valid && calc ? /*#__PURE__*/React.createElement(SolarCheckPanel, {
     uid: id,
     orig: orig,
     dest: dest,
