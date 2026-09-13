@@ -2367,9 +2367,13 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
      "la etiqueta debe desaparecer al haber valor");
   ok("SC15 Importar ruta y Cálculo comparten el diseño del botón solar",
      rowSrc.indexOf('className: "gle-act"') !== -1 &&
-     /\.gle-act \{[^}]*border-radius:10px[^}]*font-size:13px/.test(html) &&
+     /\.gle-act \{[^}]*border-radius:10px[^}]*font-size:12px/.test(html) &&
      rowSrc.indexOf("linear-gradient(135deg,rgba(40,160,100,0.2)") !== -1 &&
      rowSrc.indexOf("linear-gradient(135deg,rgba(59,158,222,0.2)") !== -1);
+  ok("SC15 la fila se mantiene compacta para no saltar de línea",
+     /\.gle-dep-inline input\[type="date"\] \{[^}]*width:128px/.test(html) &&
+     /\.gle-dep-inline input\[type="time"\] \{[^}]*width:92px/.test(html) &&
+     /\.gle-act \{[^}]*padding:0 9px/.test(html));
   ok("SC15 el estilo de los botones no va anidado bajo su fila",
      html.indexOf(".gle-dep-inline .gle-act") === -1);
   ok("SC15 el bloque Salida suelto ya no existe", html.indexOf("showDep") === -1);

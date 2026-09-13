@@ -90,8 +90,8 @@ table { border-collapse:collapse; width:100%; }
 /* Fecha/hora del vuelo en la fila de "Importar ruta" y "Cálculo": compacta, para
    que quepan las tres. En movil mandan las reglas de la linea siguiente. */
 @media (min-width:421px) {
-  .gle-dep-inline input[type="date"] { min-width:0; width:140px; }
-  .gle-dep-inline input[type="time"] { min-width:0; width:104px; }
+  .gle-dep-inline input[type="date"] { min-width:0; width:128px; }
+  .gle-dep-inline input[type="time"] { min-width:0; width:92px; }
 }
 @media (max-width:420px) { .gle-dep input, .occ-input { min-width:0; width:100%; } }
 /* Etiqueta dentro del propio campo: mientras no hay valor, "Fecha"/"Hora UTC"
@@ -106,12 +106,12 @@ table { border-collapse:collapse; width:100%; }
 .gle-field input.gle-empty:focus { color:#e8f2f8; }
 .gle-field input.gle-empty:focus::-webkit-datetime-edit { color:#e8f2f8; }
 /* "Importar ruta" y "Cálculo": mismo diseño que el botón "Comprobar actividad
-   solar" (degradado, borde solido, radio 10, texto 13) con su propia gama. La
-   altura se mantiene en 32 px para alinear con los campos de fecha/hora. Ojo:
-   los botones son HERMANOS de .gle-dep-inline, no hijos, asi que el selector no
-   puede ir anidado bajo esa clase. */
+   solar" (degradado, borde solido, radio 10) con su propia gama, mas compactos
+   para que los cuatro controles quepan en una sola linea. Ojo: los botones son
+   HERMANOS de .gle-dep-inline, no hijos, asi que el selector no puede anidarse
+   bajo esa clase. */
 .gle-act { min-height:32px; display:flex; align-items:center;
-  justify-content:center; padding:0 14px; border-radius:10px; font-size:13px;
+  justify-content:center; padding:0 9px; border-radius:10px; font-size:12px;
   font-weight:700; cursor:pointer; align-self:flex-start; white-space:nowrap; }
 .gle-split { opacity:0.8; font-size:11px; color:#e0c080; }
 .gle-nofig { font-weight: 600; }
@@ -449,7 +449,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.32";
+var APP_VERSION = "1.33";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
