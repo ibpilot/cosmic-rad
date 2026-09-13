@@ -30,6 +30,14 @@ function ok(name, cond, extra) {
   if (cond) { pass++; console.log("  ✓ " + name); }
   else { fail++; console.log("  ✗ " + name + (extra !== undefined ? "  → " + extra : "")); }
 }
+// Igualdad de dosis contra una REFERENCIA fija, con tolerancia RELATIVA: las
+// funciones trascendentes de la rejilla (exp/sin/atan2) difieren 1 ULP entre el
+// libm de macOS y el de Linux, así que la igualdad exacta es plataforma-dependiente
+// y dejaba main en rojo en CI. 1e-9 es ~7 órdenes por encima de esa deriva.
+function closeTo(a, b, rel) {
+  if (typeof a !== "number" || typeof b !== "number" || !isFinite(a) || !isFinite(b)) return false;
+  return Math.abs(a - b) <= (rel || 1e-9) * Math.max(Math.abs(a), Math.abs(b));
+}
 
 console.log("\nB5 — gcDistance no devuelve NaN en pares casi antipodales");
 {
@@ -635,12 +643,12 @@ console.log("\nT10 ocurrencias");
   const REF = { A: 27.521219708117496, B: 35.435214508544320, C: 45.904099010735550 };
   const Bh = ctx.hydrateFlight(B);
 
-  // M1 — la migración no cambia ninguna dosis (igualdad exacta).
-  ok("M1 migración A idéntica", ctx.flightCalc(ctx.hydrateFlight(A), 650).doseUsv === REF.A,
+  // M1 — la migración no cambia ninguna dosis (igualdad con tolerancia 1 ULP).
+  ok("M1 migración A idéntica", closeTo(ctx.flightCalc(ctx.hydrateFlight(A), 650).doseUsv, REF.A),
      ctx.flightCalc(ctx.hydrateFlight(A), 650).doseUsv);
-  ok("M1 migración B idéntica", ctx.flightCalc(ctx.hydrateFlight(B), 650).doseUsv === REF.B,
+  ok("M1 migración B idéntica", closeTo(ctx.flightCalc(ctx.hydrateFlight(B), 650).doseUsv, REF.B),
      ctx.flightCalc(ctx.hydrateFlight(B), 650).doseUsv);
-  ok("M1 migración C idéntica", ctx.flightCalc(ctx.hydrateFlight(C), 650).doseUsv === REF.C,
+  ok("M1 migración C idéntica", closeTo(ctx.flightCalc(ctx.hydrateFlight(C), 650).doseUsv, REF.C),
      ctx.flightCalc(ctx.hydrateFlight(C), 650).doseUsv);
 
   // M2 — un vuelo sin occurrences hidrata SIN la clave.
@@ -938,11 +946,11 @@ console.log("\nT11 ocurrencias UI");
   const C12 = { orig: "LHR", dest: "NRT", legs: 2, flIdx: 1,
     track: [[null, 51.5, -0.4, 10.668], [null, 60, 60, 11.0], [null, 35.7, 139.8, 10.668]] };
   const REF = { A: 27.521219708117496, B: 35.435214508544320, C: 45.904099010735550 };
-  ok("U12 A idéntica", ctx.flightCalc(ctx.hydrateFlight(A12), 650).doseUsv === REF.A,
+  ok("U12 A idéntica", closeTo(ctx.flightCalc(ctx.hydrateFlight(A12), 650).doseUsv, REF.A),
      ctx.flightCalc(ctx.hydrateFlight(A12), 650).doseUsv);
-  ok("U12 B idéntica", ctx.flightCalc(ctx.hydrateFlight(B12), 650).doseUsv === REF.B,
+  ok("U12 B idéntica", closeTo(ctx.flightCalc(ctx.hydrateFlight(B12), 650).doseUsv, REF.B),
      ctx.flightCalc(ctx.hydrateFlight(B12), 650).doseUsv);
-  ok("U12 C idéntica", ctx.flightCalc(ctx.hydrateFlight(C12), 650).doseUsv === REF.C,
+  ok("U12 C idéntica", closeTo(ctx.flightCalc(ctx.hydrateFlight(C12), 650).doseUsv, REF.C),
      ctx.flightCalc(ctx.hydrateFlight(C12), 650).doseUsv);
 
   // T11-fixes — regresiones de la revisión (F1-F4).
