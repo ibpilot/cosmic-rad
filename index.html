@@ -454,7 +454,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.38";
+var APP_VERSION = "1.39";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -4886,7 +4886,7 @@ function serializeFlight(f) {
 var LANG = {
   es: {
     appTitle: "Radiación Cósmica en Vuelo",
-    appSubtitle: "EURADOS / ICRP 103 · Estimación orientativa, no dosimetría certificada",
+    appSubtitle: "CARI-7A (FAA) + GOES (NOAA) · Estimación orientativa, no dosimetría certificada",
     dbLoading: "⏳ Cargando base de datos de aeropuertos…",
     dbFull: "✓ +7.600 aeropuertos cargados",
     dbLocal: "📡 Sin conexión · base local activa",
@@ -5106,7 +5106,7 @@ var LANG = {
     careerSingle4mo: "vuelos/mes ×",
     careerSingleYears: "años =",
     careerSingleNote: "Solo dosis por vuelo · usa el planificador mensual para mayor precisión.",
-    disclaimer: "⚠️ Fuentes: EURADOS Report 2004-1, ICRP 103, UNSCEAR 2008. Ciclo solar: Mewaldt 2010 (estimado). Para dosimetría oficial: CARI-7 (FAA) o SIEVERT (EURADOS).",
+    disclaimer: "⚠️ Fuentes: dosis de crucero (GCR) con CARI-7A (FAA) y el potencial heliocéntrico mensual de la FAA; eventos solares (SEP) con datos GOES de NOAA SWPC y NCEI, perfiles de protones de NMDB y referencias publicadas (PANDOCA, Sato) para los GLE; dosis efectiva y límites según ICRP 103, RD 783/2001, Euratom 2013/59 y AESA; radiación natural UNSCEAR 2008; ciclo solar Mewaldt 2010. Aeropuertos: OpenFlights (ODbL). Para dosimetría oficial: CARI-7 (FAA), SIEVERT (EURADOS) o EPCARD.",
     emptyFlights: "Pulsa \"+ Añadir vuelo\" para empezar.",
     // Onboarding
     onboardTitle: "Instala la app",
@@ -5150,7 +5150,7 @@ var LANG = {
     // Info modal
     infoModalTitle: "Guía de Radiación Cósmica",
     infoModalSubtitle: "Pulsa cada sección para expandirla",
-    infoModalFooter: "Contenido basado en ICRP 103, EURADOS, UNSCEAR 2008 y literatura epidemiológica revisada por pares. No constituye asesoramiento médico.",
+    infoModalFooter: "Contenido basado en ICRP 103, CARI-7A (FAA), GOES (NOAA SWPC y NCEI), NMDB, UNSCEAR 2008 y literatura epidemiológica revisada por pares. No constituye asesoramiento médico.",
     infoSections: [{
       icon: "🌌",
       title: "¿Qué es la radiación cósmica?",
@@ -5209,11 +5209,11 @@ var LANG = {
     pdfCareerCT: "Equiv. TAC tórax",
     pdfCareerNatural: "Fondo natural mismo período",
     pdfCareerTotal: "Total estimado (vuelo + fondo natural):",
-    pdfFooter: "⚠ Estimación orientativa basada en EURADOS Report 2004-1, ICRP Publicación 103, UNSCEAR 2008. No sustituye a dosimetría oficial certificada (CARI-7/FAA o SIEVERT/EURADOS). Para vigilancia radiológica oficial, consulte al Servicio de Medicina del Trabajo de su compañía."
+    pdfFooter: "⚠ Estimación orientativa basada en CARI-7A (FAA), GOES (NOAA SWPC/NCEI), NMDB, ICRP Publicación 103 y UNSCEAR 2008. No sustituye a dosimetría oficial certificada (CARI-7/FAA, SIEVERT/EURADOS o EPCARD). Para vigilancia radiológica oficial, consulte al Servicio de Medicina del Trabajo de su compañía."
   },
   en: {
     appTitle: "Cosmic Radiation Flight Calculator",
-    appSubtitle: "EURADOS / ICRP 103 · Orientation estimate, not certified dosimetry",
+    appSubtitle: "CARI-7A (FAA) + GOES (NOAA) · Orientation estimate, not certified dosimetry",
     dbLoading: "⏳ Loading airport database…",
     dbFull: "✓ 7,600+ airports loaded",
     dbLocal: "📡 Offline · local database active",
@@ -5433,7 +5433,7 @@ var LANG = {
     careerSingle4mo: "flights/month ×",
     careerSingleYears: "years =",
     careerSingleNote: "Flight dose only · use the monthly planner for greater accuracy.",
-    disclaimer: "⚠️ Sources: EURADOS Report 2004-1, ICRP 103, UNSCEAR 2008. Solar cycle: Mewaldt 2010 (estimated). For official dosimetry: CARI-7 (FAA) or SIEVERT (EURADOS).",
+    disclaimer: "⚠️ Sources: cruise dose (GCR) from CARI-7A (FAA) and the FAA monthly heliocentric potential; solar particle events (SPE) from NOAA SWPC and NCEI GOES data, NMDB proton profiles and published references (PANDOCA, Sato) for GLEs; effective dose and limits per ICRP 103, RD 783/2001, Euratom 2013/59 and AESA; natural radiation UNSCEAR 2008; solar cycle Mewaldt 2010. Airports: OpenFlights (ODbL). For official dosimetry: CARI-7 (FAA), SIEVERT (EURADOS) or EPCARD.",
     emptyFlights: "Press \"+ Add flight\" to get started.",
     // Onboarding
     onboardTitle: "Install the app",
@@ -5477,7 +5477,7 @@ var LANG = {
     // Info modal
     infoModalTitle: "Cosmic Radiation Guide",
     infoModalSubtitle: "Tap each section to expand",
-    infoModalFooter: "Content based on ICRP 103, EURADOS, UNSCEAR 2008 and peer-reviewed epidemiological literature. Does not constitute medical advice.",
+    infoModalFooter: "Content based on ICRP 103, CARI-7A (FAA), GOES (NOAA SWPC and NCEI), NMDB, UNSCEAR 2008 and peer-reviewed epidemiological literature. Does not constitute medical advice.",
     infoSections: [{
       icon: "🌌",
       title: "What is cosmic radiation?",
@@ -5536,7 +5536,7 @@ var LANG = {
     pdfCareerCT: "CT scan equiv.",
     pdfCareerNatural: "Natural background same period",
     pdfCareerTotal: "Total estimate (flight + background):",
-    pdfFooter: "⚠ Orientation estimate based on EURADOS Report 2004-1, ICRP Publication 103, UNSCEAR 2008. Does not replace certified official dosimetry (CARI-7/FAA or SIEVERT/EURADOS). For official occupational radiation surveillance, consult your company's Occupational Health Service."
+    pdfFooter: "⚠ Orientation estimate based on CARI-7A (FAA), GOES (NOAA SWPC/NCEI), NMDB, ICRP Publication 103 and UNSCEAR 2008. Does not replace certified official dosimetry (CARI-7/FAA, SIEVERT/EURADOS or EPCARD). For official occupational radiation surveillance, consult your company's Occupational Health Service."
   }
 };
 
