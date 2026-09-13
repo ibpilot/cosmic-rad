@@ -2414,6 +2414,29 @@ console.log("\nP — el par ida/vuelta ya no se colapsa solo");
      tES.pairCollapseBtn === "Colapsar" && tEN.pairCollapseBtn === "Collapse");
 }
 
+// MB — el selector de fecha se acota al mes que se está viendo.
+console.log("\nMB — el selector de fecha se acota al mes visible");
+{
+  const sep = ctx.monthBounds("2026-09");
+  ok("MB septiembre 2026 -> 01..30",
+     !!sep && sep.min === "2026-09-01" && sep.max === "2026-09-30", JSON.stringify(sep));
+  ok("MB febrero 2026 (no bisiesto) -> 01..28", ctx.monthBounds("2026-02").max === "2026-02-28");
+  ok("MB febrero 2024 (bisiesto) -> 01..29", ctx.monthBounds("2024-02").max === "2024-02-29");
+  ok("MB clave deforme o inexistente -> null",
+     ctx.monthBounds("2026-13") === null && ctx.monthBounds("nope") === null &&
+     ctx.monthBounds("") === null && ctx.monthBounds(null) === null);
+  const mbRow = html.slice(html.indexOf("function FlightRow"), html.indexOf("function FlightPair"));
+  ok("MB la fila acota el input a [min,max] del mes",
+     /min:\s*mB \? mB\.min : undefined/.test(mbRow) &&
+     /max:\s*mB \? mB\.max : undefined/.test(mbRow) &&
+     mbRow.indexOf("var mB = monthBounds(month);") !== -1);
+  const mbPair = html.slice(html.indexOf("function FlightPair"), html.indexOf("function App"));
+  ok("MB el par reenvía el mes a sus dos filas",
+     (mbPair.match(/month: month/g) || []).length === 2);
+  ok("MB el mes visible llega al par y a la fila suelta",
+     (html.match(/month: currentMonth/g) || []).length >= 2);
+}
+
 // SC11 — la consulta puntual con las dependencias inyectadas: fija cada rama
 // (sin archivo, archivo, fallo) y comprueba que la puerta descarta lo viejo.
 function testSolarCheckQuery() {

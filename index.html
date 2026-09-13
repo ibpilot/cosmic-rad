@@ -454,7 +454,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.34";
+var APP_VERSION = "1.35";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2232,6 +2232,18 @@ function depMsOf(f) {
   return isFinite(ms) && check.getUTCFullYear() === +d[1] &&
     check.getUTCMonth() === mo - 1 && check.getUTCDate() === da &&
     check.getUTCHours() === hh && check.getUTCMinutes() === mm ? ms : null;
+}
+
+// monthBounds(key): primer y ultimo dia de un mes "YYYY-MM". Acota el selector
+// de fecha al mes que se esta viendo: para otro mes hay que navegar hasta el.
+// null si la clave no tiene esa forma (entonces no se acota nada).
+function monthBounds(key) {
+  var m = /^(\d{4})-(\d{2})$/.exec(key || "");
+  if (!m) return null;
+  var y = +m[1], mo = +m[2];
+  if (mo < 1 || mo > 12) return null;
+  var last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
+  return { min: m[1] + "-" + m[2] + "-01", max: m[1] + "-" + m[2] + "-" + (last < 10 ? "0" + last : last) };
 }
 
 // Estados internos de una ocurrencia (T10). La UI (T11) los agrupa en tres.
@@ -6169,7 +6181,9 @@ function FlightRow(_ref9) {
     onRemove = _ref9.onRemove,
     onAddReturn = _ref9.onAddReturn,
     onTrack = _ref9.onTrack,
+    month = _ref9.month,
     t = _ref9.t;
+  var mB = monthBounds(month);
   var id = flight.id,
     orig = flight.orig,
     dest = flight.dest,
@@ -6358,6 +6372,8 @@ function FlightRow(_ref9) {
   }, t.gleDate), /*#__PURE__*/React.createElement("input", {
     type: "date",
     className: "occ-input" + (flight.depDate ? "" : " gle-empty"),
+    min: mB ? mB.min : undefined,
+    max: mB ? mB.max : undefined,
     value: flight.depDate || "",
     onChange: function onChange(e) {
       return _onChange(id, "depDate", e.target.value);
@@ -6485,6 +6501,7 @@ function FlightPair(_ref10) {
     isNew = _ref10.isNew,
     initialCollapsed = _ref10.initialCollapsed,
     onCollapsedChange = _ref10.onCollapsedChange,
+    month = _ref10.month,
     t = _ref10.t;
   var _useStateP = useState(initialCollapsed != null ? initialCollapsed : !isNew),
     _useStateP2 = _slicedToArray(_useStateP, 2),
@@ -6614,6 +6631,7 @@ function FlightPair(_ref10) {
     key: ida.id,
     flight: ida,
     hpMV: hpMV,
+    month: month,
     t: t,
     onChange: onChange,
     onRemove: onRemove,
@@ -6623,6 +6641,7 @@ function FlightPair(_ref10) {
     key: vuelta.id,
     flight: vuelta,
     hpMV: hpMV,
+    month: month,
     t: t,
     onChange: onChange,
     onRemove: onRemove,
@@ -7539,6 +7558,7 @@ function App() {
           ida: f,
           vuelta: mate,
           hpMV: hpMV,
+          month: currentMonth,
           t: t,
           onChange: updateFlight,
           onRemove: removeFlight,
@@ -7558,6 +7578,7 @@ function App() {
         key: f.id,
         flight: f,
         hpMV: hpMV,
+        month: currentMonth,
         t: t,
         onChange: updateFlight,
         onRemove: removeFlight,
