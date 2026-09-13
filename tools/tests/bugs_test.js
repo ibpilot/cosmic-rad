@@ -2339,9 +2339,9 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
   ok("SC15 la fecha/hora va entre 'Importar ruta' y 'Cálculo'",
      trackBtnAt !== -1 && dateAt !== -1 && calcAt !== -1 && trackBtnAt < dateAt && dateAt < calcAt,
      trackBtnAt + "/" + dateAt + "/" + calcAt);
-  ok("SC15 la fecha/hora de la fila es compacta (no empuja Cálculo de línea)",
+  ok("SC15 la fecha/hora de la fila es responsiva (no empuja Cálculo de línea)",
      rowSrc.indexOf('className: "gle-dep gle-dep-inline"') !== -1 &&
-     html.indexOf('.gle-dep-inline input[type="date"]') !== -1 &&
+     html.indexOf('.gle-field-date { flex: 0 1 128px; min-width: 92px; }') !== -1 &&
      html.indexOf('@media (min-width:421px)') !== -1);
   ok("SC15 la fecha/hora se guarda como salida del vuelo",
      rowSrc.indexOf('_onChange(id, "depDate", e.target.value)') !== -1 &&
@@ -2358,7 +2358,8 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
      tES.solarCheckHint.indexOf("pulsa Comprobar") !== -1,
      tES.solarCheckHintLinked);
   ok("SC15 la etiqueta Fecha/Hora UTC va dentro del campo, no encima",
-     rowSrc.indexOf('className: "gle-field"') !== -1 &&
+     rowSrc.indexOf('className: "gle-field gle-field-date"') !== -1 &&
+     rowSrc.indexOf('className: "gle-field gle-field-time"') !== -1 &&
      rowSrc.indexOf('className: "gle-field-label"') !== -1 &&
      rowSrc.indexOf("flight.depDate ? null :") !== -1 &&
      rowSrc.indexOf("flight.depTime ? null :") !== -1 &&
@@ -2370,10 +2371,13 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
      /\.gle-act \{[^}]*border-radius:10px[^}]*font-size:12px/.test(html) &&
      rowSrc.indexOf("linear-gradient(135deg,rgba(40,160,100,0.2)") !== -1 &&
      rowSrc.indexOf("linear-gradient(135deg,rgba(59,158,222,0.2)") !== -1);
-  ok("SC15 la fila se mantiene compacta para no saltar de línea",
-     /\.gle-dep-inline input\[type="date"\] \{[^}]*width:128px/.test(html) &&
-     /\.gle-dep-inline input\[type="time"\] \{[^}]*width:92px/.test(html) &&
+  ok("SC15 la fila se mantiene compacta y responsiva",
+     /\.gle-field-date \{ flex: 0 1 128px; min-width: 92px; \}/.test(html) &&
+     /\.gle-field-time \{ flex: 0 1 100px; min-width: 74px; \}/.test(html) &&
      /\.gle-act \{[^}]*padding:0 9px/.test(html));
+  ok("SC15 los cuatro controles van en un grupo que no se rompe",
+     /flexWrap: "nowrap"/.test(rowSrc) && /flex: "1 1 auto"/.test(rowSrc) &&
+     rowSrc.indexOf('className: "gle-dep gle-dep-inline"') !== -1);
   ok("SC15 el estilo de los botones no va anidado bajo su fila",
      html.indexOf(".gle-dep-inline .gle-act") === -1);
   ok("SC15 el bloque Salida suelto ya no existe", html.indexOf("showDep") === -1);

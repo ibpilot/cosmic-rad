@@ -87,11 +87,15 @@ table { border-collapse:collapse; width:100%; }
   background:rgba(40,160,100,0.15); border:1px solid rgba(40,160,100,0.35);
   color:#40c080; font-size:11px; font-weight:700; }
 .occ-confirm:disabled { opacity:0.35; cursor:not-allowed; }
-/* Fecha/hora del vuelo en la fila de "Importar ruta" y "Cálculo": compacta, para
-   que quepan las tres. En movil mandan las reglas de la linea siguiente. */
+/* Fecha/hora de la fila de "Importar ruta" y "Cálculo": se estrechan solos
+   cuando falta sitio (hasta un minimo legible), para que los cuatro controles
+   quepan siempre en una linea. En movil mandan las reglas de la linea siguiente. */
 @media (min-width:421px) {
-  .gle-dep-inline input[type="date"] { min-width:0; width:128px; }
-  .gle-dep-inline input[type="time"] { min-width:0; width:92px; }
+  .gle-dep-inline { flex: 0 1 auto; min-width: 0; flex-wrap: nowrap; }
+  .gle-dep-inline > label.gle-field { min-width: 0; }
+  .gle-dep-inline > .gle-field-date { flex: 0 1 128px; min-width: 92px; }
+  .gle-dep-inline > .gle-field-time { flex: 0 1 100px; min-width: 74px; }
+  .gle-dep-inline input { width: 100%; min-width: 0; }
 }
 @media (max-width:420px) { .gle-dep input, .occ-input { min-width:0; width:100%; } }
 /* Etiqueta dentro del propio campo: mientras no hay valor, "Fecha"/"Hora UTC"
@@ -112,7 +116,8 @@ table { border-collapse:collapse; width:100%; }
    bajo esa clase. */
 .gle-act { min-height:32px; display:flex; align-items:center;
   justify-content:center; padding:0 9px; border-radius:10px; font-size:12px;
-  font-weight:700; cursor:pointer; align-self:flex-start; white-space:nowrap; }
+  font-weight:700; cursor:pointer; align-self:flex-start; white-space:nowrap;
+  flex:0 0 auto; }
 .gle-split { opacity:0.8; font-size:11px; color:#e0c080; }
 .gle-nofig { font-weight: 600; }
 .gle-rt { background:#4a1f1f; border-left:3px solid #d04c4c; padding:8px 12px;
@@ -449,7 +454,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.33";
+var APP_VERSION = "1.34";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -6302,6 +6307,16 @@ function FlightRow(_ref9) {
       alignItems: "center",
       justifyContent: "space-between"
     }
+  }, /*#__PURE__*/React.createElement("div", {
+    style: {
+      display: "flex",
+      gap: 6,
+      alignItems: "center",
+      flexWrap: "nowrap",
+      flex: "1 1 auto",
+      minWidth: 0,
+      justifyContent: "space-between"
+    }
   }, hasTrack ? /*#__PURE__*/React.createElement("span", {
     style: {
       fontSize: 10.5,
@@ -6337,7 +6352,7 @@ function FlightRow(_ref9) {
   }, "\uD83D\uDCF0 ", t.trackBtn), /*#__PURE__*/React.createElement("div", {
     className: "gle-dep gle-dep-inline"
   }, /*#__PURE__*/React.createElement("label", {
-    className: "gle-field"
+    className: "gle-field gle-field-date"
   }, flight.depDate ? null : /*#__PURE__*/React.createElement("span", {
     className: "gle-field-label"
   }, t.gleDate), /*#__PURE__*/React.createElement("input", {
@@ -6348,7 +6363,7 @@ function FlightRow(_ref9) {
       return _onChange(id, "depDate", e.target.value);
     }
   })), /*#__PURE__*/React.createElement("label", {
-    className: "gle-field"
+    className: "gle-field gle-field-time"
   }, flight.depTime ? null : /*#__PURE__*/React.createElement("span", {
     className: "gle-field-label"
   }, t.gleTime), /*#__PURE__*/React.createElement("input", {
@@ -6378,9 +6393,10 @@ function FlightRow(_ref9) {
       minHeight: 32,
       display: "flex",
       alignItems: "center",
-      padding: "0 10px"
+      padding: "0 10px",
+      flexShrink: 0
     })
-  }, "\uD83D\uDDD1\uFE0F") : null, valid && calc ? /*#__PURE__*/React.createElement(SolarCheckPanel, {
+  }, "\uD83D\uDDD1\uFE0F") : null), valid && calc ? /*#__PURE__*/React.createElement(SolarCheckPanel, {
     uid: id,
     orig: orig,
     dest: dest,
