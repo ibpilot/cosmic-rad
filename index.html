@@ -24,6 +24,10 @@
 <meta name="theme-color" content="#0b1825"/>
 <meta name="application-name" content="CosRad"/>
 <meta name="apple-mobile-web-app-title" content="CosRad"/>
+<!-- Anti-clickjacking: Pages no permite X-Frame-Options ni frame-ancestors (no vale en <meta>).
+     Enmarcada desde otro sitio, la app no se pinta y rompe el marco. -->
+<style id="antiClickjack">body{display:none!important}</style>
+<script>if (window.self === window.top) { document.getElementById("antiClickjack").remove(); } else { window.top.location = window.self.location; }</script>
 <style>
 * { box-sizing:border-box; margin:0; padding:0; }
 body { background:#080f18; font-family:-apple-system,'Inter','Helvetica Neue',sans-serif; }
@@ -456,7 +460,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.40";
+var APP_VERSION = "1.41";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2170,8 +2174,9 @@ function parseSwpcProtons(data) {
   for (var i = 0; i < data.length; i++) {
     var r = data[i];
     if (!r || String(r.energy).indexOf("10 MeV") < 0) continue;
-    var f = Number(r.flux);
-    if (!isFinite(f)) continue;
+    // null -> 0 y los negativos (centinela NOAA de "sin medida") no son medidas.
+    var f = r.flux == null || r.flux === "" ? NaN : Number(r.flux);
+    if (!isFinite(f) || f < 0) continue;
     last = {fluxPfu: f, timeIso: String(r.time_tag || "")};
   }
   return last;
@@ -2659,6 +2664,7 @@ function batchPlan(flights, evals) {
       }
       if (reason === null) {
         eligible.push({ flightId: f.id, occId: occ.id,
+          depDate: occ.depDate, depTime: occ.depTime, timeKind: occ.timeKind, track: f.track,
           result: { lowUsv: ev.result.lowUsv, highUsv: ev.result.highUsv } });
       } else {
         excluded.push({ flightId: f.id, occId: occ.id, reason: reason });
@@ -2688,7 +2694,9 @@ function applyBatch(flights, plan) {
     var occs = f.occurrences.map(function (occ) {
       var hit = null;
       for (var k = 0; k < hits.length; k++) {
-        if (occ && hits[k].occId === occ.id && hits[k].result) { hit = hits[k]; break; }
+        if (occ && hits[k].occId === occ.id && hits[k].result &&
+            hits[k].depDate === occ.depDate && hits[k].depTime === occ.depTime &&
+            hits[k].timeKind === occ.timeKind && hits[k].track === f.track) { hit = hits[k]; break; }
       }
       if (!hit) return occ;
       entries.push({ flightId: f.id, occId: occ.id, prevState: occ.state,
@@ -2900,6 +2908,7 @@ function occEvaluate(f, occ, archive, nowMs, routeFn) {
 
 // Carga del archivo solar publico. Un 404 es "dato ausente", no un error.
 var _solarManifestPromise = null;
+var _solarManifestAt = 0;
 var _solarDayCache = new Map();
 // Espera sin depender de setTimeout: el vm de los tests no lo define, y ahi
 // resolver de inmediato hace que el reintento se pruebe sin frenar la suite.
@@ -2913,6 +2922,7 @@ function solarDelay(ms) {
 // (red) o respuesta 5xx. Un 404 o cualquier otro 4xx se devuelve tal cual para
 // que el llamador lo interprete; reintentarlo no lo va a arreglar.
 var SOLAR_RETRY_DELAYS_MS = [400, 1200];
+var SOLAR_CACHE_TTL_MS = 30 * 60 * 1000;
 function fetchRetry(url, attempt) {
   var n = attempt === undefined ? 0 : attempt;
   return fetch(url).then(function (res) {
@@ -2932,7 +2942,8 @@ function fetchRetry(url, attempt) {
   });
 }
 function fetchSolarManifest() {
-  if (_solarManifestPromise) return _solarManifestPromise;
+  if (_solarManifestPromise && Date.now() - _solarManifestAt < SOLAR_CACHE_TTL_MS) return _solarManifestPromise;
+  _solarManifestAt = Date.now();
   _solarManifestPromise = fetchRetry(SOLAR_ARCHIVE_BASE + "manifest.json").then(function (res) {
     if (!res || !res.ok) throw new Error("solar manifest HTTP " + (res && res.status));
     return res.json();
@@ -2955,7 +2966,10 @@ function fetchSolarDay(day) {
   var base = SOLAR_ARCHIVE_BASE + "solar/" + parts[0] + "/" + parts[1] + "/" + day;
   var p = Promise.all([fetchSolarPart(base + "-diff.json"), fetchSolarPart(base + ".json")])
     .then(function (out) {
-      if (out[0] === null || out[1] === null) return null;
+      if (out[0] === null || out[1] === null) {
+        _solarDayCache.delete(day);
+        return null;
+      }
       return { diff: out[0], int: out[1] };
     }, function (err) {
       _solarDayCache.delete(day);
@@ -2968,9 +2982,11 @@ function fetchSolarDay(day) {
 // solo lo pide solarPickSource cuando SWPC no cubre la ventana, asi que un
 // vuelo reciente no paga nada.
 var _nceiManifestPromise = null;
+var _nceiManifestAt = 0;
 var _nceiDayCache = new Map();
 function fetchNceiManifest() {
-  if (_nceiManifestPromise) return _nceiManifestPromise;
+  if (_nceiManifestPromise && Date.now() - _nceiManifestAt < SOLAR_CACHE_TTL_MS) return _nceiManifestPromise;
+  _nceiManifestAt = Date.now();
   _nceiManifestPromise = fetchRetry(SOLAR_ARCHIVE_BASE + "ncei/manifest.json").then(function (res) {
     if (!res || !res.ok) throw new Error("ncei manifest HTTP " + (res && res.status));
     return res.json();
@@ -2992,12 +3008,13 @@ function fetchNceiDay(day, sat, manifest) {
   if (entry && Array.isArray(entry.candidates)) {
     for (var i = 0; i < entry.candidates.length; i++) {
       var c = entry.candidates[i];
-      if (c && satKey(c.sat) === sat && typeof c.path === "string") { path = c.path; break; }
+      if (c && satKey(c.sat) === sat && typeof c.path === "string" &&
+          /^ncei\/sgps\/g1[6-9]\/\d{4}\/\d{2}\/[\w.-]+\.json$/.test(c.path)) { path = c.path; break; }
     }
   }
   if (path === null) return Promise.resolve(null);
   var p = fetchRetry(SOLAR_ARCHIVE_BASE + path).then(function (res) {
-    if (!res || res.status === 404) return null;
+    if (!res || res.status === 404) { _nceiDayCache.delete(key); return null; }
     if (!res.ok) throw new Error("ncei HTTP " + res.status);
     // Un cuerpo descargado pero ilegible es un fichero invalido, no un fallo
     // de red. Se deja llegar al adaptador para que cierre en `incompleto`.
@@ -4510,9 +4527,14 @@ function ensureFixes(cb) {
   if (_fixesLoading) return;
   _fixesLoading = true;
   fetch("fixes.json?v=" + APP_VERSION)
-    .then(function (r) { return r.json(); })
+    .then(function (r) {
+      if (!r || !r.ok) throw new Error("fixes HTTP " + (r && r.status));
+      return r.json();
+    })
     .then(function (d) {
-      FIXES = sanitizeFixes(d);
+      var clean = sanitizeFixes(d);
+      if (!clean) throw new Error("fixes.json invalido");
+      FIXES = clean;
       _fixesLoading = false;
       _fixesCbs.forEach(function (c) { try { c(null); } catch (e) {} });
       _fixesCbs = [];
@@ -4728,6 +4750,19 @@ var mkId = function mkId() {
   return _id++;
 };
 
+// Puntos de track de un backup: solo lat/lon/altitud plausibles, tope 5000.
+function cleanTrack(t) {
+  if (!Array.isArray(t)) return t;
+  var out = [];
+  for (var i = 0; i < t.length && out.length < 5000; i++) {
+    var p = t[i];
+    if (Array.isArray(p) && typeof p[1] === "number" && typeof p[2] === "number" &&
+        typeof p[3] === "number" && Math.abs(p[1]) <= 90 && Math.abs(p[2]) <= 180 &&
+        p[3] >= 0 && p[3] <= 25) out.push(p);
+  }
+  return out.length >= 2 ? out : undefined;
+}
+
 // Normaliza un vuelo al cargarlo de localStorage o de un backup: un fichero
 // manipulado o antiguo puede traer `legs`/`flIdx` ausentes o fuera de rango, y
 // eso propagaba "NaN µSv" por toda la app y reventaba el export a PDF.
@@ -4740,7 +4775,7 @@ function hydrateFlight(f) {
     flIdx: FL_OPTIONS[flIdx] ? flIdx : 1,
     // S4: un backup manipulado puede traer tracks de millones de puntos o
     // steps sin límite (congelan la UI/CPU); se recortan a topes razonables.
-    track: Array.isArray(f.track) && f.track.length > 5000 ? f.track.slice(0, 5000) : f.track,
+    track: cleanTrack(f.track),
     steps: Array.isArray(f.steps) && f.steps.length > 100 ? f.steps.slice(0, 100) : f.steps,
     // Un backup manipulado puede traer objetos donde se espera "YYYY-MM-DD":
     // se descartan en vez de dejar que lleguen a depMsOf.
@@ -4798,6 +4833,32 @@ function collapseOccurrences(f) {
   return copy;
 }
 
+// Aplica `fields` a la ocurrencia `occId` sobre la lista ACTUAL (no una copia
+// vieja). Si `guard` existe y devuelve false, esa ocurrencia no se toca.
+function patchOccurrenceList(cur, occId, fields, guard, flightNow) {
+  return (Array.isArray(cur) ? cur : []).map(function (o) {
+    if (!o || o.id !== occId) return o;
+    if (guard && !guard(o, flightNow)) return o;
+    return _objectSpread(_objectSpread({}, o), fields);
+  });
+}
+// Actualiza un campo de un vuelo sobre la lista ACTUAL. `val` puede ser un
+// actualizador (valorActual, vuelo) -> nuevo, para que un resultado asincrono
+// se aplique sobre el estado vigente y no sobre una copia vieja.
+function applyFieldUpdate(list, id, field, val) {
+  return list.map(function (x) {
+    if (x.id !== id) return x;
+    var v = typeof val === "function" ? val(x[field], x) : val;
+    return _objectSpread(_objectSpread({}, x), {}, _defineProperty({}, field, v));
+  });
+}
+// La evaluacion sigue siendo valida si la salida y la ruta no cambiaron.
+function occSameInputs(before, flightBefore, after, flightAfter) {
+  return !!(before && after && flightAfter) &&
+    before.depDate === after.depDate && before.depTime === after.depTime &&
+    before.timeKind === after.timeKind && flightBefore.track === flightAfter.track;
+}
+
 // Cifra SEP de una ocurrencia: SOLO si tiene fecha/hora valida, esta incorporada y trae resultado.
 function occSepFigure(occ) {
   if (!occ || occ.state !== "incorporada" || depMsOf(occ) === null) return null;
@@ -4818,7 +4879,7 @@ function hydrateOccurrence(o) {
   var result = null;
   var r = o.result;
   if (r && typeof r === "object" && !Array.isArray(r) && isFinite(r.lowUsv) && isFinite(r.highUsv) &&
-      r.lowUsv >= 0 && r.lowUsv <= r.highUsv) {
+      r.lowUsv >= 0 && r.lowUsv <= r.highUsv && r.highUsv <= 1e5) {
     result = { lowUsv: r.lowUsv, highUsv: r.highUsv };
   }
   if (state === "incorporada" && (result === null || depMsOf(o) === null)) state = "incompleto";
@@ -4850,7 +4911,10 @@ function parseBackup(text) {
     var keyRe = /^\d{4}-\d{2}$/;
     for (var k in months) {
       if (Object.prototype.hasOwnProperty.call(months, k) && keyRe.test(k) && Array.isArray(months[k])) {
-        clean[k] = months[k];
+        clean[k] = months[k].filter(function (f) {
+          return f && typeof f === "object" && !Array.isArray(f) &&
+            typeof f.orig === "string" && typeof f.dest === "string";
+        });
       }
     }
     var total = Object.keys(months).length;
@@ -4882,6 +4946,41 @@ function serializeFlight(f) {
     depTime: f.depTime,
     occurrences: f.occurrences
   };
+}
+
+// Prepara un backup para escribirlo: parsea, hidrata y serializa ANTES de tocar
+// localStorage. Si algo lanza, devuelve null y el historico actual queda intacto.
+function prepareRestore(text) {
+  var months = parseBackup(text);
+  if (months === null) return null;
+  try {
+    var out = {};
+    Object.keys(months).forEach(function (k) {
+      out[k] = months[k].map(hydrateFlight).map(serializeFlight);
+    });
+    return out;
+  } catch (e) {
+    return null;
+  }
+}
+// Lista de vuelos de un mes a partir del mapa completo. Nunca lanza: un
+// almacen corrupto no puede tumbar el arranque de la app.
+function monthFlightsFrom(all, key) {
+  try {
+    var saved = all && typeof all === "object" && !Array.isArray(all) ? all[key] : null;
+    if (!Array.isArray(saved)) return [];
+    return saved.filter(function (f) {
+      return f && typeof f === "object" && !Array.isArray(f);
+    }).map(hydrateFlight);
+  } catch (e) {
+    return [];
+  }
+}
+// Restaura un backup: prepara y escribe. true solo si la escritura se hizo; un
+// backup invalido no llega a llamar a `save`.
+function restoreMonths(text, save) {
+  var months = prepareRestore(text);
+  return months !== null && save(months) === true;
 }
 
 // ── Translations ──────────────────────────────────────────────────────────────
@@ -6090,16 +6189,17 @@ function OccList(_refOcc) {
         style: btnSmall
       }, t.occSplit));
   }
-  function patch(occ, fields) {
-    var next = rows.map(function (o) {
-      return o.id === occ.id ? _objectSpread(_objectSpread({}, o), fields) : o;
+  function patch(occ, fields, guard) {
+    onChange(id, "occurrences", function (cur, flightNow) {
+      return patchOccurrenceList(cur, occ.id, fields, guard, flightNow);
     });
-    onChange(id, "occurrences", next);
   }
   function incorporate(occ, res) {
     var fig = res && res.result ? res.result : null;
     if (!fig) return;
-    patch(occ, { state: "incorporada", result: fig, modelVersion: SEP_MODEL_VERSION });
+    var flightAtEval = flight;
+    patch(occ, { state: "incorporada", result: fig, modelVersion: SEP_MODEL_VERSION },
+      function (o, flightNow) { return occSameInputs(occ, flightAtEval, o, flightNow); });
   }
   function recalc(occ) {
     var bypass = _objectSpread(_objectSpread({}, occ), { state: "estimacion_disponible" });
@@ -6851,7 +6951,8 @@ function App() {
   // ── All months storage ────────────────────────────────────────────────────
   function loadAllMonths() {
     try {
-      return JSON.parse(localStorage.getItem("cr_months") || "{}");
+      var o = JSON.parse(localStorage.getItem("cr_months") || "{}");
+      return o && typeof o === "object" && !Array.isArray(o) ? o : {};
     } catch (e) {
       return {};
     }
@@ -6873,16 +6974,14 @@ function App() {
     a.href = url;
     a.download = "cosmic-rad-backup-" + today + ".json";
     a.click();
-    URL.revokeObjectURL(url);
+    setTimeout(function () { URL.revokeObjectURL(url); }, 1000);
   }
   function restoreBackup(file, onDone) {
     var reader = new FileReader();
     reader.onerror = function() { onDone(false); };
     reader.onload = function(e) {
-      var months = parseBackup(e.target.result);
-      if (months === null) { onDone(false); return; }
+      if (!restoreMonths(e.target.result, saveAllMonths)) { onDone(false); return; }
       try {
-        saveAllMonths(months);
         // Re-siembra el contador con los ids/pairIds del backup importado: el
         // backup puede traer ids mayores que los actuales y un mkId() posterior
         // colisionaría con ellos (parejas agrupadas cruzadas).
@@ -6896,10 +6995,7 @@ function App() {
     reader.readAsText(file);
   }
   function loadMonthFlights(key) {
-    var all = loadAllMonths();
-    var saved = all[key];
-    if (saved && Array.isArray(saved) && saved.length > 0) return saved.map(hydrateFlight);
-    return [];
+    return monthFlightsFrom(loadAllMonths(), key);
   }
   var _useState31 = useState(function () {
       // Try new per-month storage first, fall back to legacy cr_flights.
@@ -7011,9 +7107,7 @@ function App() {
   }, []);
   var updateFlight = useCallback(function (id, field, val) {
     setFlights(function (f) {
-      return f.map(function (x) {
-        return x.id === id ? _objectSpread(_objectSpread({}, x), {}, _defineProperty({}, field, val)) : x;
-      });
+      return applyFieldUpdate(f, id, field, val);
     });
   }, []);
   // Ruta: id del vuelo cuyo modal de import está abierto
@@ -8687,7 +8781,7 @@ function buildPdfHtml(_ref13) {
     return "\n      <tr>\n        <td>".concat(esc(f.orig), " \u2192 ").concat(esc(f.dest), "</td>\n        <td>").concat(esc(((_activeDB$f$orig = activeDB[f.orig]) === null || _activeDB$f$orig === void 0 ? void 0 : _activeDB$f$orig.name) || ""), " \u2192 ").concat(esc(((_activeDB$f$dest = activeDB[f.dest]) === null || _activeDB$f$dest === void 0 ? void 0 : _activeDB$f$dest.name) || ""), "</td>\n        <td class=\"num\">").concat(esc(hasTrackPdf ? (isEn ? "track" : "ruta") : (Array.isArray(f.steps) && f.steps.length ? "F" + f.steps[0].fl + "\u2192F" + f.steps[f.steps.length - 1].fl : (FL_OPTIONS[fi] || FL_OPTIONS[1]).label)), "</td>\n        <td class=\"num\">").concat((c.distKm / 1000).toFixed(1), " km</td>\n        <td class=\"num\">").concat(Math.floor(c.timeH), "h ").concat(Math.round(c.timeH % 1 * 60), "m</td>\n        <td class=\"num\">").concat(fmtDose(c.doseUsv), "</td>\n        <td class=\"num\">\xD7 ").concat(esc(f.legs), "</td>\n        <td class=\"num bold\">").concat(fmtDose(total), "</td>\n      </tr>");
   }).join("");
   var refs = [[isEn ? "Dental X-ray" : "Rx dental", "5 µSv", (monthlyUsv / 5).toFixed(1)], [isEn ? "Chest X-ray" : "Rx tórax", "20 µSv", (monthlyUsv / 20).toFixed(1)], [isEn ? "Mammography" : "Mamografía", "400 µSv", (monthlyUsv / 400).toFixed(2)], [isEn ? "Chest CT" : "TAC tórax", isEn ? "7,000 µSv" : "7.000 µSv", (monthlyUsv / 7000).toFixed(3)], [isEn ? "Natural background/year" : "Fondo natural/año", isEn ? "2,400 µSv" : "2.400 µSv", (annualUsv / 2400).toFixed(2)], [isEn ? "Crew limit/year" : "Límite tripul./año", isEn ? "20,000 µSv" : "20.000 µSv", (annualUsv / 20000 * 100).toFixed(1) + "%"]];
-  var html = "<!DOCTYPE html>\n<html lang=\"".concat(isEn ? "en" : "es", "\">\n<head>\n<meta charset=\"UTF-8\"/>\n<title>").concat(t.pdfTitle, " \xB7 ").concat(pdfMonthName, "</title>\n<style>\n  @page { margin: 18mm 16mm; }\n  * { box-sizing:border-box; margin:0; padding:0; }\n  body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;\n    font-size:11px; color:#1a2a35; background:#fff; }\n  .header { display:flex; justify-content:space-between; align-items:flex-start;\n    border-bottom:2.5px solid #1a6fa8; padding-bottom:10px; margin-bottom:18px; }\n  .title { font-size:20px; font-weight:800; color:#1a6fa8; letter-spacing:-0.5px; }\n  .subtitle { font-size:11px; color:#5a7a8a; margin-top:3px; }\n  .meta { text-align:right; font-size:10px; color:#6a8a9a; line-height:1.8; }\n  .section { margin-bottom:18px; }\n  .section-title { font-size:10px; font-weight:700; text-transform:uppercase;\n    letter-spacing:0.8px; color:#5a7a8a; margin-bottom:8px;\n    padding-bottom:4px; border-bottom:1px solid #e0eef5; }\n  .summary-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px; }\n  .stat-box { background:#f0f6fa; border:1px solid #d0e4f0; border-radius:8px;\n    padding:10px 12px; text-align:center; }\n  .stat-label { font-size:9px; color:#6a8a9a; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:4px; }\n  .stat-value { font-size:16px; font-weight:800; color:#1a6fa8; }\n  .stat-sub { font-size:9px; color:#8aacbc; margin-top:2px; }\n  table { width:100%; border-collapse:collapse; font-size:10px; }\n  th { background:#1a6fa8; color:#fff; padding:6px 8px; text-align:left;\n    font-weight:600; font-size:9.5px; letter-spacing:0.3px; }\n  th.num, td.num { text-align:right; }\n  td { padding:5px 8px; border-bottom:1px solid #edf3f7; color:#2a3a45; }\n  tr:last-child td { border-bottom:none; }\n  tr:nth-child(even) td { background:#f8fbfd; }\n  td.bold { font-weight:700; color:#1a6fa8; }\n  .total-row td { background:#e8f2fa !important; font-weight:700;\n    border-top:2px solid #1a6fa8; color:#1a2a35; }\n  .refs-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }\n  .ref-box { background:#f8fbfd; border:1px solid #e0eef5; border-radius:6px; padding:8px 10px; }\n  .ref-name { font-size:9px; color:#6a8a9a; margin-bottom:2px; }\n  .ref-dose { font-size:10px; color:#4a6a7a; margin-bottom:3px; }\n  .ref-eq { font-size:12px; font-weight:700; color:#1a6fa8; }\n  .params { display:flex; gap:16px; font-size:10px; color:#5a7a8a; }\n  .param { background:#f0f6fa; border-radius:5px; padding:4px 10px; }\n  .footer { margin-top:20px; padding-top:10px; border-top:1px solid #e0eef5;\n    font-size:9px; color:#9ab0bc; line-height:1.6; }\n  .highlight { background:#e8f4ff; border:1px solid #b0d4ee; border-radius:6px;\n    padding:10px 14px; display:flex; justify-content:space-between; align-items:center; }\n  .hl-label { font-size:10px; color:#3a6a8a; font-weight:600; }\n  .hl-value { font-size:22px; font-weight:800; color:#1a6fa8; }\n  .hl-sub { font-size:9px; color:#6a9ab0; margin-top:1px; }\n  ").concat(showCareer ? ".career { background:#f5f0fc; border:1px solid #d0b8f0; border-radius:8px;\n    padding:12px 14px; margin-top:14px; }\n  .career-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:8px; }\n  .career-stat { text-align:center; }\n  .career-label { font-size:9px; color:#7a5aaa; text-transform:uppercase; letter-spacing:0.5px; }\n  .career-value { font-size:14px; font-weight:800; color:#6030a0; margin-top:2px; }" : "", "\n</style>\n</head>\n<body>\n\n<div class=\"header\">\n  <div>\n    <div class=\"title\">").concat(t.pdfTitle, "</div>\n    <div class=\"subtitle\">").concat(t.pdfSubtitle, " \xB7 ").concat(pdfMonthName, "</div>\n  </div>\n  <div class=\"meta\">\n    ").concat(t.pdfGenerated, " ").concat(dateStr, "<br/>\n    ").concat(t.pdfFlightLevel, "<br/>\n    ").concat(t.pdfSolarCycle, " ").concat(solarLabel, "<br/>\n    v").concat(APP_VERSION, "\n  </div>\n</div>\n\n<div class=\"section\">\n  <div class=\"section-title\">").concat(t.pdfMonthlySummary, "</div>\n  <div style=\"display:flex;gap:12px;align-items:stretch;margin-bottom:14px;\">\n    <div class=\"highlight\" style=\"flex:1;\">\n      <div>\n        <div class=\"hl-label\">").concat(t.pdfMonthlySummary, "</div>\n        <div class=\"hl-value\">").concat(fmtDose(monthlyUsv), "</div>\n        <div class=\"hl-sub\">").concat(isEn ? "Annual projection" : "Proyección anual", ": ").concat(fmtDose(annualUsv), "</div>\n      </div>\n    </div>\n    <div class=\"highlight\" style=\"flex:1;\">\n      <div>\n        <div class=\"hl-label\">").concat(t.pdfIcrcUsage, "</div>\n        <div class=\"hl-value\" style=\"color:").concat(annualUsv / 20000 > 0.8 ? "#c03020" : annualUsv / 20000 > 0.5 ? "#b06010" : "#1a6fa8", "\">\n          ").concat((annualUsv / 20000 * 100).toFixed(1), "%\n        </div>\n        <div class=\"hl-sub\">").concat(t.pdfOf, "</div>\n      </div>\n    </div>\n  </div>\n  <div class=\"params\">\n    <span class=\"param\">\u2708 ").concat(validFlights.reduce(function (s, f) {
+  var html = "<!DOCTYPE html>\n<html lang=\"".concat(isEn ? "en" : "es", "\">\n<head>\n<meta charset=\"UTF-8\"/>\n<title>").concat(t.pdfTitle, " \xB7 ").concat(esc(pdfMonthName), "</title>\n<style>\n  @page { margin: 18mm 16mm; }\n  * { box-sizing:border-box; margin:0; padding:0; }\n  body { font-family: -apple-system, 'Helvetica Neue', Arial, sans-serif;\n    font-size:11px; color:#1a2a35; background:#fff; }\n  .header { display:flex; justify-content:space-between; align-items:flex-start;\n    border-bottom:2.5px solid #1a6fa8; padding-bottom:10px; margin-bottom:18px; }\n  .title { font-size:20px; font-weight:800; color:#1a6fa8; letter-spacing:-0.5px; }\n  .subtitle { font-size:11px; color:#5a7a8a; margin-top:3px; }\n  .meta { text-align:right; font-size:10px; color:#6a8a9a; line-height:1.8; }\n  .section { margin-bottom:18px; }\n  .section-title { font-size:10px; font-weight:700; text-transform:uppercase;\n    letter-spacing:0.8px; color:#5a7a8a; margin-bottom:8px;\n    padding-bottom:4px; border-bottom:1px solid #e0eef5; }\n  .summary-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-bottom:16px; }\n  .stat-box { background:#f0f6fa; border:1px solid #d0e4f0; border-radius:8px;\n    padding:10px 12px; text-align:center; }\n  .stat-label { font-size:9px; color:#6a8a9a; text-transform:uppercase; letter-spacing:0.6px; margin-bottom:4px; }\n  .stat-value { font-size:16px; font-weight:800; color:#1a6fa8; }\n  .stat-sub { font-size:9px; color:#8aacbc; margin-top:2px; }\n  table { width:100%; border-collapse:collapse; font-size:10px; }\n  th { background:#1a6fa8; color:#fff; padding:6px 8px; text-align:left;\n    font-weight:600; font-size:9.5px; letter-spacing:0.3px; }\n  th.num, td.num { text-align:right; }\n  td { padding:5px 8px; border-bottom:1px solid #edf3f7; color:#2a3a45; }\n  tr:last-child td { border-bottom:none; }\n  tr:nth-child(even) td { background:#f8fbfd; }\n  td.bold { font-weight:700; color:#1a6fa8; }\n  .total-row td { background:#e8f2fa !important; font-weight:700;\n    border-top:2px solid #1a6fa8; color:#1a2a35; }\n  .refs-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:8px; }\n  .ref-box { background:#f8fbfd; border:1px solid #e0eef5; border-radius:6px; padding:8px 10px; }\n  .ref-name { font-size:9px; color:#6a8a9a; margin-bottom:2px; }\n  .ref-dose { font-size:10px; color:#4a6a7a; margin-bottom:3px; }\n  .ref-eq { font-size:12px; font-weight:700; color:#1a6fa8; }\n  .params { display:flex; gap:16px; font-size:10px; color:#5a7a8a; }\n  .param { background:#f0f6fa; border-radius:5px; padding:4px 10px; }\n  .footer { margin-top:20px; padding-top:10px; border-top:1px solid #e0eef5;\n    font-size:9px; color:#9ab0bc; line-height:1.6; }\n  .highlight { background:#e8f4ff; border:1px solid #b0d4ee; border-radius:6px;\n    padding:10px 14px; display:flex; justify-content:space-between; align-items:center; }\n  .hl-label { font-size:10px; color:#3a6a8a; font-weight:600; }\n  .hl-value { font-size:22px; font-weight:800; color:#1a6fa8; }\n  .hl-sub { font-size:9px; color:#6a9ab0; margin-top:1px; }\n  ").concat(showCareer ? ".career { background:#f5f0fc; border:1px solid #d0b8f0; border-radius:8px;\n    padding:12px 14px; margin-top:14px; }\n  .career-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin-top:8px; }\n  .career-stat { text-align:center; }\n  .career-label { font-size:9px; color:#7a5aaa; text-transform:uppercase; letter-spacing:0.5px; }\n  .career-value { font-size:14px; font-weight:800; color:#6030a0; margin-top:2px; }" : "", "\n</style>\n</head>\n<body>\n\n<div class=\"header\">\n  <div>\n    <div class=\"title\">").concat(t.pdfTitle, "</div>\n    <div class=\"subtitle\">").concat(t.pdfSubtitle, " \xB7 ").concat(esc(pdfMonthName), "</div>\n  </div>\n  <div class=\"meta\">\n    ").concat(t.pdfGenerated, " ").concat(esc(dateStr), "<br/>\n    ").concat(t.pdfFlightLevel, "<br/>\n    ").concat(t.pdfSolarCycle, " ").concat(esc(solarLabel), "<br/>\n    v").concat(APP_VERSION, "\n  </div>\n</div>\n\n<div class=\"section\">\n  <div class=\"section-title\">").concat(t.pdfMonthlySummary, "</div>\n  <div style=\"display:flex;gap:12px;align-items:stretch;margin-bottom:14px;\">\n    <div class=\"highlight\" style=\"flex:1;\">\n      <div>\n        <div class=\"hl-label\">").concat(t.pdfMonthlySummary, "</div>\n        <div class=\"hl-value\">").concat(fmtDose(monthlyUsv), "</div>\n        <div class=\"hl-sub\">").concat(isEn ? "Annual projection" : "Proyección anual", ": ").concat(fmtDose(annualUsv), "</div>\n      </div>\n    </div>\n    <div class=\"highlight\" style=\"flex:1;\">\n      <div>\n        <div class=\"hl-label\">").concat(t.pdfIcrcUsage, "</div>\n        <div class=\"hl-value\" style=\"color:").concat(annualUsv / 20000 > 0.8 ? "#c03020" : annualUsv / 20000 > 0.5 ? "#b06010" : "#1a6fa8", "\">\n          ").concat((annualUsv / 20000 * 100).toFixed(1), "%\n        </div>\n        <div class=\"hl-sub\">").concat(t.pdfOf, "</div>\n      </div>\n    </div>\n  </div>\n  <div class=\"params\">\n    <span class=\"param\">\u2708 ").concat(validFlights.reduce(function (s, f) {
     // Number(): con un legs de texto esto era concatenación de strings, así que
     // el contador de sectores escupía el valor crudo al HTML sin pasar por esc().
     return s + (Number(f.legs) || 0);
@@ -8708,7 +8802,7 @@ function buildPdfHtml(_ref13) {
       dose = _ref15[1],
       eq = _ref15[2];
     return "\n      <div class=\"ref-box\">\n        <div class=\"ref-name\">".concat(name, "</div>\n        <div class=\"ref-dose\">").concat(dose, "</div>\n        <div class=\"ref-eq\">\xD7 ").concat(eq, "</div>\n      </div>");
-  }).join(""), "\n  </div>\n</div>\n\n").concat(showCareer ? "\n<div class=\"career\">\n  <div style=\"font-size:10px;font-weight:700;color:#6030a0;text-transform:uppercase;letter-spacing:0.8px;\">\n    ".concat(t.pdfCareerTitle, " \xB7 ").concat(careerYears, "\n  </div>\n  <div style=\"font-size:9px;color:#9a70c0;margin:4px 0 8px;line-height:1.5;\">\n    ").concat(t.pdfCareerNote, " ").concat(careerYears, " ").concat(t.pdfCareerNote2, "\n  </div>\n  <div class=\"career-grid\">\n    <div class=\"career-stat\">\n      <div class=\"career-label\">").concat(t.pdfCareerFlight, "</div>\n      <div class=\"career-value\">").concat(fmtDose(annualUsv * careerYears), "</div>\n    </div>\n    <div class=\"career-stat\">\n      <div class=\"career-label\">").concat(t.pdfCareerCT, "</div>\n      <div class=\"career-value\">").concat((annualUsv * careerYears / 7000).toFixed(1), "\xD7</div>\n    </div>\n    <div class=\"career-stat\">\n      <div class=\"career-label\">").concat(t.pdfCareerNatural, "</div>\n      <div class=\"career-value\">").concat(fmtDose(nonFlyer * careerYears), "</div>\n    </div>\n  </div>\n  <div style=\"margin-top:8px;font-size:9px;color:#7a50a0;line-height:1.6;padding:6px 8px;background:#ede8f8;border-radius:5px;\">\n    ").concat(t.pdfCareerTotal, " <strong>").concat(fmtDose((annualUsv + nonFlyer) * careerYears), "</strong>\n  </div>\n</div>") : "", "\n\n<div class=\"footer\">\n  ").concat(t.pdfFooter, "\n</div>\n\n</body>\n</html>");
+  }).join(""), "\n  </div>\n</div>\n\n").concat(showCareer ? "\n<div class=\"career\">\n  <div style=\"font-size:10px;font-weight:700;color:#6030a0;text-transform:uppercase;letter-spacing:0.8px;\">\n    ".concat(t.pdfCareerTitle, " \xB7 ").concat(esc(careerYears), "\n  </div>\n  <div style=\"font-size:9px;color:#9a70c0;margin:4px 0 8px;line-height:1.5;\">\n    ").concat(t.pdfCareerNote, " ").concat(esc(careerYears), " ").concat(t.pdfCareerNote2, "\n  </div>\n  <div class=\"career-grid\">\n    <div class=\"career-stat\">\n      <div class=\"career-label\">").concat(t.pdfCareerFlight, "</div>\n      <div class=\"career-value\">").concat(fmtDose(annualUsv * careerYears), "</div>\n    </div>\n    <div class=\"career-stat\">\n      <div class=\"career-label\">").concat(t.pdfCareerCT, "</div>\n      <div class=\"career-value\">").concat((annualUsv * careerYears / 7000).toFixed(1), "\xD7</div>\n    </div>\n    <div class=\"career-stat\">\n      <div class=\"career-label\">").concat(t.pdfCareerNatural, "</div>\n      <div class=\"career-value\">").concat(fmtDose(nonFlyer * careerYears), "</div>\n    </div>\n  </div>\n  <div style=\"margin-top:8px;font-size:9px;color:#7a50a0;line-height:1.6;padding:6px 8px;background:#ede8f8;border-radius:5px;\">\n    ").concat(t.pdfCareerTotal, " <strong>").concat(fmtDose((annualUsv + nonFlyer) * careerYears), "</strong>\n  </div>\n</div>") : "", "\n\n<div class=\"footer\">\n  ").concat(t.pdfFooter, "\n</div>\n\n</body>\n</html>");
   return html;
 }
 

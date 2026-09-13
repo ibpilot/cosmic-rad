@@ -156,11 +156,11 @@ jobs:
           if git diff --cached --quiet; then
             echo "Sin cambios en index.html; no hay commit."
           else
-            git commit -m "chore(dose): regenerate CARI-7A effective-dose grid (FAA CAMI)"
+            git -c core.hooksPath=/dev/null commit -m "chore(dose): regenerate CARI-7A effective-dose grid (FAA CAMI)"
             # S5: el checkout fue con persist-credentials: false; el token se
             # inyecta solo para el push, en el repo efimero del runner.
             git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
+            git -c core.hooksPath=/dev/null push origin "HEAD:${GITHUB_REF_NAME}"
           fi
 
   hp-months:
@@ -211,10 +211,10 @@ jobs:
           if git diff --cached --quiet; then
             echo "Sin cambios en index.html; no hay commit."
           else
-            git commit -m "chore(dose): refresh monthly heliocentric potential (FAA MV-DATES)"
+            git -c core.hooksPath=/dev/null commit -m "chore(dose): refresh monthly heliocentric potential (FAA MV-DATES)"
             # S5: el checkout fue con persist-credentials: false, asi que el
             # token no esta en .git/config durante el procesado de terceros.
             # Se inyecta aqui, solo para el push, en el repo efimero del runner.
             git remote set-url origin "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
+            git -c core.hooksPath=/dev/null push origin "HEAD:${GITHUB_REF_NAME}"
           fi

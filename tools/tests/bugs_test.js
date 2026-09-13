@@ -1300,7 +1300,9 @@ console.log("\nT12 lote");
       state: "estimacion_disponible", result: null, noaaCapture: cap });
     const oOther = mkOcc({ id: 9072, depDate: "2026-09-02", depTime: "10:00", timeKind: "real" });
     const f = { id: 907, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oElig, oOther] };
-    const plan = { eligible: [{ flightId: 907, occId: 9071, result: { lowUsv: 3, highUsv: 7 } }], excluded: [] };
+    const plan = { eligible: [{ flightId: 907, occId: 9071,
+      depDate: "2026-09-01", depTime: "10:00", timeKind: "real", track: undefined,
+      result: { lowUsv: 3, highUsv: 7 } }], excluded: [] };
     const res = ctx.applyBatch([f], plan);
     const out = res.flights[0].occurrences;
     ok("B6 elegible → incorporada", out[0].state === "incorporada", out[0].state);
@@ -1320,7 +1322,9 @@ console.log("\nT12 lote");
       state: "estimacion_disponible", noaaCapture: null, result: null };
     const f = { id: 908, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oSinVer] };
     const before = JSON.stringify([f]);
-    const plan = { eligible: [{ flightId: 908, occId: 9081, result: { lowUsv: 4, highUsv: 9 } }], excluded: [] };
+    const plan = { eligible: [{ flightId: 908, occId: 9081,
+      depDate: "2026-09-01", depTime: "10:00", timeKind: "real", track: undefined,
+      result: { lowUsv: 4, highUsv: 9 } }], excluded: [] };
     const applied = ctx.applyBatch([f], plan);
     const undone = ctx.undoBatch(applied.flights, applied.batch);
     ok("B7 JSON antes === JSON después del lote y deshacer",
@@ -1334,7 +1338,9 @@ console.log("\nT12 lote");
     const fNo = { id: 909, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1 };
     const fElig = { id: 910, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1,
       occurrences: [mkOcc({ id: 9101, depDate: "2026-09-01", depTime: "10:00", timeKind: "real" })] };
-    const plan = { eligible: [{ flightId: 910, occId: 9101, result: { lowUsv: 1, highUsv: 2 } }], excluded: [] };
+    const plan = { eligible: [{ flightId: 910, occId: 9101,
+      depDate: "2026-09-01", depTime: "10:00", timeKind: "real", track: undefined,
+      result: { lowUsv: 1, highUsv: 2 } }], excluded: [] };
     const res = ctx.applyBatch([fNo, fElig], plan);
     ok("B8 vuelo sin elegibles sale === al de entrada", res.flights[0] === fNo, res.flights[0] === fNo);
     ok("B8 vuelo tocado sí es copia", res.flights[1] !== fElig, res.flights[1] === fElig);
@@ -1355,7 +1361,9 @@ console.log("\nT12 lote");
       result: { lowUsv: 1, highUsv: 2 }, modelVersion: "modelo-viejo" };
     const f = { id: 912, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [oPrev] };
     const before = JSON.stringify([f]);
-    const plan = { eligible: [{ flightId: 912, occId: 9121, result: { lowUsv: 4, highUsv: 9 } }], excluded: [] };
+    const plan = { eligible: [{ flightId: 912, occId: 9121,
+      depDate: "2026-09-01", depTime: "10:00", timeKind: "real", track: undefined,
+      result: { lowUsv: 4, highUsv: 9 } }], excluded: [] };
     const res = ctx.applyBatch([f], plan);
     const applied = res.flights[0].occurrences[0];
     ok("T12-B11el lote pisa la cifra con la nueva", applied.result.lowUsv === 4 && applied.result.highUsv === 9,
@@ -1780,9 +1788,9 @@ async function testLoadArchiveForNceiEndToEnd() {
   const swpc = { coverage: { days: [] }, differential: { coverage: { days: [] } } };
   const ncei = { days: {
     "2026-09-04": { status: "complete", candidates: [
-      { sat: "g18", valid_diff_slots: 288, recommended: true, path: "ncei/A.json" }] },
+      { sat: "g18", valid_diff_slots: 288, recommended: true, path: "ncei/sgps/g18/2026/09/A.json" }] },
     "2026-09-05": { status: "complete", candidates: [
-      { sat: "g18", valid_diff_slots: 288, recommended: true, path: "ncei/B.json" }] }
+      { sat: "g18", valid_diff_slots: 288, recommended: true, path: "ncei/sgps/g18/2026/09/B.json" }] }
   } };
   try {
     ctx._solarManifestPromise = null;
@@ -1796,7 +1804,7 @@ async function testLoadArchiveForNceiEndToEnd() {
       if (u.endsWith("/manifest.json")) {
         return Promise.resolve({ ok: true, json: () => Promise.resolve(swpc) });
       }
-      const day = u.indexOf("ncei/A.json") !== -1 ? "2026-09-04" : "2026-09-05";
+      const day = u.indexOf("ncei/sgps/g18/2026/09/A.json") !== -1 ? "2026-09-04" : "2026-09-05";
       return Promise.resolve({ ok: true, json: () => Promise.resolve(fileFor(day)) });
     };
     const depMs = Date.UTC(2026, 8, 5, 6, 0);
@@ -1905,9 +1913,9 @@ async function testMultiSatFallback() {
   // una mezcla se vea a la primera.
   const nceiManifest = { days: {
     "2026-09-08": { status: "complete", candidates: [
-      { sat: "g19", valid_diff_slots: 288, recommended: true, path: "ncei/A.json" }] },
+      { sat: "g19", valid_diff_slots: 288, recommended: true, path: "ncei/sgps/g19/2026/09/A.json" }] },
     "2026-09-09": { status: "complete", candidates: [
-      { sat: "g19", valid_diff_slots: 288, recommended: true, path: "ncei/B.json" }] }
+      { sat: "g19", valid_diff_slots: 288, recommended: true, path: "ncei/sgps/g19/2026/09/B.json" }] }
   } };
   const mkFetch = (opts) => {
     const o = opts || {};
@@ -1923,8 +1931,8 @@ async function testMultiSatFallback() {
       if (o.nceiFileMissing && u.indexOf("ncei/") !== -1) {
         return Promise.resolve({ ok: false, status: 404 });
       }
-      if (u.indexOf("ncei/A.json") !== -1) return Promise.resolve({ ok: true, json: () => Promise.resolve(nceiFile("2026-09-08", "g19")) });
-      if (u.indexOf("ncei/B.json") !== -1) return Promise.resolve({ ok: true, json: () => Promise.resolve(nceiFile("2026-09-09", "g19")) });
+      if (u.indexOf("ncei/sgps/g19/2026/09/A.json") !== -1) return Promise.resolve({ ok: true, json: () => Promise.resolve(nceiFile("2026-09-08", "g19")) });
+      if (u.indexOf("ncei/sgps/g19/2026/09/B.json") !== -1) return Promise.resolve({ ok: true, json: () => Promise.resolve(nceiFile("2026-09-09", "g19")) });
       if (u.endsWith("/manifest.json")) return Promise.resolve({ ok: true, json: () => Promise.resolve(swpcManifest) });
       const d = u.indexOf("2026-09-08") !== -1 ? "2026-09-08" : "2026-09-09";
       const part = u.indexOf("-diff.json") !== -1 ? "diff" : "int";
@@ -2586,6 +2594,197 @@ function testSolarCheckQuery() {
   });
 }
 
+console.log("\nAUD — auditoría 2026-09-13");
+{
+  // M4/B3 — parseBackup y prepareRestore.
+  ok("AUD-M4a parseBackup filtra null/no-objetos",
+     ctx.parseBackup('{"2026-09":[null,1,"x",{"orig":"MAD","dest":"JFK"}]}')["2026-09"].length === 1,
+     JSON.stringify(ctx.parseBackup('{"2026-09":[null,1,"x",{"orig":"MAD","dest":"JFK"}]}')));
+  ok("AUD-M4b prepareRestore con null no lanza y devuelve 1 vuelo",
+     ctx.prepareRestore('{"version":1,"months":{"2026-09":[null,{"orig":"MAD","dest":"JFK"}]}}')["2026-09"].length === 1);
+  ok("AUD-M4c prepareRestore sin id en la salida",
+     !("id" in ctx.prepareRestore('{"2026-09":[{"orig":"MAD","dest":"JFK"}]}')["2026-09"][0]));
+  ok("AUD-M4d monthFlightsFrom tolera almacen corrupto",
+     ctx.monthFlightsFrom(null, "2026-09").length === 0 &&
+     ctx.monthFlightsFrom({ "2026-09": [null, { orig: "MAD", dest: "JFK" }] }, "2026-09").length === 1 &&
+     ctx.monthFlightsFrom({ "2026-09": "x" }, "2026-09").length === 0);
+
+  // M5 — centinelas SWPC.
+  const sw = ctx.parseSwpcProtons([
+    { energy: ">=10 MeV", flux: 0.3, time_tag: "A" },
+    { energy: ">=10 MeV", flux: -100000, time_tag: "B" }]);
+  ok("AUD-M5a centinela negativo se salta",
+     sw && sw.fluxPfu === 0.3 && sw.timeIso === "A", JSON.stringify(sw));
+  ok("AUD-M5b flux null se salta",
+     ctx.parseSwpcProtons([{ energy: ">=10 MeV", flux: null, time_tag: "B" }]) === null);
+
+  // B1 — patch de ocurrencia sobre la lista actual.
+  const cur = [{ id: 1, depDate: "2026-09-01" }, { id: 2, depDate: "2026-09-02" }];
+  const rB1 = ctx.patchOccurrenceList(cur, 1, { state: "incorporada" });
+  ok("AUD-B1a patchOccurrenceList respeta ediciones concurrentes",
+     rB1[0].state === "incorporada" && rB1[1] === cur[1]);
+  ok("AUD-B1b guard false no toca",
+     ctx.patchOccurrenceList(cur, 1, { state: "incorporada" }, function () { return false; })[0].state === undefined);
+  const tk = [[null, 1, 1, 10], [null, 2, 2, 10]], fl = { track: tk };
+  ok("AUD-B1c occSameInputs detecta cambio de fecha y de ruta",
+     ctx.occSameInputs({ depDate: "a", depTime: "b", timeKind: "real" }, fl,
+       { depDate: "a", depTime: "b", timeKind: "real" }, fl) === true &&
+     ctx.occSameInputs({ depDate: "a", depTime: "b", timeKind: "real" }, fl,
+       { depDate: "c", depTime: "b", timeKind: "real" }, fl) === false &&
+     ctx.occSameInputs({ depDate: "a", depTime: "b", timeKind: "real" }, fl,
+       { depDate: "a", depTime: "b", timeKind: "real" }, { track: tk.slice() }) === false);
+
+  // B2 — el lote no incorpora cifras de otra salida.
+  const fB2 = { id: 1, track: undefined, occurrences: [
+    { id: 5, depDate: "2026-09-01", depTime: "10:00", timeKind: "real", state: "estimacion_disponible" }] };
+  const planB2 = { eligible: [{ flightId: 1, occId: 5, depDate: "2026-09-01", depTime: "10:00",
+    timeKind: "real", track: undefined, result: { lowUsv: 1, highUsv: 2 } }] };
+  const rB2ok = ctx.applyBatch([fB2], planB2);
+  const rB2bad = ctx.applyBatch([{ id: 1, track: undefined, occurrences: [
+    { id: 5, depDate: "2026-09-02", depTime: "10:00", timeKind: "real", state: "estimacion_disponible" }] }], planB2);
+  ok("AUD-B2a applyBatch ignora ocurrencia cuya fecha cambió",
+     rB2ok.flights[0].occurrences[0].state === "incorporada" &&
+     rB2bad.flights[0].occurrences[0].state === "estimacion_disponible" && rB2bad.batch.entries.length === 0);
+  const planB2b = ctx.batchPlan([{ id: 921, orig: "MAD", dest: "JFK", legs: 1, flIdx: 1, occurrences: [
+    { id: 9211, depDate: "2026-09-01", depTime: "10:00", timeKind: "real", state: "programado" }] }],
+    { 9211: { state: "estimacion_disponible", result: { lowUsv: 1, highUsv: 2 } } });
+  const eB2b = planB2b.eligible[0];
+  ok("AUD-B2b batchPlan registra la huella",
+     eB2b && eB2b.depDate === "2026-09-01" && eB2b.depTime === "10:00" && eB2b.timeKind === "real",
+     JSON.stringify(eB2b));
+
+  // B4 — datos importados imposibles.
+  ok("AUD-B4a cleanTrack descarta puntos imposibles",
+     ctx.cleanTrack([[null, 40, -3, 10], [null, 999, 5, 10], [null, 41, -4, 11]]).length === 2 &&
+     ctx.cleanTrack([[null, 999, 999, 10], [null, 1, 1, 10]]) === undefined);
+  const big = Array.from({ length: 6000 }, (_, i) => [null, 40 + i / 10000, -3, 10.668]);
+  ok("AUD-B4b tope 5000 se mantiene",
+     ctx.hydrateFlight({ orig: "MAD", dest: "JFK", track: big }).track.length === 5000);
+  ok("AUD-B4c resultado absurdo no se incorpora",
+     ctx.hydrateOccurrence({ state: "incorporada", depDate: "2026-09-01", depTime: "10:00",
+       result: { lowUsv: 1e9, highUsv: 1e9 } }).result === null);
+
+  // Ramas que la primera batería de mutación dejó vivas.
+  ok("AUD-X4 flux vacío se salta",
+     ctx.parseSwpcProtons([{ energy: ">=10 MeV", flux: "", time_tag: "B" }]) === null);
+  ok("AUD-X7 occSameInputs detecta cambio de timeKind",
+     ctx.occSameInputs({ depDate: "a", depTime: "b", timeKind: "real" }, fl,
+       { depDate: "a", depTime: "b", timeKind: "programada" }, fl) === false);
+  const occX8 = (tk2) => ({ id: 1, track: undefined, occurrences: [
+    { id: 5, depDate: "2026-09-01", depTime: "10:00", timeKind: tk2, state: "estimacion_disponible" }] });
+  ok("AUD-X8a applyBatch ignora ocurrencia cuyo timeKind cambió",
+     ctx.applyBatch([occX8("programada")], planB2).flights[0].occurrences[0].state === "estimacion_disponible");
+  const fX8b = occX8("real"); fX8b.track = [[null, 1, 1, 10], [null, 2, 2, 10]];
+  ok("AUD-X8b applyBatch ignora vuelo cuya ruta cambió",
+     ctx.applyBatch([fX8b], planB2).flights[0].occurrences[0].state === "estimacion_disponible");
+  ok("AUD-X9 cleanTrack descarta altitud imposible",
+     ctx.cleanTrack([[null, 40, -3, 10], [null, 41, -4, 30], [null, 42, -5, 11]]).length === 2);
+  const lX1 = [{ id: 1, occurrences: ["viejo"] }, { id: 2, occurrences: [] }];
+  const rX1 = ctx.applyFieldUpdate(lX1, 1, "occurrences", function (cur, x) { return cur.concat([x.id]); });
+  ok("AUD-X1 applyFieldUpdate aplica el actualizador sobre el valor vigente",
+     JSON.stringify(rX1[0].occurrences) === '["viejo",1]' && rX1[1] === lX1[1] &&
+     ctx.applyFieldUpdate(lX1, 2, "legs", 3)[1].legs === 3, JSON.stringify(rX1));
+  let savedX3 = 0;
+  ok("AUD-X3 restoreMonths: escritura fallida → false; inválido no escribe",
+     ctx.restoreMonths('{"2026-09":[{"orig":"MAD","dest":"JFK"}]}', function () { savedX3++; return false; }) === false &&
+     ctx.restoreMonths("{no json", function () { savedX3++; return true; }) === false && savedX3 === 1 &&
+     ctx.restoreMonths('{"2026-09":[{"orig":"MAD","dest":"JFK"}]}', function () { return true; }) === true);
+}
+
+async function testAuditCaches() {
+  console.log("\nAUD async — cachés y errores");
+  const realFetch = ctx.fetch;
+  const prevFIXES = ctx.FIXES;
+  const BASE = ctx.SOLAR_ARCHIVE_BASE;
+  let calls = new Map();
+  const count = (u) => calls.get(u) || 0;
+  const reset = () => {
+    ctx._solarManifestPromise = null;
+    ctx._nceiManifestPromise = null;
+    ctx._solarManifestAt = 0;
+    ctx._nceiManifestAt = 0;
+    ctx._solarDayCache.clear();
+    ctx._nceiDayCache.clear();
+    calls = new Map();
+  };
+  try {
+    // Manifiestos OK, dias 404.
+    ctx.fetch = function (u) {
+      calls.set(u, (calls.get(u) || 0) + 1);
+      if (u.indexOf("manifest.json") !== -1) {
+        return Promise.resolve({ ok: true, status: 200, json: () => Promise.resolve({}) });
+      }
+      return Promise.resolve({ ok: false, status: 404 });
+    };
+
+    reset();
+    await ctx.fetchSolarManifest();
+    await ctx.fetchSolarManifest();
+    ok("AUD-B6a manifiesto cacheado dentro del TTL",
+       count(BASE + "manifest.json") === 1, count(BASE + "manifest.json"));
+    ctx._solarManifestAt = Date.now() - 31 * 60 * 1000;
+    await ctx.fetchSolarManifest();
+    ok("AUD-B6b manifiesto caducado se vuelve a pedir",
+       count(BASE + "manifest.json") === 2, count(BASE + "manifest.json"));
+
+    await ctx.fetchSolarDay("2026-09-01");
+    await ctx.fetchSolarDay("2026-09-01");
+    ok("AUD-B6c día 404 no queda cacheado",
+       count(BASE + "solar/2026/09/2026-09-01.json") === 2,
+       count(BASE + "solar/2026/09/2026-09-01.json"));
+
+    await ctx.fetchNceiManifest();
+    ctx._nceiManifestAt = Date.now() - 31 * 60 * 1000;
+    await ctx.fetchNceiManifest();
+    ok("AUD-B6d manifiesto NCEI caducado se vuelve a pedir",
+       count(BASE + "ncei/manifest.json") === 2, count(BASE + "ncei/manifest.json"));
+
+    // I4 — una ruta fuera de ncei/ no se pide.
+    reset();
+    ctx.fetch = function (u) {
+      calls.set(u, (calls.get(u) || 0) + 1);
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({}) });
+    };
+    const evil = { days: { "2026-09-01": { candidates: [{ sat: "g18", path: "../evil.json" }] } } };
+    const evilRes = await ctx.fetchNceiDay("2026-09-01", "18", evil);
+    ok("AUD-I4 path fuera de ncei/ se ignora", evilRes === null && calls.size === 0,
+       JSON.stringify({ evilRes: evilRes, calls: Array.from(calls.keys()) }));
+
+    // X5 — un día NCEI 404 no queda cacheado.
+    reset();
+    ctx.fetch = function (u) {
+      calls.set(u, (calls.get(u) || 0) + 1);
+      return Promise.resolve({ ok: false, status: 404 });
+    };
+    const okPath = "ncei/sgps/g18/2026/09/x.json";
+    const mX5 = { days: { "2026-09-01": { candidates: [{ sat: "g18", path: okPath }] } } };
+    await ctx.fetchNceiDay("2026-09-01", "18", mX5);
+    await ctx.fetchNceiDay("2026-09-01", "18", mX5);
+    ok("AUD-X5 día NCEI 404 no queda cacheado", count(BASE + okPath) === 2, count(BASE + okPath));
+
+    // B8 — fixes.json invalido es un error.
+    ctx.FIXES = null; ctx._fixesLoading = false; ctx._fixesCbs = [];
+    ctx.fetch = function () { return Promise.resolve({ ok: true, json: () => Promise.resolve({}) }); };
+    let e1 = "unset";
+    ctx.ensureFixes(function (e) { e1 = e; });
+    await new Promise((r) => setTimeout(r, 20));
+    ok("AUD-B8 fixes vacío llama cb con error", e1 instanceof Error, String(e1));
+
+    ctx.FIXES = null; ctx._fixesLoading = false; ctx._fixesCbs = [];
+    ctx.fetch = function () {
+      return Promise.resolve({ ok: false, status: 404, json: () => Promise.resolve({ AB: [100000, 200000] }) });
+    };
+    let e2 = "unset";
+    ctx.ensureFixes(function (e) { e2 = e; });
+    await new Promise((r) => setTimeout(r, 20));
+    ok("AUD-B8 fixes 404 llama cb con error", e2 instanceof Error, String(e2));
+  } finally {
+    ctx.fetch = realFetch;
+    ctx.FIXES = prevFIXES;
+    reset();
+  }
+}
+
 testRouteImportKeepsCuratedIcaoAliases()
   .then(testFetchSolarManifestRetriesAfterHttpError)
   .then(testFetchNcei)
@@ -2594,6 +2793,7 @@ testRouteImportKeepsCuratedIcaoAliases()
   .then(testMultiSatFallback)
   .then(testSolarRetry)
   .then(testSolarCheckQuery)
+  .then(testAuditCaches)
   .then(function () {
   console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");
   process.exit(fail === 0 ? 0 : 1);
