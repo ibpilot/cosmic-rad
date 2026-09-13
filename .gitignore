@@ -8,3 +8,9 @@ __pycache__/
 leon2.html
 .claude/
 .commandcode/
+
+# Artefactos locales de herramientas y del arnes de mutacion
+graphify-out/
+reasonix.toml
+tools/tests/index.orig.html
+tools/tests/f6_mutants.json

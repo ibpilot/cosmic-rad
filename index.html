@@ -424,7 +424,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.27";
+var APP_VERSION = "1.28";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2279,7 +2279,9 @@ var OCC_VISIBLE = {
   modelo_nuevo: "disponible",
   incorporada: "revisada",
   sin_senal: "revisada",
-  fuera_de_rango: "revisada",
+  // Una fecha anterior al inicio del archivo no es "revisada" (contribucion
+  // despreciable) sino un aviso: no hay dato y no hay nada que esperar.
+  fuera_de_rango: "aviso",
   noaa_no_disponible: "aviso"
 };
 function occVisible(state) {
@@ -2696,13 +2698,15 @@ function undoBatch(flights, batch) {
 var OCC_MODEL_REASONS = { sin_convergencia: true, modelo_no_resoluble: true };
 
 // true solo si occEvaluate llegaria a necesitar el archivo (pasa las reglas 1-5).
-function occNeedsArchive(f, occ, nowMs) {
+// `points` es opcional: quien ya calculo la ruta la reutiliza en vez de
+// recalcularla (la consulta puntual la necesitaba dos veces).
+function occNeedsArchive(f, occ, nowMs, points) {
   if (!occ || typeof occ !== "object" || occ.state === "incorporada") return false;
   var depMs = depMsOf(occ);
   if (depMs === null || depMs - BASELINE_MS < SOLAR_ARCHIVE_START_MS) return false;
-  var points = occRoutePoints(f, occ);
-  if (!points) return false;
-  return occLandMs(points) <= (nowMs == null ? Date.now() : nowMs);
+  var pts = points === undefined ? occRoutePoints(f, occ) : points;
+  if (!pts) return false;
+  return occLandMs(pts) <= (nowMs == null ? Date.now() : nowMs);
 }
 
 // occEvaluate(f, occ, archive, nowMs, routeFn): estado visible + cifra de una
@@ -4943,6 +4947,26 @@ var LANG = {
     occNoaaFail: "calculado sin datos de llamaradas solares — no se pudo leer el archivo GOES",
     occNoDate: "sin fecha",
     occSepTitle: "Radiación por evento solar: estimación a partir de protones solares medidos por GOES",
+    solarCheckBtn: "☀ Comprobar actividad solar",
+    solarCheckInfoAria: "Cómo calculamos la actividad solar",
+    solarCheckRun: "Comprobar",
+    solarCheckLoading: "comprobando…",
+    solarCheckHint: "Indica fecha y hora de salida (UTC) y pulsa Comprobar.",
+    solarCheckRouteEstimated: "ruta estimada (gran círculo · 830 km/h · FL elegido)",
+    solarCheckSinSenal: "sin contribución solar detectable",
+    solarInfoTitle: "Cómo calculamos la actividad solar",
+    solarInfoClose: "Cerrar información sobre actividad solar",
+    solarInfoSubtitle: "SEP (protones solares) · GCR de fondo · CARI-7A y GOES",
+    solarInfoWhatTitle: "Qué calcula",
+    solarInfoWhatBody: "La consulta puntual estima la dosis extra por radiación solar de protones (SEP) que añadiría un vuelo concreto, para la fecha y hora de salida que indiques. No estima directamente una llamarada electromagnética ni convierte sus rayos X en dosis: calcula el efecto del flujo de protones energéticos asociado. La dosis de fondo galáctico (GCR) del vuelo se muestra aparte, como referencia, y no depende del evento solar. Esta consulta no se guarda ni modifica el planificador mensual.",
+    solarInfoHowTitle: "Cómo se calcula",
+    solarInfoHowBody: "Se toma una línea base fija de 12 h justo antes de la salida y se busca una subida sostenida sobre 13 canales diferenciales GOES, con confirmación temporal (varios muestreos seguidos) para no confundir un pico de ruido con un evento. La confirmación no mezcla satélites: toda la ventana usa un único satélite. Si hay evento, se ajusta un conjunto espectral de protones y se integra a lo largo de la ruta, punto a punto, según la altitud y la rigidez de corte geomagnética (el escudo magnético de la Tierra). Sin track importado, la ruta es la ortodrómica (gran círculo) a 830 km/h y la altitud del FL elegido, así que la cifra es una estimación de ruta.",
+    solarInfoSourcesTitle: "Fuentes",
+    solarInfoSourcesBody: "GCR: rejilla CARI-7A de la FAA, con el mapa de rigidez de corte de 1°×1°. SEP: flujo de protones de los satélites GOES de la NOAA (SWPC), con respaldo del archivo histórico NCEI cuando SWPC no cubre la ventana. En una ventana nunca se mezclan satélites.",
+    solarInfoLimitsTitle: "Precisión y límites",
+    solarInfoLimitsBody: "El rango se presenta con un mínimo factor 3 entre extremos y su escala se apoya en un único evento calibrante: es orientativo y experimental, no dosimetría certificada. No damos porcentaje de confianza. Las fechas y horas son UTC obligatoriamente. El archivo empieza el 2025-09-11 y el histórico NCEI suele publicarse con unos 2 días de retraso. Muy importante: un fallo de red o un dato pendiente NO significan dosis cero; solo un cero medido se muestra como cero.",
+    solarInfoStatesTitle: "Estados posibles",
+    solarInfoStatesBody: "Sin fecha: falta la fecha o la hora y no se calcula nada.\n\nProgramado / futuro: el vuelo aún no ha aterrizado; no hay observación que evaluar.\n\nEsperando datos: falta el archivo del día, pero puede llegar.\n\nIncompleto: el dato existe pero no permite medir (hueco, canal ausente, cambio de satélite).\n\nSin señal: el dato está completo y no se detecta contribución solar; es un cero medido.\n\nEstimación disponible: hay rango SEP con cifra y se muestra el rango y el total.\n\nIncorporada (solo planificador): la cifra se ha añadido al plan mensual; en Vuelo único esto no ocurre.\n\nModelo actualizado: la cifra se calculó con una versión anterior del modelo y conviene recalcularla.\n\nEvento sin cifra acotable: hay evento activo pero el modelo no puede acotar una cifra en esta ruta; no es cero.\n\nArchivo GOES no disponible: no se pudo leer el archivo (red); no es cero.\n\nFuera de archivo: la ventana cae antes del inicio del archivo (2025-09-11); no hay dato y no es cero.",
     codeNotFound: "Código no encontrado",
     originLabel: "Origen",
     destLabel: "Destino",
@@ -5238,6 +5262,26 @@ var LANG = {
     occNoaaFail: "calculated without solar flare data — the GOES archive could not be read",
     occNoDate: "no date",
     occSepTitle: "Solar event radiation: estimate from solar protons measured by GOES",
+    solarCheckBtn: "☀ Check solar activity",
+    solarCheckInfoAria: "How we calculate solar activity",
+    solarCheckRun: "Check",
+    solarCheckLoading: "checking…",
+    solarCheckHint: "Enter departure date and time (UTC) and tap Check.",
+    solarCheckRouteEstimated: "estimated route (great circle · 830 km/h · selected FL)",
+    solarCheckSinSenal: "no detectable solar contribution",
+    solarInfoTitle: "How we calculate solar activity",
+    solarInfoClose: "Close solar activity information",
+    solarInfoSubtitle: "SEP (solar protons) · background GCR · CARI-7A and GOES",
+    solarInfoWhatTitle: "What it calculates",
+    solarInfoWhatBody: "The point check estimates the extra dose from solar proton radiation (SEP) that a specific flight would receive, for the departure date and time you enter. It does not directly estimate an electromagnetic flare or convert its X-rays into dose: it calculates the effect of the associated energetic proton flux. The flight's galactic background dose (GCR) is shown separately as a reference and does not depend on the solar event. This check is not saved and does not modify the monthly planner.",
+    solarInfoHowTitle: "How it is calculated",
+    solarInfoHowBody: "A fixed 12 h baseline just before departure is taken and a sustained rise is looked for across 13 GOES differential channels, with temporal confirmation (several consecutive samples) so a noise spike is not mistaken for an event. The confirmation never mixes satellites: the whole window uses a single satellite. If there is an event, a spectral proton ensemble is fitted and integrated along the route, point by point, against altitude and geomagnetic cutoff rigidity (Earth's magnetic shield). With no imported track, the route is the orthodromic (great circle) at 830 km/h and the selected FL altitude, so the figure is a route estimate.",
+    solarInfoSourcesTitle: "Sources",
+    solarInfoSourcesBody: "GCR: FAA CARI-7A grid, with the 1°×1° cutoff rigidity map. SEP: proton flux from NOAA's GOES satellites (SWPC), with the historical NCEI archive as fallback when SWPC does not cover the window. Satellites are never mixed within one window.",
+    solarInfoLimitsTitle: "Precision and limits",
+    solarInfoLimitsBody: "The range is shown with a minimum factor of 3 between its ends and its scale rests on a single calibrating event: it is indicative and experimental, not certified dosimetry. We give no confidence percentage. Dates and times are UTC by requirement. The archive starts on 2025-09-11 and the NCEI history is usually published about 2 days late. Very important: a network failure or pending data does NOT mean zero dose; only a measured zero is shown as zero.",
+    solarInfoStatesTitle: "Possible states",
+    solarInfoStatesBody: "No date: the date or time is missing and nothing is calculated.\n\nScheduled / future: the flight has not landed yet; there is no observation to evaluate.\n\nWaiting for data: that day's archive is missing but may arrive.\n\nIncomplete: the data exists but cannot be measured (gap, missing channel, satellite change).\n\nNo signal: the data is complete and no solar contribution is detected; this is a measured zero.\n\nEstimate available: there is an SEP range with a figure, and the range and total are shown.\n\nIncorporated (planner only): the figure has been added to the monthly plan; in Single flight this does not happen.\n\nModel updated: the figure was computed with an older model version and should be recalculated.\n\nEvent with no boundable figure: an event is active but the model cannot bound a figure on this route; it is not zero.\n\nGOES archive unavailable: the archive could not be read (network); it is not zero.\n\nOut of archive: the window falls before the archive start (2025-09-11); there is no data and it is not zero.",
     codeNotFound: "Code not found",
     originLabel: "Origin",
     destLabel: "Destination",
@@ -8238,7 +8282,13 @@ function App() {
         color: s.c || "#e0eef5"
       }
     }, s.v));
-  })), showCareer && /*#__PURE__*/React.createElement("div", {
+  })), /*#__PURE__*/React.createElement(SolarCheckPanel, {
+    orig: sOrig,
+    dest: sDest,
+    flIdx: singleFlIdx,
+    gcrUsv: singleCalc.doseUsv,
+    t: t
+  }), showCareer && /*#__PURE__*/React.createElement("div", {
     style: _objectSpread(_objectSpread({}, CARD), {}, {
       background: "rgba(160,96,208,0.07)",
       border: "1px solid rgba(160,96,208,0.2)"
@@ -8865,6 +8915,403 @@ function TrackModal(_refTrack) {
     }
   }, t.trackModalImport)));
 }
+// ── Comprobación puntual de actividad solar (Vuelo único) ─────────────────────
+var SOLAR_CHECK_PANEL_ID = "solar-check-panel";
+// Elementos que pueden recibir el foco dentro de un dialogo (Tab ciclico).
+var SOLAR_INFO_FOCUSABLE = 'a[href],button:not([disabled]),input:not([disabled]),select:not([disabled]),textarea:not([disabled]),[tabindex]:not([tabindex="-1"])';
+// Puerta de peticiones: cada consulta recibe un token y solo la última aplica.
+// Evita pintar una respuesta async vieja si cambia la ruta, el FL, la fecha u
+// hora, o si se lanza otra consulta antes de que llegue la primera.
+function makeRequestGate() {
+  var token = 0;
+  return {
+    begin: function () { token += 1; return token; },
+    isCurrent: function (tk) { return tk === token; }
+  };
+}
+
+// solarCheckView(ev, gcrUsv, t): texto y cifras de un resultado puntual. Pura.
+// Separa tres cosas que no se pueden mezclar: una cifra medida (estimación), un
+// CERO medido (sin_senal) y la AUSENCIA de cifra (pendiente, incompleto,
+// no_estimable, fallo). Un pendiente o un fallo nunca se pinta como SEP 0.
+function solarCheckView(ev, gcrUsv, t) {
+  var g = typeof gcrUsv === "number" && isFinite(gcrUsv) ? gcrUsv : null;
+  var out = {
+    state: ev && ev.state ? ev.state : null,
+    vis: null, label: "", detail: "",
+    sepLowUsv: null, sepHighUsv: null,
+    totalLowUsv: null, totalHighUsv: null,
+    gcrUsv: g,
+    hasFigure: false, measuredZero: false, eventActive: false
+  };
+  if (!out.state) return out;
+  var st = out.state;
+  out.eventActive = ev.eventActive === true;
+  out.vis = occVisible(st);
+  out.label = t["occVis_" + out.vis] || "";
+  out.detail = t["occState_" + st] || "";
+  if (out.eventActive) {
+    // Evento activo sin cifra acotable: ni "revisada" (contribucion
+    // despreciable) ni cero. Es un aviso, como el resto de estados sin cifra.
+    out.vis = "aviso";
+    out.label = t.occVis_aviso || "";
+    out.detail = t.occState_sin_senal_evento;
+    return out;
+  }
+  if (st === "estimacion_disponible" || st === "modelo_nuevo" || st === "incorporada") {
+    var r = ev.result;
+    if (r && isFinite(r.lowUsv) && isFinite(r.highUsv) && r.lowUsv >= 0 && r.lowUsv <= r.highUsv) {
+      out.hasFigure = true;
+      out.sepLowUsv = r.lowUsv;
+      out.sepHighUsv = r.highUsv;
+      if (g !== null) {
+        out.totalLowUsv = g + r.lowUsv;
+        out.totalHighUsv = g + r.highUsv;
+      }
+      return out;
+    }
+    // El estado promete una cifra pero el resultado no es utilizable: sin
+    // numero no hay "disponible". Se degrada a pendiente, como batchPlan, y
+    // nunca a un cero implicito.
+    out.vis = "pendiente";
+    out.label = t.occVis_pendiente || "";
+    out.detail = t.occState_incompleto || "";
+    return out;
+  }
+  if (st === "sin_senal") {
+    out.hasFigure = true;
+    out.measuredZero = true;
+    out.sepLowUsv = 0;
+    out.sepHighUsv = 0;
+    if (g !== null) { out.totalLowUsv = g; out.totalHighUsv = g; }
+    out.detail = t.solarCheckSinSenal;
+    return out;
+  }
+  return out;
+}
+
+// solarCheckNums(view, t): la linea de cifras que se pinta, en orden. Pura.
+// Un cero MEDIDO se escribe "SEP 0" y no repite el total, que seria el propio GCR.
+function solarCheckNums(view, t) {
+  var nums = [];
+  if (!view || view.hasFigure !== true) return nums;
+  if (view.gcrUsv !== null) nums.push(t.gleGcr + " " + fmtDose(view.gcrUsv));
+  if (view.measuredZero) {
+    nums.push(t.gleSep + " " + fmtDose(0));
+  } else {
+    nums.push(t.gleSep + " " + fmtDose(view.sepLowUsv) + "–" + fmtDose(view.sepHighUsv));
+  }
+  if (view.totalLowUsv !== null && !view.measuredZero) {
+    nums.push(t.colTotal + " " + (view.totalLowUsv === view.totalHighUsv
+      ? fmtDose(view.totalLowUsv)
+      : fmtDose(view.totalLowUsv) + "–" + fmtDose(view.totalHighUsv)));
+  }
+  return nums;
+}
+
+// solarCheckQuery(flight, occ, now, deps): resuelve la ocurrencia contra el
+// archivo. Las dependencias se inyectan para poder fijar cada rama en los tests.
+// Nunca rechaza: un fallo deja SIN cifra (noaa_no_disponible), jamas un cero.
+function solarCheckQuery(flight, occ, now, deps) {
+  var fail = function () { return { state: "noaa_no_disponible", result: null }; };
+  var points = deps.routePoints(flight, occ);
+  if (!deps.needsArchive(flight, occ, now, points)) {
+    return Promise.resolve().then(function () {
+      return deps.evaluate(flight, occ, null, now);
+    }).catch(fail);
+  }
+  return deps.loadArchive(points, depMsOf(occ)).then(function (archive) {
+    return deps.evaluate(flight, occ, archive, now);
+  }).catch(fail);
+}
+
+function SolarCheckPanel(_refSolar) {
+  var orig = _refSolar.orig,
+    dest = _refSolar.dest,
+    flIdx = _refSolar.flIdx,
+    gcrUsv = _refSolar.gcrUsv,
+    t = _refSolar.t;
+  var _useStateS = useState(false),
+    _useStateS2 = _slicedToArray(_useStateS, 2),
+    open = _useStateS2[0],
+    setOpen = _useStateS2[1];
+  var _useStateD = useState({ depDate: "", depTime: "" }),
+    _useStateD2 = _slicedToArray(_useStateD, 2),
+    draft = _useStateD2[0],
+    setDraft = _useStateD2[1];
+  var _useStateC = useState(null),
+    _useStateC2 = _slicedToArray(_useStateC, 2),
+    check = _useStateC2[0],
+    setCheck = _useStateC2[1];
+  var _useStateI = useState(false),
+    _useStateI2 = _slicedToArray(_useStateI, 2),
+    showInfo = _useStateI2[0],
+    setShowInfo = _useStateI2[1];
+  var infoButtonRef = useRef(null);
+  var solarGateRef = useRef(null);
+  if (solarGateRef.current === null) solarGateRef.current = makeRequestGate();
+  // Identidad estable: el efecto del modal cierra sobre onClose sin resuscribirse.
+  var closeInfo = useCallback(function () {
+    setShowInfo(false);
+    if (infoButtonRef.current && infoButtonRef.current.focus) infoButtonRef.current.focus();
+  }, []);
+  // Cambiar ruta, FL, fecha u hora después de un resultado lo invalida.
+  useEffect(function () {
+    solarGateRef.current.begin();
+    setCheck(null);
+  }, [orig, dest, flIdx, draft.depDate, draft.depTime]);
+  var valid = depDraftPatch(draft) !== null;
+  function runCheck() {
+    var p = depDraftPatch(draft);
+    if (p === null) return;
+    var occ = makeOccurrence(p.depDate, p.depTime, "real");
+    var flight = { orig: orig, dest: dest, legs: 1, flIdx: flIdx };
+    var tk = solarGateRef.current.begin();
+    var now = Date.now();
+    setCheck({ status: "loading" });
+    solarCheckQuery(flight, occ, now, {
+      needsArchive: occNeedsArchive,
+      routePoints: occRoutePoints,
+      loadArchive: loadArchiveFor,
+      evaluate: occEvaluate
+    }).then(function (ev) {
+      if (!solarGateRef.current.isCurrent(tk)) return;
+      setCheck({ status: "done", ev: ev });
+    });
+  }
+  var view = check && check.status === "done" ? solarCheckView(check.ev, gcrUsv, t) : null;
+  var statusNode;
+  if (!check) {
+    statusNode = t.solarCheckHint;
+  } else if (check.status === "loading") {
+    statusNode = t.solarCheckLoading;
+  } else {
+    var parts = [];
+    parts.push(React.createElement("span", {
+      key: "vis",
+      style: { fontWeight: 700, color: occVisColor(view.vis) }
+    }, view.label));
+    if (view.detail) parts.push(React.createElement("span", { key: "det" }, " · " + view.detail));
+    if (view.hasFigure) {
+      var nums = solarCheckNums(view, t);
+      parts.push(React.createElement("div", {
+        key: "num", style: { marginTop: 5, color: "#a8c8d8" }
+      }, nums.join(" · ")));
+    }
+    statusNode = parts;
+  }
+  return React.createElement(React.Fragment, null, React.createElement("div", {
+    style: { marginTop: 4 }
+  }, React.createElement("div", {
+    style: { display: "flex", gap: 8, alignItems: "stretch" }
+  }, React.createElement("button", {
+    type: "button",
+    "aria-expanded": open,
+    "aria-controls": SOLAR_CHECK_PANEL_ID,
+    onClick: function () { setOpen(!open); },
+    style: {
+      flex: 1, padding: "11px 12px",
+      background: "linear-gradient(135deg,rgba(224,160,48,0.2),rgba(224,120,48,0.16))",
+      border: "1px solid rgba(224,160,72,0.4)",
+      borderRadius: 10, color: "#f0c060", fontWeight: 700, fontSize: 13,
+      cursor: "pointer", display: "flex", alignItems: "center",
+      justifyContent: "center", gap: 8
+    }
+  }, t.solarCheckBtn), React.createElement("button", {
+    ref: infoButtonRef,
+    type: "button",
+    title: t.solarInfoTitle,
+    "aria-label": t.solarCheckInfoAria,
+    onClick: function () { setShowInfo(true); },
+    style: {
+      width: 40, flexShrink: 0, background: "rgba(255,255,255,0.06)",
+      border: "1px solid rgba(255,255,255,0.15)", borderRadius: 10,
+      color: "#8ab4cc", fontSize: 16, fontWeight: 700, cursor: "pointer"
+    }
+  }, "\u2139")), React.createElement("div", {
+    id: SOLAR_CHECK_PANEL_ID,
+    style: { marginTop: open ? 8 : 0 }
+  }, open && React.createElement("div", {
+    style: {
+      background: "rgba(255,255,255,0.03)",
+      border: "1px solid rgba(255,255,255,0.08)",
+      borderRadius: 10, padding: "10px 10px 12px"
+    }
+  }, React.createElement("div", {
+    style: { fontSize: 10, color: "#7a9bae", marginBottom: 8 }
+  }, t.solarCheckRouteEstimated), React.createElement("div", {
+    className: "gle-dep"
+  }, React.createElement("label", null, t.gleDate, React.createElement("input", {
+    type: "date", className: "occ-input", value: draft.depDate,
+    onChange: function (e) {
+      var v = e.target.value;
+      setDraft(function (d) { return _objectSpread(_objectSpread({}, d), {}, { depDate: v }); });
+    }
+  })), React.createElement("label", null, t.gleTime, React.createElement("input", {
+    type: "time", className: "occ-input", value: draft.depTime,
+    onChange: function (e) {
+      var v = e.target.value;
+      setDraft(function (d) { return _objectSpread(_objectSpread({}, d), {}, { depTime: v }); });
+    }
+  })), React.createElement("button", {
+    type: "button", className: "occ-confirm", disabled: !valid, onClick: runCheck
+  }, t.solarCheckRun)), React.createElement("div", {
+    role: "status", "aria-live": "polite",
+    style: { marginTop: 8, fontSize: 11.5, color: "#90b8cc", lineHeight: 1.6, minHeight: 18 }
+  }, statusNode)))), showInfo && React.createElement(SolarInfoModal, {
+    t: t,
+    onClose: closeInfo
+  }));
+}
+
+// ── SolarInfoModal: bottom-sheet "Cómo calculamos la actividad solar" ──────────
+function SolarInfoModal(_refSolarInfo) {
+  var t = _refSolarInfo.t,
+    onClose = _refSolarInfo.onClose;
+  var _useStateSI = useState(null),
+    _useStateSI2 = _slicedToArray(_useStateSI, 2),
+    open = _useStateSI2[0],
+    setOpen = _useStateSI2[1];
+  var closeRef = useRef(null);
+  var sheetRef = useRef(null);
+  useEffect(function () {
+    if (closeRef.current && closeRef.current.focus) closeRef.current.focus();
+    if (typeof document === "undefined" || !document.addEventListener) return;
+    // El fondo no debe hacer scroll mientras el dialogo esta abierto.
+    var prevOverflow = document.body && document.body.style ? document.body.style.overflow : null;
+    if (prevOverflow !== null) document.body.style.overflow = "hidden";
+    // Tab ciclico: sin esto el foco se escapa al fondo pese a aria-modal.
+    function onKey(e) {
+      if (!e) return;
+      if (e.key === "Escape") { onClose(); return; }
+      if (e.key !== "Tab") return;
+      var sheet = sheetRef.current;
+      var list = sheet && sheet.querySelectorAll ? sheet.querySelectorAll(SOLAR_INFO_FOCUSABLE) : null;
+      if (!list || list.length === 0) return;
+      var first = list[0], last = list[list.length - 1];
+      if (e.shiftKey && document.activeElement === first) { e.preventDefault(); last.focus(); }
+      else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
+    }
+    document.addEventListener("keydown", onKey);
+    return function () {
+      document.removeEventListener("keydown", onKey);
+      if (prevOverflow !== null) document.body.style.overflow = prevOverflow;
+    };
+  }, [onClose]);
+  var sections = [{
+    icon: "\u2600\uFE0F",
+    title: t.solarInfoWhatTitle,
+    body: t.solarInfoWhatBody
+  }, {
+    icon: "\uD83D\uDCCA",
+    title: t.solarInfoHowTitle,
+    body: t.solarInfoHowBody
+  }, {
+    icon: "\uD83D\uDCE1",
+    title: t.solarInfoSourcesTitle,
+    body: t.solarInfoSourcesBody
+  }, {
+    icon: "\u26A0\uFE0F",
+    title: t.solarInfoLimitsTitle,
+    body: t.solarInfoLimitsBody
+  }, {
+    icon: "\uD83D\uDD00",
+    title: t.solarInfoStatesTitle,
+    body: t.solarInfoStatesBody
+  }];
+  return React.createElement("div", {
+    className: "modal-wrap",
+    style: {
+      position: "fixed", inset: 0, zIndex: 1000, background: "rgba(0,0,0,0.7)",
+      display: "flex", alignItems: "flex-end", justifyContent: "center",
+      backdropFilter: "blur(4px)", padding: 0
+    },
+    onClick: function (e) {
+      if (e.target === e.currentTarget) onClose();
+    }
+  }, React.createElement("div", {
+    ref: sheetRef,
+    className: "modal-sheet",
+    role: "dialog",
+    "aria-modal": "true",
+    "aria-labelledby": "solar-info-title",
+    style: {
+      width: "100%", maxWidth: 500,
+      background: "linear-gradient(180deg,#0d1e2e,#091622)",
+      border: "1px solid rgba(255,255,255,0.1)",
+      borderRadius: "18px 18px 0 0", maxHeight: "88vh", overflowY: "auto",
+      WebkitOverflowScrolling: "touch", padding: "0 0 32px"
+    }
+  }, React.createElement("div", {
+    style: { display: "flex", justifyContent: "center", padding: "12px 0 4px" }
+  }, React.createElement("div", {
+    style: { width: 36, height: 4, borderRadius: 2, background: "rgba(255,255,255,0.2)" }
+  })), React.createElement("div", {
+    style: {
+      display: "flex", justifyContent: "space-between", alignItems: "center",
+      padding: "8px 18px 14px"
+    }
+  }, React.createElement("div", null, React.createElement("div", {
+    id: "solar-info-title",
+    style: { fontSize: 16, fontWeight: 800, color: "#e8f4fc" }
+  }, "\u2600\uFE0F ", t.solarInfoTitle), React.createElement("div", {
+    style: { fontSize: 10, color: "#4a6a80", marginTop: 2 }
+  }, t.solarInfoSubtitle)), React.createElement("button", {
+    ref: closeRef,
+    type: "button",
+    "aria-label": t.solarInfoClose,
+    onClick: onClose,
+    style: {
+      background: "rgba(255,255,255,0.07)", border: "1px solid rgba(255,255,255,0.12)",
+      borderRadius: 8, color: "#6a8fa8", cursor: "pointer", fontSize: 16,
+      padding: "4px 10px", fontWeight: 700
+    }
+  }, "\u2715")), React.createElement("div", {
+    style: { padding: "0 14px" }
+  }, sections.map(function (s, i) {
+    return React.createElement("div", {
+      key: i,
+      style: {
+        marginBottom: 8, background: "rgba(255,255,255,0.04)",
+        border: "1px solid rgba(255,255,255,0.08)", borderRadius: 12, overflow: "hidden"
+      }
+    }, React.createElement("button", {
+      type: "button",
+      "aria-expanded": open === i,
+      onClick: function () { setOpen(open === i ? null : i); },
+      style: {
+        width: "100%", display: "flex", alignItems: "center", gap: 10,
+        padding: "13px 14px", cursor: "pointer", border: "none", textAlign: "left",
+        background: open === i ? "rgba(59,158,222,0.08)" : "transparent",
+        color: "inherit", font: "inherit"
+      }
+    }, React.createElement("span", { style: { fontSize: 18, flexShrink: 0 } }, s.icon),
+      React.createElement("span", {
+        style: { fontSize: 13, fontWeight: 700, color: "#d0e8f4", flex: 1, lineHeight: 1.3 }
+      }, s.title), React.createElement("span", {
+        style: {
+          color: "#4a6a80", fontSize: 14,
+          transform: open === i ? "rotate(180deg)" : "rotate(0deg)"
+        }
+      }, "\u25BE")), open === i && React.createElement("div", {
+      style: { padding: "0 14px 14px" }
+    }, s.body.split("\n\n").map(function (para, j) {
+      return React.createElement("p", {
+        key: j,
+        style: {
+          fontSize: 12.5, color: "#90b8cc", lineHeight: 1.75,
+          margin: j === 0 ? "4px 0 10px" : "0 0 10px"
+        }
+      }, para);
+    })));
+  })), React.createElement("div", {
+    style: {
+      fontSize: 9.5, color: "#2a4050", textAlign: "center",
+      padding: "12px 16px 0", lineHeight: 1.6
+    }
+  }, t.calcInfoFootnote)));
+}
+
 // ── CalcInfoModal (cómo se calcula la dosis) ───────────────────────────────────
 function CalcInfoModal(_refCalcInfo) {
   var onClose = _refCalcInfo.onClose,

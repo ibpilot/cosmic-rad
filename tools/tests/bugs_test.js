@@ -729,7 +729,10 @@ console.log("\nT11 ocurrencias UI");
   const OCCVIS = {
     esperando_fecha: "pendiente", programado: "pendiente", esperando_datos: "pendiente",
     incompleto: "pendiente", estimacion_disponible: "disponible", modelo_nuevo: "disponible",
-    incorporada: "revisada", sin_senal: "revisada", fuera_de_rango: "revisada",
+    incorporada: "revisada", sin_senal: "revisada",
+    // El 11-09-2025 no es "revisada" (contribucion despreciable) sino un aviso:
+    // no hay dato y no hay nada que esperar.
+    fuera_de_rango: "aviso",
     noaa_no_disponible: "aviso",
     // Terminal: dia completo y el modelo no puede acotar la cifra. Ni pendiente
     // (no hay nada que esperar) ni revisada (no es contribucion despreciable).
@@ -2088,6 +2091,255 @@ console.log("\nF7b el archivo se sirve desde Pages, no desde raw");
      html.indexOf('fetch("fixes.json?v=" + APP_VERSION)') !== -1);
 }
 
+console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
+{
+  const tES = ctx.LANG.es, tEN = ctx.LANG.en;
+  const KEYS = ["solarCheckBtn", "solarCheckInfoAria", "solarCheckRun", "solarCheckLoading",
+    "solarCheckHint", "solarCheckRouteEstimated", "solarCheckSinSenal",
+    "solarInfoTitle", "solarInfoClose", "solarInfoSubtitle", "solarInfoWhatTitle", "solarInfoWhatBody",
+    "solarInfoHowTitle", "solarInfoHowBody", "solarInfoSourcesTitle", "solarInfoSourcesBody",
+    "solarInfoLimitsTitle", "solarInfoLimitsBody", "solarInfoStatesTitle", "solarInfoStatesBody"];
+
+  // SC1 — i18n completa en ES y EN.
+  const missing = KEYS.filter((k) => typeof tES[k] !== "string" || !tES[k].trim() ||
+    typeof tEN[k] !== "string" || !tEN[k].trim());
+  ok("SC1 todas las claves solares existen en ES y EN", missing.length === 0, missing.join(","));
+  ok("SC1 botón principal ES", tES.solarCheckBtn.indexOf("Comprobar actividad solar") !== -1 && tES.solarCheckBtn.indexOf("☀") !== -1,
+     tES.solarCheckBtn);
+  ok("SC1 botón principal EN", tEN.solarCheckBtn.indexOf("Check solar activity") !== -1 && tEN.solarCheckBtn.indexOf("☀") !== -1,
+     tEN.solarCheckBtn);
+
+  const panelSrc = html.slice(html.indexOf("function SolarCheckPanel"), html.indexOf("function SolarInfoModal"));
+  const infoSrc = html.slice(html.indexOf("function SolarInfoModal"), html.indexOf("function CalcInfoModal"));
+
+  // SC2 — control, ARIA y estado presente.
+  ok("SC2 el panel y el modal existen", panelSrc.length > 200 && infoSrc.length > 200,
+     panelSrc.length + "/" + infoSrc.length);
+  ok("SC2 aria-expanded ligado a open", /"aria-expanded":\s*open/.test(panelSrc));
+  ok("SC2 aria-controls apunta al id del panel",
+     panelSrc.indexOf('"aria-controls": SOLAR_CHECK_PANEL_ID') !== -1 &&
+     panelSrc.indexOf("id: SOLAR_CHECK_PANEL_ID") !== -1);
+  ok("SC2 zona de estado role=status + aria-live polite",
+     /role:\s*"status"/.test(panelSrc) && /"aria-live":\s*"polite"/.test(panelSrc));
+  ok("SC2 botones nativos type=button", (panelSrc.match(/type:\s*"button"/g) || []).length >= 3,
+     (panelSrc.match(/type:\s*"button"/g) || []).length);
+  ok("SC2 botón de información con title y aria-label",
+     /title:\s*t\.solarInfoTitle/.test(panelSrc) && /"aria-label":\s*t\.solarCheckInfoAria/.test(panelSrc));
+  ok("SC2 glifo ℹ presente", panelSrc.indexOf("\\u2139") !== -1);
+
+  // SC3 — reutiliza el pipeline y no toca el planificador.
+  const needs = ["makeOccurrence", "occNeedsArchive", "occRoutePoints", "loadArchiveFor", "occEvaluate"];
+  ok("SC3 reutiliza el pipeline existente",
+     needs.every((n) => panelSrc.indexOf(n) !== -1),
+     needs.filter((n) => panelSrc.indexOf(n) === -1).join(","));
+  ok("SC3 no persiste ni modifica el planificador",
+     panelSrc.indexOf("setFlights") === -1 && panelSrc.indexOf("applyBatch") === -1 &&
+     panelSrc.indexOf("occIncorporate") === -1);
+
+  // SC4 — no calcula al teclear; solo el botón lanza la consulta.
+  ok("SC4 el botón Comprobar llama a runCheck", /onClick:\s*runCheck/.test(panelSrc));
+  ok("SC4 los inputs solo actualizan el borrador",
+     panelSrc.indexOf("onChange: runCheck") === -1 &&
+     (panelSrc.match(/setDraft\(/g) || []).length >= 2);
+  ok("SC4 la invalidación depende de ruta/FL/fecha/hora",
+     /\[orig, dest, flIdx, draft\.depDate, draft\.depTime\]/.test(panelSrc));
+
+  // SC5 — descarte de respuesta stale.
+  const gate = ctx.makeRequestGate();
+  const tk1 = gate.begin();
+  const viva1 = gate.isCurrent(tk1);
+  const tk2 = gate.begin();
+  const viva1Tras2 = gate.isCurrent(tk1);
+  const viva2 = gate.isCurrent(tk2);
+  ok("SC5 la primera petición queda obsoleta al lanzar otra",
+     viva1 === true && viva1Tras2 === false && viva2 === true,
+     JSON.stringify({ viva1, viva1Tras2, viva2 }));
+  const tk3 = gate.begin();
+  gate.begin(); // simula invalidación por cambio de ruta/FL/fecha/hora
+  ok("SC5 cambiar los datos invalida una petición en curso", gate.isCurrent(tk3) === false);
+  ok("SC5 el panel descarta la respuesta vieja",
+     panelSrc.indexOf("solarGateRef.current.isCurrent(") !== -1 &&
+     panelSrc.indexOf("makeRequestGate()") !== -1 &&
+     /useEffect\(function \(\) \{\s*solarGateRef\.current\.begin\(\);\s*setCheck\(null\);/.test(panelSrc));
+
+  // SC6 — fuera_de_rango es aviso, no revisada.
+  ok("SC6 occVisible(fuera_de_rango) = aviso", ctx.occVisible("fuera_de_rango") === "aviso",
+     ctx.occVisible("fuera_de_rango"));
+
+  // SC7 — separa cifra medida / cero medido / sin cifra.
+  const O = (state, extra) => Object.assign({ state: state, result: null }, extra || {});
+  const GCR = 10;
+  const est = ctx.solarCheckView(O("estimacion_disponible", { result: { lowUsv: 2, highUsv: 5 } }), GCR, tES);
+  const sen = ctx.solarCheckView(O("sin_senal"), GCR, tES);
+  const noe = ctx.solarCheckView(O("no_estimable"), GCR, tES);
+  const pen = ctx.solarCheckView(O("programado"), GCR, tES);
+  const fallo = ctx.solarCheckView(O("noaa_no_disponible"), GCR, tES);
+  ok("SC7 estimación: cifra medida y total = GCR + SEP",
+     est.hasFigure === true && est.measuredZero === false && est.sepLowUsv === 2 &&
+     est.sepHighUsv === 5 && est.totalLowUsv === 12 && est.totalHighUsv === 15 && est.vis === "disponible",
+     JSON.stringify(est));
+  ok("SC7 sin_senal: cero MEDIDO, GCR intacto",
+     sen.hasFigure === true && sen.measuredZero === true && sen.sepLowUsv === 0 &&
+     sen.sepHighUsv === 0 && sen.totalLowUsv === 10 && sen.totalHighUsv === 10 &&
+     sen.vis === "revisada" && sen.detail === tES.solarCheckSinSenal, JSON.stringify(sen));
+  ok("SC7 no_estimable: sin cifra (ni 0), aviso",
+     noe.hasFigure === false && noe.sepLowUsv === null && noe.totalLowUsv === null &&
+     noe.vis === "aviso", JSON.stringify(noe));
+  ok("SC7 pendiente: sin cifra (ni 0)",
+     pen.hasFigure === false && pen.sepLowUsv === null && pen.totalLowUsv === null &&
+     pen.vis === "pendiente", JSON.stringify(pen));
+  ok("SC7 archivo no disponible: aviso y sin cifra (ni 0)",
+     fallo.hasFigure === false && fallo.sepLowUsv === null && fallo.totalLowUsv === null &&
+     fallo.vis === "aviso", JSON.stringify(fallo));
+  const evAct = ctx.solarCheckView(O("sin_senal", { eventActive: true }), GCR, tES);
+  ok("SC7 evento activo: texto específico y sin cifra",
+     evAct.eventActive === true && evAct.hasFigure === false &&
+     evAct.detail === tES.occState_sin_senal_evento, JSON.stringify(evAct));
+  ok("SC7 evento activo: aviso, no revisada",
+     evAct.vis === "aviso" && evAct.label === tES.occVis_aviso, JSON.stringify(evAct));
+  const mod = ctx.solarCheckView(O("modelo_nuevo", { result: { lowUsv: 1, highUsv: 2 } }), GCR, tES);
+  const inc = ctx.solarCheckView(O("incorporada", { result: { lowUsv: 1, highUsv: 2 } }), GCR, tES);
+  ok("SC7 modelo_nuevo: cifra medida y disponible",
+     mod.hasFigure === true && mod.vis === "disponible" && mod.totalHighUsv === 12, JSON.stringify(mod));
+  ok("SC7 incorporada: cifra medida y revisada",
+     inc.hasFigure === true && inc.vis === "revisada" && inc.totalLowUsv === 11, JSON.stringify(inc));
+  const sinRes = ctx.solarCheckView(O("estimacion_disponible"), GCR, tES);
+  const nanRes = ctx.solarCheckView(O("estimacion_disponible", { result: { lowUsv: NaN, highUsv: 5 } }), GCR, tES);
+  ok("SC7 cifra prometida sin resultado -> pendiente, no cero",
+     sinRes.hasFigure === false && sinRes.sepLowUsv === null && sinRes.vis === "pendiente" &&
+     sinRes.detail === tES.occState_incompleto, JSON.stringify(sinRes));
+  ok("SC7 cifra prometida con NaN -> pendiente, no cero",
+     nanRes.hasFigure === false && nanRes.totalLowUsv === null && nanRes.vis === "pendiente",
+     JSON.stringify(nanRes));
+  const nada = ctx.solarCheckView(null, GCR, tES);
+  ok("SC7 sin consulta: estado vacío y sin cifra",
+     nada.state === null && nada.hasFigure === false && nada.sepLowUsv === null);
+
+  // SC10 — la línea de cifras: un cero medido se escribe SEP 0 y no duplica el total.
+  const numsSen = ctx.solarCheckNums(sen, tES);
+  const numsEst = ctx.solarCheckNums(est, tES);
+  ok("SC10 cero medido: GCR y SEP 0, sin total duplicado",
+     numsSen.length === 2 && numsSen[0] === tES.gleGcr + " " + ctx.fmtDose(10) &&
+     numsSen[1] === tES.gleSep + " " + ctx.fmtDose(0), JSON.stringify(numsSen));
+  ok("SC10 estimación: GCR, SEP y total",
+     numsEst.length === 3 && numsEst[0] === tES.gleGcr + " " + ctx.fmtDose(10) &&
+     numsEst[1] === tES.gleSep + " " + ctx.fmtDose(2) + "\u2013" + ctx.fmtDose(5) &&
+     numsEst[2] === tES.colTotal + " " + ctx.fmtDose(12) + "\u2013" + ctx.fmtDose(15),
+     JSON.stringify(numsEst));
+  ok("SC10 sin cifra: sin línea de números", ctx.solarCheckNums(pen, tES).length === 0);
+
+  // SC8 — el formulario no acepta fecha/hora inválidas.
+  ok("SC8 el borrador inválido deshabilita el botón",
+     /var valid = depDraftPatch\(draft\) !== null;/.test(panelSrc) && /disabled:\s*!valid/.test(panelSrc));
+  ok("SC8 runCheck descarta el borrador inválido",
+     /var p = depDraftPatch\(draft\);\s*if \(p === null\) return;/.test(panelSrc));
+
+  // SC9 — el modal de información es accesible y explica los estados.
+  ok("SC9 modal con dialog/aria-modal",
+     /role:\s*"dialog"/.test(infoSrc) && /"aria-modal":\s*"true"/.test(infoSrc));
+  ok("SC9 Escape cierra el modal", infoSrc.indexOf('e.key === "Escape"') !== -1);
+  const estadosES = ["Sin fecha", "Programado", "Esperando datos", "Incompleto", "Sin señal",
+    "Estimación disponible", "Incorporada", "Modelo actualizado", "sin cifra acotable",
+    "Archivo GOES no disponible", "Fuera de archivo"];
+  ok("SC9 la sección de estados nombra los once estados (ES)",
+     estadosES.every((s) => tES.solarInfoStatesBody.indexOf(s) !== -1),
+     estadosES.filter((s) => tES.solarInfoStatesBody.indexOf(s) === -1).join(" | "));
+  const estadosEN = ["No date", "Scheduled", "Waiting for data", "Incomplete", "No signal",
+    "Estimate available", "Incorporated", "Model updated", "no boundable figure",
+    "GOES archive unavailable", "Out of archive"];
+  ok("SC9 la sección de estados nombra los once estados (EN)",
+     estadosEN.every((s) => tEN.solarInfoStatesBody.indexOf(s) !== -1),
+     estadosEN.filter((s) => tEN.solarInfoStatesBody.indexOf(s) === -1).join(" | "));
+  const cuerpoES = tES.solarInfoWhatBody + tES.solarInfoHowBody + tES.solarInfoSourcesBody + tES.solarInfoLimitsBody;
+  const datosES = ["CARI-7A", "GOES", "NCEI", "12 h", "13 canales", "factor 3", "UTC",
+    "2025-09-11", "único evento calibrante", "no dosimetría certificada", "significan dosis cero",
+    "No estima directamente una llamarada electromagnética"];
+  ok("SC9 el modal cita fuentes y límites (ES)",
+     datosES.every((s) => cuerpoES.indexOf(s) !== -1),
+     datosES.filter((s) => cuerpoES.indexOf(s) === -1).join(" | "));
+  const cuerpoEN = tEN.solarInfoWhatBody + tEN.solarInfoHowBody + tEN.solarInfoSourcesBody + tEN.solarInfoLimitsBody;
+  const datosEN = ["CARI-7A", "GOES", "NCEI", "12 h", "13", "factor of 3", "UTC",
+    "2025-09-11", "single calibrating event", "not certified dosimetry", "mean zero dose",
+    "does not directly estimate an electromagnetic flare"];
+  ok("SC9 el modal cita fuentes y límites (EN)",
+     datosEN.every((s) => cuerpoEN.indexOf(s) !== -1),
+     datosEN.filter((s) => cuerpoEN.indexOf(s) === -1).join(" | "));
+
+  // SC12 — el modal se comporta como modal: foco y scroll atrapados.
+  ok("SC12 el Tab cicla dentro del diálogo",
+     infoSrc.indexOf('e.key !== "Tab"') !== -1 && infoSrc.indexOf("SOLAR_INFO_FOCUSABLE") !== -1 &&
+     html.indexOf("var SOLAR_INFO_FOCUSABLE") !== -1);
+  ok("SC12 el fondo no hace scroll y se restaura al cerrar",
+     infoSrc.indexOf('document.body.style.overflow = "hidden"') !== -1 &&
+     infoSrc.indexOf("document.body.style.overflow = prevOverflow") !== -1);
+  ok("SC12 el cierre es de identidad estable",
+     /onClose: closeInfo/.test(panelSrc) && panelSrc.indexOf("useCallback") !== -1);
+  ok("SC12 la lámina del diálogo tiene ref para el foco", /ref: sheetRef/.test(infoSrc));
+}
+
+// SC11 — la consulta puntual con las dependencias inyectadas: fija cada rama
+// (sin archivo, archivo, fallo) y comprueba que la puerta descarta lo viejo.
+function testSolarCheckQuery() {
+  console.log("\nSC11 la consulta puntual y la puerta de peticiones");
+  const flight = { orig: "LEBL", dest: "SPJC", legs: 1, flIdx: 0 };
+  const occ = { depDate: "2026-09-08", depTime: "12:00" };
+  const NOW = Date.UTC(2026, 8, 9, 12, 0);
+  const DEP_MS = Date.UTC(2026, 8, 8, 12, 0);
+  const ROUTE = [{ lat: 1, lon: 1 }, { lat: 2, lon: 2 }];
+  const deps = (over) => Object.assign({
+    routePoints: () => ROUTE,
+    needsArchive: () => true,
+    loadArchive: () => Promise.resolve({ source: "swpc", manifest: {}, days: {} }),
+    evaluate: (f, oc, archive) => ({ state: "estimacion_disponible", archive: archive })
+  }, over || {});
+  let loaded = null, seenArchive = "no-llamado", seenPoints = "no-llamado";
+  return ctx.solarCheckQuery(flight, occ, NOW, deps({
+    loadArchive: (points, depMs) => {
+      loaded = { points: points, depMs: depMs };
+      return Promise.resolve({ source: "ncei" });
+    },
+    evaluate: (f, oc, archive) => {
+      seenArchive = archive;
+      return { state: "estimacion_disponible", result: { lowUsv: 1, highUsv: 3 } };
+    }
+  })).then((ev) => {
+    ok("SC11 calcula la ruta una vez y la pasa a la carga",
+       !!loaded && loaded.points === ROUTE && loaded.depMs === DEP_MS, JSON.stringify(loaded));
+    ok("SC11 el modelo recibe el archivo cargado",
+       !!seenArchive && seenArchive.source === "ncei" && ev.state === "estimacion_disponible",
+       JSON.stringify(ev));
+    return ctx.solarCheckQuery(flight, occ, NOW, deps({
+      needsArchive: (f, oc, now, points) => { seenPoints = points; return false; }
+    }));
+  }).then((ev) => {
+    ok("SC11 sin archivo no se carga y el modelo ve null",
+       seenPoints === ROUTE && ev.archive === null, JSON.stringify({ seenPoints: seenPoints, ev: ev }));
+    return ctx.solarCheckQuery(flight, occ, NOW, deps({
+      loadArchive: () => Promise.reject(new Error("red"))
+    }));
+  }).then((ev) => {
+    ok("SC11 un fallo de carga deja SIN cifra (noaa_no_disponible)",
+       ev.state === "noaa_no_disponible" && ev.result === null, JSON.stringify(ev));
+    return ctx.solarCheckQuery(flight, occ, NOW, deps({
+      evaluate: () => { throw new Error("boom"); }
+    }));
+  }).then((ev) => {
+    ok("SC11 un throw del modelo tampoco propaga: sin cifra",
+       ev.state === "noaa_no_disponible" && ev.result === null, JSON.stringify(ev));
+    // La puerta: dos consultas solapadas, la vieja no pinta.
+    const gate = ctx.makeRequestGate();
+    let painted = null;
+    const vieja = gate.begin();
+    const nueva = gate.begin();
+    return Promise.resolve().then(() => {
+      if (gate.isCurrent(nueva)) painted = "nueva";
+      if (gate.isCurrent(vieja)) painted = "vieja";
+    }).then(() => {
+      ok("SC11 la consulta solapada vieja no pinta", painted === "nueva", String(painted));
+    });
+  });
+}
+
 testRouteImportKeepsCuratedIcaoAliases()
   .then(testFetchSolarManifestRetriesAfterHttpError)
   .then(testFetchNcei)
@@ -2095,6 +2347,7 @@ testRouteImportKeepsCuratedIcaoAliases()
   .then(testLoadArchiveForNceiEndToEnd)
   .then(testMultiSatFallback)
   .then(testSolarRetry)
+  .then(testSolarCheckQuery)
   .then(function () {
   console.log("\n" + (fail === 0 ? "TODO VERDE" : "HAY FALLOS") + " — " + pass + " pass, " + fail + " fail\n");
   process.exit(fail === 0 ? 0 : 1);
