@@ -430,7 +430,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.29";
+var APP_VERSION = "1.30";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -4957,6 +4957,7 @@ var LANG = {
     solarCheckRun: "Comprobar",
     solarCheckLoading: "comprobando…",
     solarCheckHint: "Indica fecha y hora de salida (UTC) y pulsa Comprobar.",
+    solarCheckHintLinked: "Pulsa ☀ Comprobar actividad solar para consultar la ventana de este vuelo.",
     solarCheckRouteEstimated: "ruta estimada (gran círculo · 830 km/h · FL elegido)",
     solarCheckSinSenal: "sin contribución solar detectable",
     solarInfoTitle: "Cómo calculamos la actividad solar",
@@ -5271,6 +5272,7 @@ var LANG = {
     solarCheckRun: "Check",
     solarCheckLoading: "checking…",
     solarCheckHint: "Enter departure date and time (UTC) and tap Check.",
+    solarCheckHintLinked: "Tap ☀ Check solar activity to check this flight's window.",
     solarCheckRouteEstimated: "estimated route (great circle · 830 km/h · selected FL)",
     solarCheckSinSenal: "no detectable solar contribution",
     solarInfoTitle: "How we calculate solar activity",
@@ -6053,9 +6055,13 @@ function OccList(_refOcc) {
     // Sin fecha no hay nada que evaluar, y la fecha/hora se piden en el panel
     // de comprobacion solar: aqui no se pinta ningun campo de fecha.
     if (state === "esperando_fecha") return null;
-    var vis = occVisible(state);
+    // Un evento activo sin cifra es un aviso, no "revisada": occVisible(sin_senal)
+    // daria "revisada" (contribucion despreciable) y el panel de comprobacion
+    // puntual ya lo pinta como aviso. Mismo criterio en los dos sitios.
+    var eventActive = !!(ev && ev.eventActive);
+    var vis = eventActive ? "aviso" : occVisible(state);
     var detail = ev
-      ? (ev.eventActive ? t.occState_sin_senal_evento : t["occState_" + state])
+      ? (eventActive ? t.occState_sin_senal_evento : t["occState_" + state])
       : t.occChecking;
     var when = occ.depDate && occ.depTime ? occ.depDate + " " + occ.depTime : t.occNoDate;
     var actions = [];
@@ -9041,7 +9047,10 @@ function SolarCheckPanel(_refSolar) {
   var view = check && check.status === "done" ? solarCheckView(check.ev, gcrUsv, t) : null;
   var statusNode;
   if (!check) {
-    statusNode = t.solarCheckHint;
+    // En modo ligado no hay campos que rellenar: el boton comprueba la salida
+    // del vuelo directamente. El hint de Vuelo unico hablaria de unos campos
+    // que ahi no existen.
+    statusNode = linked ? t.solarCheckHintLinked : t.solarCheckHint;
   } else if (check.status === "loading") {
     statusNode = t.solarCheckLoading;
   } else {
@@ -9143,6 +9152,21 @@ function SolarInfoModal(_refSolarInfo) {
     // El fondo no debe hacer scroll mientras el dialogo esta abierto.
     var prevOverflow = document.body && document.body.style ? document.body.style.overflow : null;
     if (prevOverflow !== null) document.body.style.overflow = "hidden";
+    // aria-modal y el trap de Tab no bastan: el fondo sigue siendo alcanzable
+    // por foco y por lector de pantalla. La lamina no vive en un portal, asi que
+    // se marca inert a los hermanos de su rama en cada nivel hasta <body>.
+    var inerted = [];
+    var tree = sheetRef.current;
+    while (tree && tree.parentElement && document.body && tree.parentElement !== document.body) {
+      var parent = tree.parentElement;
+      for (var i = 0; i < parent.children.length; i++) {
+        var sib = parent.children[i];
+        if (sib === tree || !sib.setAttribute) continue;
+        inerted.push([sib, sib.hasAttribute && sib.hasAttribute("inert")]);
+        sib.setAttribute("inert", "");
+      }
+      tree = parent;
+    }
     // Tab ciclico: sin esto el foco se escapa al fondo pese a aria-modal.
     function onKey(e) {
       if (!e) return;
@@ -9158,6 +9182,9 @@ function SolarInfoModal(_refSolarInfo) {
     document.addEventListener("keydown", onKey);
     return function () {
       document.removeEventListener("keydown", onKey);
+      for (var i = 0; i < inerted.length; i++) {
+        if (!inerted[i][1] && inerted[i][0].removeAttribute) inerted[i][0].removeAttribute("inert");
+      }
       if (prevOverflow !== null) document.body.style.overflow = prevOverflow;
     };
   }, [onClose]);

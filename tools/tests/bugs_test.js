@@ -2095,7 +2095,7 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
 {
   const tES = ctx.LANG.es, tEN = ctx.LANG.en;
   const KEYS = ["solarCheckBtn", "solarCheckInfoAria", "solarCheckRun", "solarCheckLoading",
-    "solarCheckHint", "solarCheckRouteEstimated", "solarCheckSinSenal",
+    "solarCheckHint", "solarCheckHintLinked", "solarCheckRouteEstimated", "solarCheckSinSenal",
     "solarInfoTitle", "solarInfoClose", "solarInfoSubtitle", "solarInfoWhatTitle", "solarInfoWhatBody",
     "solarInfoHowTitle", "solarInfoHowBody", "solarInfoSourcesTitle", "solarInfoSourcesBody",
     "solarInfoLimitsTitle", "solarInfoLimitsBody", "solarInfoStatesTitle", "solarInfoStatesBody"];
@@ -2277,6 +2277,10 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
   ok("SC12 el cierre es de identidad estable",
      /onClose: closeInfo/.test(panelSrc) && panelSrc.indexOf("useCallback") !== -1);
   ok("SC12 la lámina del diálogo tiene ref para el foco", /ref: sheetRef/.test(infoSrc));
+  ok("SC12 el fondo queda inert mientras el diálogo está abierto y se restaura",
+     infoSrc.indexOf("var inerted = [];") !== -1 &&
+     infoSrc.indexOf('sib.setAttribute("inert", "")') !== -1 &&
+     infoSrc.indexOf('.removeAttribute("inert")') !== -1);
 
   // SC13 — el planificador tiene el mismo botón, uno por vuelo.
   const rowSrc = html.slice(html.indexOf("function FlightRow"), html.indexOf("function FlightPair"));
@@ -2315,6 +2319,11 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
   ok("SC14 la fecha/hora sigue disponible en el panel solar",
      panelSrc.indexOf('type: "date"') !== -1 && panelSrc.indexOf('type: "time"') !== -1 &&
      panelSrc.indexOf('className: "occ-input"') !== -1);
+  ok("SC14 un evento activo se pinta como aviso, no como revisada",
+     occSrc.indexOf("var eventActive = !!(ev && ev.eventActive);") !== -1 &&
+     occSrc.indexOf('var vis = eventActive ? "aviso" : occVisible(state);') !== -1 &&
+     occSrc.indexOf("var vis = occVisible(state);") === -1,
+     "OccList heredaba revisada del estado sin mirar eventActive");
 
   // SC15 — en el planificador la fecha/hora vive en la fila del vuelo y el
   // panel ligado solo comprueba y pinta el estado debajo.
@@ -2337,6 +2346,11 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
   ok("SC15 el panel ligado no pinta campos, solo el estado",
      panelSrc.indexOf("}, linked ? statusEl : (open && React.createElement(\"div\", {") !== -1 &&
      panelSrc.indexOf("onClick: linked ? runCheck") !== -1);
+  ok("SC15 el hint ligado no habla de campos que no existen",
+     panelSrc.indexOf("statusNode = linked ? t.solarCheckHintLinked : t.solarCheckHint;") !== -1 &&
+     tES.solarCheckHintLinked.indexOf("Comprobar actividad solar") !== -1 &&
+     tES.solarCheckHint.indexOf("pulsa Comprobar") !== -1,
+     tES.solarCheckHintLinked);
   ok("SC15 el bloque Salida suelto ya no existe", html.indexOf("showDep") === -1);
 }
 
