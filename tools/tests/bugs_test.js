@@ -2142,7 +2142,8 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
      panelSrc.indexOf("onChange: runCheck") === -1 &&
      (panelSrc.match(/setDraft\(/g) || []).length >= 2);
   ok("SC4 la invalidación depende de ruta/FL/fecha/hora",
-     /\[orig, dest, flIdx, draft\.depDate, draft\.depTime\]/.test(panelSrc));
+     /var cacheKey = \[uid, orig, dest, flIdx, draft\.depDate, draft\.depTime\]/.test(panelSrc) &&
+     /useEffect\(function \(\) \{[\s\S]{0,140}\}, \[cacheKey\]\)/.test(panelSrc));
 
   // SC5 — descarte de respuesta stale.
   const gate = ctx.makeRequestGate();
@@ -2160,7 +2161,7 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
   ok("SC5 el panel descarta la respuesta vieja",
      panelSrc.indexOf("solarGateRef.current.isCurrent(") !== -1 &&
      panelSrc.indexOf("makeRequestGate()") !== -1 &&
-     /useEffect\(function \(\) \{\s*solarGateRef\.current\.begin\(\);\s*setCheck\(null\);/.test(panelSrc));
+     /useEffect\(function \(\) \{\s*solarGateRef\.current\.begin\(\);\s*setCheck\(_solarCheckCache\.get\(cacheKey\) \|\| null\);/.test(panelSrc));
 
   // SC6 — fuera_de_rango es aviso, no revisada.
   ok("SC6 occVisible(fuera_de_rango) = aviso", ctx.occVisible("fuera_de_rango") === "aviso",
@@ -2324,6 +2325,11 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
      occSrc.indexOf('var vis = eventActive ? "aviso" : occVisible(state);') !== -1 &&
      occSrc.indexOf("var vis = occVisible(state);") === -1,
      "OccList heredaba revisada del estado sin mirar eventActive");
+  ok("SC14 en un tramo la fila no repite fecha ni estado sin acción",
+     occSrc.indexOf("if (single && actions.length === 0) return null;") !== -1 &&
+     occSrc.indexOf("var when = !single && occ.depDate && occ.depTime") !== -1 &&
+     occSrc.indexOf('when ? React.createElement("span", {') !== -1,
+     "la fila del tramo duplicaba el panel");
 
   // SC15 — en el planificador la fecha/hora vive en la fila del vuelo y el
   // panel ligado solo comprueba y pinta el estado debajo.
@@ -2351,7 +2357,51 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
      tES.solarCheckHintLinked.indexOf("Comprobar actividad solar") !== -1 &&
      tES.solarCheckHint.indexOf("pulsa Comprobar") !== -1,
      tES.solarCheckHintLinked);
+  ok("SC15 la etiqueta Fecha/Hora UTC va dentro del campo, no encima",
+     rowSrc.indexOf('className: "gle-field"') !== -1 &&
+     rowSrc.indexOf('className: "gle-field-label"') !== -1 &&
+     rowSrc.indexOf("flight.depDate ? null :") !== -1 &&
+     rowSrc.indexOf("flight.depTime ? null :") !== -1 &&
+     rowSrc.indexOf('className: "occ-input" + (flight.depDate ? "" : " gle-empty")') !== -1 &&
+     rowSrc.indexOf('className: "occ-input" + (flight.depTime ? "" : " gle-empty")') !== -1,
+     "la etiqueta debe desaparecer al haber valor");
+  ok("SC15 Importar ruta y Cálculo comparten el diseño del botón solar",
+     rowSrc.indexOf('className: "gle-act"') !== -1 &&
+     /\.gle-dep-inline \.gle-act \{[^}]*border-radius:10px[^}]*font-size:13px/.test(html) &&
+     rowSrc.indexOf("linear-gradient(135deg,rgba(40,160,100,0.2)") !== -1 &&
+     rowSrc.indexOf("linear-gradient(135deg,rgba(59,158,222,0.2)") !== -1);
   ok("SC15 el bloque Salida suelto ya no existe", html.indexOf("showDep") === -1);
+
+  // SC16 — el resultado calculado sobrevive a colapsar/descolapsar el par.
+  ok("SC16 el panel cachea el resultado por vuelo y fecha/hora",
+     html.indexOf("var _solarCheckCache = new Map();") !== -1 &&
+     panelSrc.indexOf("_solarCheckCache.get(cacheKey)") !== -1 &&
+     panelSrc.indexOf("_solarCheckCache.set(cacheKey, done)") !== -1 &&
+     /var cacheKey = \[uid, orig, dest, flIdx, draft\.depDate, draft\.depTime\]/.test(panelSrc),
+     "colapsar el par perdia el resultado");
+  ctx._solarCheckCache.set("k", { status: "done", ev: { state: "sin_senal" } });
+  ok("SC16 la cache es un Map real y devuelve lo guardado",
+     ctx._solarCheckCache instanceof Map &&
+     ctx._solarCheckCache.get("k").ev.state === "sin_senal");
+}
+
+// P — el par ida/vuelta ya no se colapsa solo.
+console.log("\nP — el par ida/vuelta ya no se colapsa solo");
+{
+  const pairSrc = html.slice(html.indexOf("function FlightPair"), html.indexOf("function App"));
+  const tES = ctx.LANG.es, tEN = ctx.LANG.en;
+  ok("P1 sin cuenta atras ni colapso automatico",
+     pairSrc.length > 400 && pairSrc.indexOf("countdown") === -1 &&
+     pairSrc.indexOf("setCountdown") === -1 && pairSrc.indexOf("pairCollapseIn") === -1 &&
+     pairSrc.indexOf("pairCollapseCancel") === -1);
+  ok("P1 el colapso es un boton explicito con texto",
+     pairSrc.indexOf("t.pairCollapseBtn") !== -1 &&
+     /type:\s*"button",\s*onClick:\s*function onClick\(\) \{\s*setCollapsedPersist\(true\);/.test(pairSrc));
+  ok("P1 el título del par ya no colapsa al pulsarlo",
+     pairSrc.indexOf("}, t.pairCollapseBtn)),") !== -1 &&
+     pairSrc.indexOf('}, "\\u25B2 min"))') === -1);
+  ok("P1 i18n ES/EN del boton",
+     tES.pairCollapseBtn === "Colapsar" && tEN.pairCollapseBtn === "Collapse");
 }
 
 // SC11 — la consulta puntual con las dependencias inyectadas: fija cada rama

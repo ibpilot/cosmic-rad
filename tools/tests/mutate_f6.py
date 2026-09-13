@@ -218,7 +218,7 @@ add("AG", "occEvaluate: fichero NCEI ilegible tratado como rechazo de red",
 
 # ── SC (comprobacion puntual de actividad solar) ─────────────────────────────
 add("SC-A", "SolarCheckPanel: quitar la invalidacion al cambiar ruta/FL/fecha/hora",
-    '    solarGateRef.current.begin();\n    setCheck(null);\n',
+    '    solarGateRef.current.begin();\n    setCheck(_solarCheckCache.get(cacheKey) || null);\n',
     '',
     "SC5 el panel descarta la respuesta vieja")
 add("SC-B", "solarCheckView: eventActive vuelve a heredar el visible del estado",
