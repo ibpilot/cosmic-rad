@@ -2435,6 +2435,14 @@ console.log("\nMB — el selector de fecha se acota al mes visible");
      (mbPair.match(/month: month/g) || []).length === 2);
   ok("MB el mes visible llega al par y a la fila suelta",
      (html.match(/month: currentMonth/g) || []).length >= 2);
+  ok("MB mes inicial: nunca uno ya pasado, un futuro se respeta",
+     ctx.initialMonth("2026-08", "2026-09") === "2026-09" &&
+     ctx.initialMonth("2026-09", "2026-09") === "2026-09" &&
+     ctx.initialMonth("2026-11", "2026-09") === "2026-11" &&
+     ctx.initialMonth(null, "2026-09") === "2026-09" &&
+     ctx.initialMonth("basura", "2026-09") === "2026-09");
+  ok("MB la app abre por initialMonth con el mes en curso",
+     html.indexOf('return initialMonth(localStorage.getItem("cr_current_month"), todayKey());') !== -1);
 }
 
 // SC11 — la consulta puntual con las dependencias inyectadas: fija cada rama

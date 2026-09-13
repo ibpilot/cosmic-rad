@@ -454,7 +454,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.35";
+var APP_VERSION = "1.36";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -2244,6 +2244,14 @@ function monthBounds(key) {
   if (mo < 1 || mo > 12) return null;
   var last = new Date(Date.UTC(y, mo, 0)).getUTCDate();
   return { min: m[1] + "-" + m[2] + "-01", max: m[1] + "-" + m[2] + "-" + (last < 10 ? "0" + last : last) };
+}
+
+// initialMonth(saved, today): mes con el que abre la app. Nunca un mes ya
+// pasado: si lo guardado quedo atras, arranca en el mes en curso. Un mes futuro
+// (se estaba planificando) se respeta. Claves "YYYY-MM", comparables como texto.
+function initialMonth(saved, today) {
+  if (!/^\d{4}-\d{2}$/.test(saved || "")) return today;
+  return saved >= today ? saved : today;
 }
 
 // Estados internos de una ocurrencia (T10). La UI (T11) los agrupa en tres.
@@ -6762,7 +6770,7 @@ function App() {
   };
   var _useState29 = useState(function () {
       try {
-        return localStorage.getItem("cr_current_month") || todayKey();
+        return initialMonth(localStorage.getItem("cr_current_month"), todayKey());
       } catch (e) {
         return todayKey();
       }
