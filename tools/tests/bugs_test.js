@@ -2109,8 +2109,8 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
   ok("SC1 botón principal EN", tEN.solarCheckBtn.indexOf("Check solar activity") !== -1 && tEN.solarCheckBtn.indexOf("☀") !== -1,
      tEN.solarCheckBtn);
 
-  const panelSrc = html.slice(html.indexOf("function SolarCheckPanel"), html.indexOf("function SolarInfoModal"));
-  const infoSrc = html.slice(html.indexOf("function SolarInfoModal"), html.indexOf("function CalcInfoModal"));
+  const panelSrc = html.slice(html.indexOf("function SolarCheckPanel"), html.indexOf("function InfoSheetModal"));
+  const infoSrc = html.slice(html.indexOf("function InfoSheetModal"), html.indexOf("function CalcInfoModal"));
 
   // SC2 — control, ARIA y estado presente.
   ok("SC2 el panel y el modal existen", panelSrc.length > 200 && infoSrc.length > 200,
@@ -2301,12 +2301,12 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
      panelSrc.indexOf("var panelId = SOLAR_CHECK_PANEL_ID + (uid ==") !== -1 &&
      panelSrc.indexOf('"aria-controls": panelId') !== -1 &&
      panelSrc.indexOf("id: panelId") !== -1 &&
-     /SolarInfoModal[\s\S]{0,200}titleId:\s*infoTitleId/.test(panelSrc));
+     /InfoSheetModal[\s\S]{0,200}titleId:\s*infoTitleId/.test(panelSrc));
   ok("SC13 el panel recibe el track del vuelo",
      /SolarCheckPanel[\s\S]{0,400}track:\s*flight\.track/.test(rowSrc) &&
      panelSrc.indexOf("if (Array.isArray(track)) flight.track = track;") !== -1);
   ok("SC13 el modal usa el titleId que recibe",
-     infoSrc.indexOf("titleId = _refSolarInfo.titleId") !== -1 &&
+     infoSrc.indexOf("titleId = _refInfoSheet.titleId") !== -1 &&
      infoSrc.indexOf('"aria-labelledby": infoTitleId') !== -1 &&
      infoSrc.indexOf("id: infoTitleId") !== -1);
 
@@ -2443,6 +2443,40 @@ console.log("\nMB — el selector de fecha se acota al mes visible");
      ctx.initialMonth("basura", "2026-09") === "2026-09");
   ok("MB la app abre por initialMonth con el mes en curso",
      html.indexOf('return initialMonth(localStorage.getItem("cr_current_month"), todayKey());') !== -1);
+}
+
+// SW — botón de información del semáforo de clima espacial.
+console.log("\nSW — el botón de información del semáforo solar");
+{
+  const tES = ctx.LANG.es, tEN = ctx.LANG.en;
+  const KEYS = ["swpcInfoAria", "swpcInfoTitle", "swpcInfoSubtitle",
+    "swpcInfoWhatTitle", "swpcInfoWhatBody", "swpcInfoScaleTitle", "swpcInfoScaleBody",
+    "swpcInfoAgeTitle", "swpcInfoAgeBody", "swpcInfoNotTitle", "swpcInfoNotBody",
+    "swpcInfoFlightTitle", "swpcInfoFlightBody"];
+  ok("SW1 claves del panel en ES y EN",
+     KEYS.every((k) => typeof tES[k] === "string" && tES[k].trim() &&
+       typeof tEN[k] === "string" && tEN[k].trim()),
+     KEYS.filter((k) => !tES[k] || !tEN[k]).join(","));
+  ok("SW1 la tarjeta del semáforo tiene botón ℹ️ que abre la hoja",
+     html.indexOf("t.swpcInfoAria") !== -1 && html.indexOf("setShowSwpcInfo(true)") !== -1);
+  const swpcAt = html.indexOf("showSwpcInfo &&");
+  const swpcSrc = swpcAt === -1 ? "" : html.slice(swpcAt, swpcAt + 2600);
+  ok("SW1 la hoja SWPC lleva las cinco secciones",
+     swpcSrc.indexOf("swpcInfoWhatBody") !== -1 &&
+     swpcSrc.indexOf("swpcInfoScaleBody") !== -1 &&
+     swpcSrc.indexOf("swpcInfoAgeBody") !== -1 &&
+     swpcSrc.indexOf("swpcInfoNotBody") !== -1 &&
+     swpcSrc.indexOf("swpcInfoFlightBody") !== -1);
+  ok("SW1 la misma hoja la usan el panel solar y el semáforo",
+     (html.match(/React\.createElement\(InfoSheetModal/g) || []).length >= 2 &&
+     html.indexOf("SolarInfoModal") === -1);
+  ok("SW1 el cierre del modal es de identidad estable",
+     html.indexOf("var closeSwpcInfo = useCallback(") !== -1);
+  ok("SW1 el texto no promete dosis y explica el pendiente",
+     tES.swpcInfoNotBody.indexOf("µSv") !== -1 &&
+     tES.swpcInfoNotBody.indexOf("no sirve para dosis") !== -1 &&
+     tES.swpcInfoFlightBody.indexOf("pendiente") !== -1 &&
+     tES.swpcInfoFlightBody.indexOf("cero") !== -1);
 }
 
 // SC11 — la consulta puntual con las dependencias inyectadas: fija cada rama

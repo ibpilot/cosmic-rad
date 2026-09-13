@@ -454,7 +454,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.36";
+var APP_VERSION = "1.37";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
@@ -4907,6 +4907,19 @@ var LANG = {
     gleRtAge: "hace {age}",
     gleRtQuiet: "sin tormenta de radiación",
     gleRtNoData: "estado solar no disponible",
+    swpcInfoAria: "Qué significa el estado solar",
+    swpcInfoTitle: "Clima espacial en tiempo real",
+    swpcInfoSubtitle: "Semáforo NOAA SWPC · informa, no es dosis",
+    swpcInfoWhatTitle: "Qué mide",
+    swpcInfoWhatBody: "Es el flujo de protones de energía ≥10 MeV que miden los satélites GOES y publica NOAA (SWPC). La app lee la última muestra del fichero de 7 días al abrir o recargar. Se mide en pfu (protones por cm², estereorradián y segundo).",
+    swpcInfoScaleTitle: "La escala S",
+    swpcInfoScaleBody: "Ese flujo se traduce a la escala de tormentas de radiación de NOAA: S0 por debajo de 10 pfu (sin tormenta), S1 desde 10, S2 desde 100, S3 desde 1.000, S4 desde 10.000 y S5 desde 100.000. El fondo en calma ronda fracciones de pfu, así que 0,25 pfu es el Sol tranquilo, no un evento.",
+    swpcInfoAgeTitle: "La antigüedad",
+    swpcInfoAgeBody: "«hace X» es el tiempo desde que la app descargó el dato, no la edad de la medida. La app no sondea sola: solo pide el dato al abrir o recargar, así que si la dejas abierta el contador crece sin actualizarse.",
+    swpcInfoNotTitle: "Lo que NO es",
+    swpcInfoNotBody: "No es una dosis ni una estimación de tu vuelo. El canal ≥10 MeV no sirve para dosis en cabina: hace falta que los protones lleguen a cientos de MeV (~430 MeV) para generar cascada a altitud de crucero. Aquí no se convierte nunca a µSv.",
+    swpcInfoFlightTitle: "Por qué un vuelo de hoy sale pendiente",
+    swpcInfoFlightBody: "La estimación de un vuelo lee el archivo (días UTC completos de SWPC y NCEI, con unos 2 días de latencia), no este dato en vivo. Un vuelo de hoy aún no tiene su ventana en el archivo, así que queda pendiente. Y pendiente nunca se pinta como cero: «no lo sé todavía» no es «medido y vale cero».",
     solarAuto: "Automático",
     solarAutoSub: "HP mensual FAA",
     solarMin: "Mínimo ☁️",
@@ -5221,6 +5234,19 @@ var LANG = {
     gleRtAge: "{age} ago",
     gleRtQuiet: "no radiation storm",
     gleRtNoData: "solar status unavailable",
+    swpcInfoAria: "What the solar status means",
+    swpcInfoTitle: "Space weather in real time",
+    swpcInfoSubtitle: "NOAA SWPC semaphore · informative, not dose",
+    swpcInfoWhatTitle: "What it measures",
+    swpcInfoWhatBody: "It is the ≥10 MeV proton flux measured by the GOES satellites and published by NOAA (SWPC). The app reads the last sample of the 7-day file on load or reload. It is measured in pfu (protons per cm², steradian and second).",
+    swpcInfoScaleTitle: "The S scale",
+    swpcInfoScaleBody: "That flux maps to NOAA's radiation storm scale: S0 below 10 pfu (no storm), S1 from 10, S2 from 100, S3 from 1,000, S4 from 10,000 and S5 from 100,000. Quiet-time background is a fraction of a pfu, so 0.25 pfu is a calm Sun, not an event.",
+    swpcInfoAgeTitle: "The age",
+    swpcInfoAgeBody: "\"X ago\" is the time since the app downloaded the data, not the age of the measurement. The app does not poll: it only fetches on load or reload, so if you leave it open the counter grows without refreshing.",
+    swpcInfoNotTitle: "What it is NOT",
+    swpcInfoNotBody: "It is not a dose, nor an estimate for your flight. The ≥10 MeV channel is not usable for cabin dose: protons must reach hundreds of MeV (~430 MeV) to build a cascade at cruise altitude. Here it is never converted to µSv.",
+    swpcInfoFlightTitle: "Why a flight today comes out pending",
+    swpcInfoFlightBody: "A flight's estimate reads the archive (complete UTC days from SWPC and NCEI, with about 2 days of latency), not this live value. A flight today has no window in the archive yet, so it stays pending. And pending is never painted as zero: \"I do not know yet\" is not \"measured and it is zero\".",
     solarAuto: "Automatic",
     solarAutoSub: "monthly FAA HP",
     solarMin: "Minimum ☁️",
@@ -6762,6 +6788,14 @@ function App() {
       setSwpc(o);
     })["catch"](function () {});
   }, []);
+  var _useStateSwpcI = useState(false),
+    _useStateSwpcI2 = _slicedToArray(_useStateSwpcI, 2),
+    showSwpcInfo = _useStateSwpcI2[0],
+    setShowSwpcInfo = _useStateSwpcI2[1];
+  // Identidad estable: el efecto del modal cierra sobre onClose sin resuscribirse.
+  var closeSwpcInfo = useCallback(function () {
+    setShowSwpcInfo(false);
+  }, []);
 
   // ── Month navigation ──────────────────────────────────────────────────────
   var todayKey = function todayKey() {
@@ -7527,12 +7561,54 @@ function App() {
              : st.level + " \xB7 " + (st.quiet ? t.gleRtQuiet : t.gleRt);
     var flux = st.kind === "nodata" ? null
              : (swpc.fluxPfu < 10 ? swpc.fluxPfu.toFixed(2) : String(Math.round(swpc.fluxPfu)));
-    return /*#__PURE__*/React.createElement("div", {
-      className: st.quiet ? "gle-rt gle-rt-quiet" : "gle-rt"
-    }, /*#__PURE__*/React.createElement("strong", null, head),
+    return /*#__PURE__*/React.createElement(React.Fragment, null, /*#__PURE__*/React.createElement("div", {
+      className: st.quiet ? "gle-rt gle-rt-quiet" : "gle-rt",
+      style: { display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }
+    }, /*#__PURE__*/React.createElement("span", null, /*#__PURE__*/React.createElement("strong", null, head),
        flux === null ? null : /*#__PURE__*/React.createElement("span", null, " \xB7 ", flux, " pfu"),
        st.kind === "nodata" || swpcAgeLabel(t.gleRtAge, Date.now() - swpc.fetchedMs) === ""
-         ? null : /*#__PURE__*/React.createElement("span", null, " \xB7 ", swpcAgeLabel(t.gleRtAge, Date.now() - swpc.fetchedMs)));
+         ? null : /*#__PURE__*/React.createElement("span", null, " \xB7 ", swpcAgeLabel(t.gleRtAge, Date.now() - swpc.fetchedMs))), /*#__PURE__*/React.createElement("button", {
+      type: "button",
+      "aria-label": t.swpcInfoAria,
+      title: t.swpcInfoTitle,
+      onClick: function onClick() {
+        setShowSwpcInfo(true);
+      },
+      style: {
+        marginLeft: "auto", background: "rgba(255,255,255,0.06)",
+        border: "1px solid rgba(255,255,255,0.14)", borderRadius: 8,
+        color: "#8ab4cc", cursor: "pointer", fontSize: 13, fontWeight: 700,
+        padding: "2px 8px", lineHeight: 1.2
+      }
+    }, "\u2139")), showSwpcInfo && /*#__PURE__*/React.createElement(InfoSheetModal, {
+      t: t,
+      onClose: closeSwpcInfo,
+      titleId: "swpc-info-title",
+      icon: "\uD83D\uDCE1",
+      title: t.swpcInfoTitle,
+      subtitle: t.swpcInfoSubtitle,
+      sections: [{
+        icon: "\uD83D\uDCE1",
+        title: t.swpcInfoWhatTitle,
+        body: t.swpcInfoWhatBody
+      }, {
+        icon: "\uD83D\uDCCA",
+        title: t.swpcInfoScaleTitle,
+        body: t.swpcInfoScaleBody
+      }, {
+        icon: "\u23F1\uFE0F",
+        title: t.swpcInfoAgeTitle,
+        body: t.swpcInfoAgeBody
+      }, {
+        icon: "\u26A0\uFE0F",
+        title: t.swpcInfoNotTitle,
+        body: t.swpcInfoNotBody
+      }, {
+        icon: "\u2708\uFE0F",
+        title: t.swpcInfoFlightTitle,
+        body: t.swpcInfoFlightBody
+      }]
+    }));
   }(), monthGles.length ? /*#__PURE__*/React.createElement("div", {
     className: "gle-banner"
   }, /*#__PURE__*/React.createElement("strong", null, t.gleBanner, ": GLE", monthGles[0].n), /*#__PURE__*/React.createElement("span", null, " · ", t.gleWindow, " ", monthGles[0].t0), /*#__PURE__*/React.createElement("span", null, " · ", monthGles[0].q === "ajustado" ? t.gleQAjustado : t.gleQSoloEvento), /*#__PURE__*/React.createElement("div", {
@@ -9160,18 +9236,25 @@ function SolarCheckPanel(_refSolar) {
     }
   })), React.createElement("button", {
     type: "button", className: "occ-confirm", disabled: !valid, onClick: runCheck
-  }, t.solarCheckRun)), statusEl)))), showInfo && React.createElement(SolarInfoModal, {
+  }, t.solarCheckRun)), statusEl)))), showInfo && React.createElement(InfoSheetModal, {
     t: t,
     onClose: closeInfo,
     titleId: infoTitleId
   }));
 }
 
-// ── SolarInfoModal: bottom-sheet "Cómo calculamos la actividad solar" ──────────
-function SolarInfoModal(_refSolarInfo) {
-  var t = _refSolarInfo.t,
-    onClose = _refSolarInfo.onClose,
-    titleId = _refSolarInfo.titleId;
+// ── InfoSheetModal: hoja inferior de informacion reutilizable ──────────────────
+// Todo el comportamiento de dialogo vive aqui (foco, trap de Tab, inert del
+// fondo, scroll bloqueado). Los textos y las secciones llegan por props; sin
+// ellas usa los de la comprobacion de actividad solar.
+function InfoSheetModal(_refInfoSheet) {
+  var t = _refInfoSheet.t,
+    onClose = _refInfoSheet.onClose,
+    titleId = _refInfoSheet.titleId,
+    icon = _refInfoSheet.icon,
+    title = _refInfoSheet.title,
+    subtitle = _refInfoSheet.subtitle,
+    sectionsProp = _refInfoSheet.sections;
   var infoTitleId = titleId == null ? "solar-info-title" : titleId;
   var _useStateSI = useState(null),
     _useStateSI2 = _slicedToArray(_useStateSI, 2),
@@ -9221,7 +9304,7 @@ function SolarInfoModal(_refSolarInfo) {
       if (prevOverflow !== null) document.body.style.overflow = prevOverflow;
     };
   }, [onClose]);
-  var sections = [{
+  var sections = sectionsProp || [{
     icon: "\u2600\uFE0F",
     title: t.solarInfoWhatTitle,
     body: t.solarInfoWhatBody
@@ -9277,9 +9360,9 @@ function SolarInfoModal(_refSolarInfo) {
   }, React.createElement("div", null, React.createElement("div", {
     id: infoTitleId,
     style: { fontSize: 16, fontWeight: 800, color: "#e8f4fc" }
-  }, "\u2600\uFE0F ", t.solarInfoTitle), React.createElement("div", {
+  }, (icon == null ? "\u2600\uFE0F" : icon), " ", title == null ? t.solarInfoTitle : title), React.createElement("div", {
     style: { fontSize: 10, color: "#4a6a80", marginTop: 2 }
-  }, t.solarInfoSubtitle)), React.createElement("button", {
+  }, subtitle == null ? t.solarInfoSubtitle : subtitle)), React.createElement("button", {
     ref: closeRef,
     type: "button",
     "aria-label": t.solarInfoClose,
