@@ -4916,6 +4916,8 @@ var LANG = {
     swpcInfoWhatBody: "Es el flujo de protones de energía ≥10 MeV que miden los satélites GOES y publica NOAA (SWPC). La app lee la última muestra del fichero de 7 días al abrir o recargar. Se mide en pfu (protones por cm², estereorradián y segundo).",
     swpcInfoScaleTitle: "La escala S",
     swpcInfoScaleBody: "Ese flujo se traduce a la escala de tormentas de radiación de NOAA: S0 por debajo de 10 pfu (sin tormenta), S1 desde 10, S2 desde 100, S3 desde 1.000, S4 desde 10.000 y S5 desde 100.000. El fondo en calma ronda fracciones de pfu, así que 0,25 pfu es el Sol tranquilo, no un evento.",
+    swpcInfoBridgeTitle: "La escala S y el cálculo del vuelo",
+    swpcInfoBridgeBody: "Son bandas de energía distintas. El semáforo lee ≥10 MeV; la estimación de dosis usa canales duros (≈160–404 MeV y ≥500 MeV) y exige un exceso sostenido sobre la línea base. Por eso un día S1 de espectro blando puede salir «sin señal» en el vuelo, y uno de espectro duro sí deja cifra. «Sin señal» no significa «no pasó nada»: significa que en esa banda dura no había señal medible.",
     swpcInfoAgeTitle: "La antigüedad",
     swpcInfoAgeBody: "«hace X» es el tiempo desde que la app descargó el dato, no la edad de la medida. La app no sondea sola: solo pide el dato al abrir o recargar, así que si la dejas abierta el contador crece sin actualizarse.",
     swpcInfoNotTitle: "Lo que NO es",
@@ -5007,7 +5009,7 @@ var LANG = {
     batchConfirm: "Añadir",
     batchCancel: "Cancelar",
     monthSepRange: "incluye evento solar {low}–{high}",
-    occNoaaFail: "calculado sin datos de llamaradas solares — no se pudo leer el archivo GOES",
+    occNoaaFail: "calculado sin datos de protones solares — no se pudo leer el archivo GOES",
     occNoDate: "sin fecha",
     occSepTitle: "Radiación por evento solar: estimación a partir de protones solares medidos por GOES",
     solarCheckBtn: "☀ Comprobar actividad solar",
@@ -5243,6 +5245,8 @@ var LANG = {
     swpcInfoWhatBody: "It is the ≥10 MeV proton flux measured by the GOES satellites and published by NOAA (SWPC). The app reads the last sample of the 7-day file on load or reload. It is measured in pfu (protons per cm², steradian and second).",
     swpcInfoScaleTitle: "The S scale",
     swpcInfoScaleBody: "That flux maps to NOAA's radiation storm scale: S0 below 10 pfu (no storm), S1 from 10, S2 from 100, S3 from 1,000, S4 from 10,000 and S5 from 100,000. Quiet-time background is a fraction of a pfu, so 0.25 pfu is a calm Sun, not an event.",
+    swpcInfoBridgeTitle: "The S scale and the flight estimate",
+    swpcInfoBridgeBody: "They are different energy bands. The semaphore reads ≥10 MeV; the dose estimate uses hard channels (≈160–404 MeV and ≥500 MeV) and requires a sustained excess over the baseline. That is why a soft-spectrum S1 day can come out \"no signal\" for the flight, while a hard-spectrum one does yield a figure. \"No signal\" does not mean \"nothing happened\": it means there was no measurable signal in that hard band.",
     swpcInfoAgeTitle: "The age",
     swpcInfoAgeBody: "\"X ago\" is the time since the app downloaded the data, not the age of the measurement. The app does not poll: it only fetches on load or reload, so if you leave it open the counter grows without refreshing.",
     swpcInfoNotTitle: "What it is NOT",
@@ -5334,7 +5338,7 @@ var LANG = {
     batchConfirm: "Add",
     batchCancel: "Cancel",
     monthSepRange: "includes solar event {low}–{high}",
-    occNoaaFail: "calculated without solar flare data — the GOES archive could not be read",
+    occNoaaFail: "calculated without solar proton data — the GOES archive could not be read",
     occNoDate: "no date",
     occSepTitle: "Solar event radiation: estimate from solar protons measured by GOES",
     solarCheckBtn: "☀ Check solar activity",
@@ -6898,14 +6902,13 @@ function App() {
     return [];
   }
   var _useState31 = useState(function () {
-      // Try new per-month storage first, fall back to legacy cr_flights
-      var monthFlights = loadMonthFlights(function () {
-        try {
-          return localStorage.getItem("cr_current_month") || todayKey();
-        } catch (e) {
-          return todayKey();
-        }
-      }());
+      // Try new per-month storage first, fall back to legacy cr_flights.
+      // Se carga el MISMO mes que muestra la app (currentMonth, ya acotado por
+      // initialMonth). Leer la clave cruda de localStorage cargaba los vuelos de
+      // un mes pasado mientras el mes visible era el actual, y el autosave de
+      // abajo los re-guardaba bajo el mes visible: el vuelo se mudaba de mes
+      // solo con recargar.
+      var monthFlights = loadMonthFlights(currentMonth);
       if (monthFlights.length > 0) return monthFlights;
       // Migrate legacy data
       try {
@@ -7603,6 +7606,10 @@ function App() {
         icon: "\uD83D\uDCCA",
         title: t.swpcInfoScaleTitle,
         body: t.swpcInfoScaleBody
+      }, {
+        icon: "\uD83D\uDD17",
+        title: t.swpcInfoBridgeTitle,
+        body: t.swpcInfoBridgeBody
       }, {
         icon: "\u23F1\uFE0F",
         title: t.swpcInfoAgeTitle,

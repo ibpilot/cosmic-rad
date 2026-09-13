@@ -2267,6 +2267,15 @@ console.log("\nSC — comprobación puntual de actividad solar (Vuelo único)");
   ok("SC9 el modal cita fuentes y límites (EN)",
      datosEN.every((s) => cuerpoEN.indexOf(s) !== -1),
      datosEN.filter((s) => cuerpoEN.indexOf(s) === -1).join(" | "));
+  // El fallo del archivo habla de protones (lo que mide el modelo), no de la
+  // llamarada electromagnética: llamarla "llamarada" era la imprecisión que la
+  // terminología del proyecto evita (contexto.md:1299).
+  ok("SC9 el fallo de archivo no llama «llamarada» a los protones",
+     tES.occNoaaFail.indexOf("llamarada") === -1 &&
+     tEN.occNoaaFail.indexOf("flare") === -1 &&
+     tES.occNoaaFail.indexOf("protones solares") !== -1 &&
+     tEN.occNoaaFail.indexOf("solar proton") !== -1,
+     tES.occNoaaFail + " | " + tEN.occNoaaFail);
 
   // SC12 — el modal se comporta como modal: foco y scroll atrapados.
   ok("SC12 el Tab cicla dentro del diálogo",
@@ -2445,12 +2454,25 @@ console.log("\nMB — el selector de fecha se acota al mes visible");
      html.indexOf('return initialMonth(localStorage.getItem("cr_current_month"), todayKey());') !== -1);
 }
 
+// MN — al abrir, el mes visible y los vuelos cargados no pueden divergir.
+// Si divergen, el autosave de arranque re-guarda los vuelos de un mes pasado
+// bajo el mes visible y el vuelo se muda de mes solo con recargar.
+console.log("\nMN — al abrir, mes visible y vuelos cargados coinciden");
+{
+  ok("MN el inicializador de vuelos carga el mes visible, no la clave cruda",
+     html.indexOf("var monthFlights = loadMonthFlights(currentMonth);") !== -1);
+  ok("MN cr_current_month solo se lee una vez (acotado con initialMonth)",
+     (html.match(/getItem\("cr_current_month"\)/g) || []).length === 1,
+     "lecturas: " + (html.match(/getItem\("cr_current_month"\)/g) || []).length);
+}
+
 // SW — botón de información del semáforo de clima espacial.
 console.log("\nSW — el botón de información del semáforo solar");
 {
   const tES = ctx.LANG.es, tEN = ctx.LANG.en;
   const KEYS = ["swpcInfoAria", "swpcInfoTitle", "swpcInfoSubtitle",
     "swpcInfoWhatTitle", "swpcInfoWhatBody", "swpcInfoScaleTitle", "swpcInfoScaleBody",
+    "swpcInfoBridgeTitle", "swpcInfoBridgeBody",
     "swpcInfoAgeTitle", "swpcInfoAgeBody", "swpcInfoNotTitle", "swpcInfoNotBody",
     "swpcInfoFlightTitle", "swpcInfoFlightBody"];
   ok("SW1 claves del panel en ES y EN",
@@ -2460,13 +2482,27 @@ console.log("\nSW — el botón de información del semáforo solar");
   ok("SW1 la tarjeta del semáforo tiene botón ℹ️ que abre la hoja",
      html.indexOf("t.swpcInfoAria") !== -1 && html.indexOf("setShowSwpcInfo(true)") !== -1);
   const swpcAt = html.indexOf("showSwpcInfo &&");
-  const swpcSrc = swpcAt === -1 ? "" : html.slice(swpcAt, swpcAt + 2600);
-  ok("SW1 la hoja SWPC lleva las cinco secciones",
+  const swpcSrc = swpcAt === -1 ? "" : html.slice(swpcAt, swpcAt + 4500);
+  ok("SW1 la hoja SWPC lleva las seis secciones",
      swpcSrc.indexOf("swpcInfoWhatBody") !== -1 &&
      swpcSrc.indexOf("swpcInfoScaleBody") !== -1 &&
+     swpcSrc.indexOf("swpcInfoBridgeBody") !== -1 &&
      swpcSrc.indexOf("swpcInfoAgeBody") !== -1 &&
      swpcSrc.indexOf("swpcInfoNotBody") !== -1 &&
      swpcSrc.indexOf("swpcInfoFlightBody") !== -1);
+  // El puente escala S <-> dosis: explica las dos bandas y que "sin señal" no
+  // es "no pasó nada". Sin esto el usuario ve una S1 en NOAA y "revisada" aquí.
+  ok("SW1 el puente escala S / vuelo nombra las dos bandas de energía",
+     tES.swpcInfoBridgeBody.indexOf("≥10 MeV") !== -1 &&
+     tES.swpcInfoBridgeBody.indexOf("160") !== -1 &&
+     tES.swpcInfoBridgeBody.indexOf("500") !== -1 &&
+     tEN.swpcInfoBridgeBody.indexOf("≥10 MeV") !== -1 &&
+     tEN.swpcInfoBridgeBody.indexOf("160") !== -1 &&
+     tEN.swpcInfoBridgeBody.indexOf("500") !== -1,
+     tES.swpcInfoBridgeBody);
+  ok("SW1 el puente aclara que «sin señal» no es «no pasó nada»",
+     tES.swpcInfoBridgeBody.indexOf("no significa") !== -1 &&
+     tEN.swpcInfoBridgeBody.indexOf("does not mean") !== -1);
   ok("SW1 la misma hoja la usan el panel solar y el semáforo",
      (html.match(/React\.createElement\(InfoSheetModal/g) || []).length >= 2 &&
      html.indexOf("SolarInfoModal") === -1);
