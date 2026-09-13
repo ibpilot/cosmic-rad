@@ -107,8 +107,10 @@ table { border-collapse:collapse; width:100%; }
 .gle-field input.gle-empty:focus::-webkit-datetime-edit { color:#e8f2f8; }
 /* "Importar ruta" y "Cálculo": mismo diseño que el botón "Comprobar actividad
    solar" (degradado, borde solido, radio 10, texto 13) con su propia gama. La
-   altura se mantiene en 32 px para alinear con los campos de fecha/hora. */
-.gle-dep-inline .gle-act { min-height:32px; display:flex; align-items:center;
+   altura se mantiene en 32 px para alinear con los campos de fecha/hora. Ojo:
+   los botones son HERMANOS de .gle-dep-inline, no hijos, asi que el selector no
+   puede ir anidado bajo esa clase. */
+.gle-act { min-height:32px; display:flex; align-items:center;
   justify-content:center; padding:0 14px; border-radius:10px; font-size:13px;
   font-weight:700; cursor:pointer; align-self:flex-start; white-space:nowrap; }
 .gle-split { opacity:0.8; font-size:11px; color:#e0c080; }
@@ -447,7 +449,7 @@ var _React = React,
   useCallback = _React.useCallback,
   useRef = _React.useRef,
   useEffect = _React.useEffect;
-var APP_VERSION = "1.31";
+var APP_VERSION = "1.32";
 
 // ── Airport DB: { IATA: { name, icao, lat, lon } } ───────────────────────────
 // OACI prefixes: LE=España, EG=UK, LF=France, EH=Netherlands, ED=Germany,
